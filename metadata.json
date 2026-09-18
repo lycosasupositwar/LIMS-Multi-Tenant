@@ -1,0 +1,6 @@
+{
+  "name": "LIMS CMS",
+  "description": "Système de gestion de l'information du laboratoire complet avec gestion des échantillons et rapports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -206,7 +206,7 @@ async function startServer() {
    */
   app.post('/api/users', authenticate, async (req: AuthRequest, res) => {
     try {
-      if (req.user.role !== 'manager') {
+      if (req.user.role !== 'manager' && req.user.role !== 'admin') {
         return res.status(403).json({ error: 'Accès refusé' });
       }
       
@@ -330,7 +330,7 @@ async function startServer() {
    */
   app.get('/api/users/requests', authenticate, async (req: AuthRequest, res) => {
     try {
-      if (req.user.role !== 'manager') return res.status(403).json({ error: 'Accès refusé' });
+      if (req.user.role !== 'manager' && req.user.role !== 'admin') return res.status(403).json({ error: 'Accès refusé' });
       const requests = await getAccountRequests();
       res.json(requests);
     } catch (error) {
@@ -343,7 +343,7 @@ async function startServer() {
    */
   app.delete('/api/users/requests/:id', authenticate, async (req: AuthRequest, res) => {
     try {
-      if (req.user.role !== 'manager') return res.status(403).json({ error: 'Accès refusé' });
+      if (req.user.role !== 'manager' && req.user.role !== 'admin') return res.status(403).json({ error: 'Accès refusé' });
       await deleteAccountRequest(req.params.id);
       res.json({ success: true });
     } catch (error) {

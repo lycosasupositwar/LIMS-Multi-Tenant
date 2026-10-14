@@ -73,6 +73,8 @@ interface LimsContextType {
   activeLab: Laboratory;
   setActiveLabId: (labId: string) => void;
   updateLaboratory: (id: string, updates: Partial<Laboratory>) => void;
+  addLaboratory: (lab: Laboratory) => void;
+  deleteLaboratory: (id: string) => void;
   
   // Notifications système
   notifications: Notification[];
@@ -311,6 +313,18 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const updateLaboratory = (id: string, updates: Partial<Laboratory>) => {
     setLaboratories(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
   };
+
+  const addLaboratory = (lab: Laboratory) => {
+    setLaboratories(prev => [...prev, lab]);
+  };
+
+  const deleteLaboratory = (id: string) => {
+    setLaboratories(prev => prev.filter(l => l.id !== id));
+    if (activeLabId === id) {
+      setActiveLabIdState(laboratories.find(l => l.id !== id)?.id || '');
+    }
+  };
+
 
   /**
    * Met à jour les paramètres administratifs et charte du laboratoire actif
@@ -716,7 +730,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     <LimsContext.Provider value={{
       globalSearchQuery, setGlobalSearchQuery,
       currentUser, users, fetchUsers, login, logout,
-      laboratories, activeLabId, activeLab, setActiveLabId, updateLaboratory,
+      laboratories, activeLabId, activeLab, setActiveLabId, updateLaboratory, addLaboratory, deleteLaboratory,
       notifications, markNotificationAsRead, addNotification,
       materialTemplates, analysisTemplates, requestTemplates, reportTemplates,
       allMaterialTemplates: rawMaterialTemplates,

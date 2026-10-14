@@ -55,7 +55,7 @@ export type MaterialState = 'Poudre' | 'Fritté' | 'Massif' | 'Liquide';
  * - analyste : Technicien de laboratoire (réalisation des essais, saisie des mesures)
  * - manager : Responsable de laboratoire (revue, validation, administration, configuration)
  */
-export type Role = 'demandeur' | 'analyste' | 'manager';
+export type Role = 'demandeur' | 'analyste' | 'manager' | 'admin';
 
 /**
  * Cycle de vie global d'une demande d'analyse déposée par un demandeur

@@ -67,7 +67,7 @@ export function RequestsInternal() {
       if (!matchesSearch) return false;
     }
 
-    if (currentUser?.role === 'manager') return true;
+    if ((currentUser?.role === 'manager' || currentUser?.role === 'admin')) return true;
     if (currentUser?.role === 'analyste') return r.assignedTo === currentUser.id;
     return false;
   });
@@ -325,7 +325,7 @@ export function RequestsInternal() {
                   <h4 className="text-md font-medium text-slate-800">{selectedRequest.title}</h4>
                   <p className="text-xs text-slate-500 mt-1">Soumis le {formatDate(selectedRequest.createdAt)}</p>
                 </div>
-                {currentUser?.role === 'manager' && (
+                {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
                   <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
                     <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
                       Assignation Analyste
@@ -364,7 +364,7 @@ export function RequestsInternal() {
                         className="flex-1 min-w-[250px] text-sm border-slate-300 rounded-md"
                       />
                       <div className="flex gap-2 flex-wrap">
-                        {selectedRequest.status === 'soumise' && currentUser?.role === 'manager' && (
+                        {selectedRequest.status === 'soumise' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
                           <button 
                             onClick={() => handleStatusChange('en_revue')} 
                             className="bg-purple-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-purple-700 transition-colors shadow-sm"
@@ -372,7 +372,7 @@ export function RequestsInternal() {
                             Passer en Revue
                           </button>
                         )}
-                        {selectedRequest.status === 'en_revue' && currentUser?.role === 'manager' && (
+                        {selectedRequest.status === 'en_revue' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
                           <>
                             <button 
                               disabled={!statusComment} 
@@ -405,7 +405,7 @@ export function RequestsInternal() {
                             <CheckCircle className="w-4 h-4 mr-1.5"/> Soumettre pour validation
                           </button>
                         )}
-                        {selectedRequest.status === 'en_validation' && currentUser?.role === 'manager' && (
+                        {selectedRequest.status === 'en_validation' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
                           <button 
                             onClick={() => handleStatusChange('terminee')} 
                             className="bg-emerald-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm flex items-center"
@@ -419,7 +419,7 @@ export function RequestsInternal() {
                 )}
 
                 {/* Option de réouverture pour les managers */}
-                {(selectedRequest.status === 'terminee' || selectedRequest.status === 'rejetee') && currentUser?.role === 'manager' && (
+                {(selectedRequest.status === 'terminee' || selectedRequest.status === 'rejetee') && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
                   <div className="bg-amber-50/50 border border-amber-100 rounded-xl p-5">
                     <h4 className="text-sm font-bold text-amber-900 uppercase tracking-wider mb-3 flex items-center">
                       <History className="w-4 h-4 mr-2" />
@@ -435,7 +435,7 @@ export function RequestsInternal() {
                 )}
 
                 {/* Module de génération rapide des échantillons physiques */}
-                {(selectedRequest.status === 'validee' || selectedRequest.status === 'assignee' || (selectedRequest.status === 'en_cours' && currentUser?.role === 'manager')) && (
+                {(selectedRequest.status === 'validee' || selectedRequest.status === 'assignee' || (selectedRequest.status === 'en_cours' && (currentUser?.role === 'manager' || currentUser?.role === 'admin'))) && (
                   <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-5">
                     <h4 className="text-sm font-bold text-indigo-900 uppercase tracking-wider mb-3 flex items-center">
                       <Box className="w-4 h-4 mr-2" />
@@ -496,7 +496,7 @@ export function RequestsInternal() {
                         <FileText className="w-4 h-4 mr-2" />
                         Données Client
                       </h4>
-                      {currentUser?.role === 'manager' && (
+                      {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
                         isEditing ? (
                           <div className="flex gap-2">
                             <button 

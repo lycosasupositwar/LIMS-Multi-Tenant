@@ -21,7 +21,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useLims } from '../store';
-import { Building, Phone, Mail, Award, Save, Image as ImageIcon, Key, UserPlus, Users, Shield, Clock, Check, X, ArrowLeft, AlertTriangle, Download, Upload, Settings2 } from 'lucide-react';
+import { Building, Phone, Mail, Award, Save, Image as ImageIcon, Key, UserPlus, Users, Shield, Clock, Check, X, ArrowLeft, AlertTriangle, Download, Upload, Settings2, Trash2, Plus } from 'lucide-react';
 
 export function Settings({ onBack }: { onBack?: () => void }) {
   const { 
@@ -35,7 +35,10 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     materialTemplates, 
     analysisTemplates, 
     requestTemplates, 
-    reportTemplates 
+    reportTemplates,
+    laboratories,
+    addLaboratory,
+    deleteLaboratory
   } = useLims();
 
   // Navigation par onglets
@@ -74,7 +77,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
    * Récupération des demandes de création de compte en attente
    */
   const fetchRequests = async () => {
-    if (currentUser?.role === 'manager') {
+    if ((currentUser?.role === 'manager' || currentUser?.role === 'admin')) {
       try {
         const res = await fetch('/api/users/requests');
         if (res.ok) setAccountRequests(await res.json());
@@ -314,7 +317,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
           <Shield className="w-4 h-4 inline mr-2" />
           Sécurité du profil
         </button>
-        {currentUser?.role === 'manager' && (
+        {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
           <>
             <button
               onClick={() => setActiveTab('lab')}
@@ -390,7 +393,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
       )}
 
       {/* Onglet 2 : Gestion des utilisateurs */}
-      {activeTab === 'users' && currentUser?.role === 'manager' && (
+      {activeTab === 'users' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
         <div className="space-y-6">
           {accountRequests.length > 0 && (
             <div className="bg-amber-50 rounded-xl shadow-sm border border-amber-200 overflow-hidden">
@@ -453,7 +456,8 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                   <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})} className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500">
                     <option value="demandeur">Demandeur (Client)</option>
                     <option value="analyste">Analyste (Labo)</option>
-                    <option value="manager">Manager (Admin)</option>
+                    <option value="manager">Manager</option>
+                    <option value="admin">Admin</option>
                   </select>
                 </div>
                 {newUser.role === 'demandeur' && (
@@ -485,7 +489,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                     <div className="font-semibold text-slate-900">{u.name}</div>
                     <div className="text-sm text-slate-500">{u.email} {u.company && `- ${u.company}`}</div>
                   </div>
-                  <div className={`text-xs px-2 py-1 rounded-full ${u.role === 'manager' ? 'bg-purple-100 text-purple-700' : u.role === 'analyste' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                  <div className={`text-xs px-2 py-1 rounded-full ${(u.role === 'manager' || u.role === 'admin') ? 'bg-purple-100 text-purple-700' : u.role === 'analyste' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
                     {u.role.toUpperCase()}
                   </div>
                 </div>
@@ -496,7 +500,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
       )}
 
       {/* Onglet 3 : Paramètres du laboratoire */}
-      {activeTab === 'lab' && currentUser?.role === 'manager' && (
+      {activeTab === 'lab' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
         <div className="space-y-6">
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="p-6 border-b border-slate-200">
@@ -818,8 +822,78 @@ export function Settings({ onBack }: { onBack?: () => void }) {
         </div>
       )}
 
+
+      {/* SECTION ADMIN: GESTION DES LABORATOIRES */}
+      {activeTab === 'lab' && currentUser?.role === 'admin' && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mt-6">
+          <div className="p-6 border-b border-slate-200">
+            <h3 className="text-lg font-semibold text-slate-800 flex items-center">
+              <Building className="w-5 h-5 mr-2 text-slate-400" />
+              Gestion des Laboratoires
+            </h3>
+          </div>
+          <div className="p-6 space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+               {laboratories?.map(lab => (
+                 <div key={lab.id} className="p-4 border rounded-lg flex justify-between items-center">
+                    <div>
+                      <div className="font-bold">{lab.name}</div>
+                      <div className="text-sm text-gray-500">{lab.code}</div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (confirm('Voulez-vous vraiment supprimer ce laboratoire ?')) {
+                          deleteLaboratory(lab.id);
+                        }
+                      }}
+                      className="text-red-600 hover:bg-red-50 p-2 rounded"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                 </div>
+               ))}
+            </div>
+
+            <button
+              onClick={() => {
+                const name = prompt('Nom du nouveau laboratoire :');
+                if (name) {
+                  const code = prompt('Code court (ex: MET) :') || 'NEW';
+                  addLaboratory({
+                    id: `lab-${Date.now()}`,
+                    name,
+                    shortName: name,
+                    code,
+                    description: '',
+                    themeColor: 'blue',
+                    badgeBg: 'bg-blue-50 text-blue-700 border-blue-200',
+                    badgeText: `${name} (${code})`,
+                    settings: {
+                      labName: name,
+                      labAddress: '',
+                      contactEmail: '',
+                      phone: '',
+                      isoCertifications: [],
+                      logoUrl: '',
+                      tableStyles: {
+                        headerBg: '#f8fafc',
+                        headerColor: '#0f172a',
+                        borderColor: '#e2e8f0'
+                      }
+                    }
+                  });
+                }
+              }}
+              className="mt-4 flex items-center justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
+            >
+              <Plus className="w-4 h-4 mr-2" /> Créer un laboratoire
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Onglet 4 : Sauvegarde et Patchs de configuration */}
-      {activeTab === 'system' && currentUser?.role === 'manager' && (
+      {activeTab === 'system' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="p-6 border-b border-slate-200">

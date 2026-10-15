@@ -364,7 +364,7 @@ export function Samples() {
                       isClickable = true;
                     }
 
-                    if (currentUser?.role === 'manager' && index !== currentIndex) {
+                    if ((currentUser?.role === 'manager' || currentUser?.role === 'admin') && index !== currentIndex) {
                       isClickable = true;
                       if (!stateClass.includes('hover:')) {
                         stateClass += " hover:bg-slate-100 cursor-pointer";

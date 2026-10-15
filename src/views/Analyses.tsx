@@ -38,7 +38,7 @@ export function Analyses() {
   const [groupBy, setGroupBy] = useState<'none' | 'request'>('none');
   const [filterMode, setFilterMode] = useState<'actives' | 'historique'>('actives');
 
-  const isManager = currentUser?.role === 'manager';
+  const isManager = (currentUser?.role === 'manager' || currentUser?.role === 'admin');
 
   /**
    * Filtrage des analyses selon l'état d'activité, la recherche textuelle et les liens dossiers

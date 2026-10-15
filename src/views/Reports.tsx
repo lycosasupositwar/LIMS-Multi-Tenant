@@ -460,7 +460,7 @@ export function Reports() {
               : null);
               
         const client = request ? users.find((u: any) => u.id === request.requesterId) : null;
-        const manager = users.find((u: any) => u.role === 'manager');
+        const manager = users.find((u: any) => u.role === "manager" || u.role === "admin");
 
         const docData = buildDocData(request, client, linkedSamples, reqAnalyses, manager);
         doc.render(docData);

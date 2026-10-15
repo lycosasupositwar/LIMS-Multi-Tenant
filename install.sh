@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 echo "========================================="
 echo "   Installation complète du système      "
 echo "========================================="

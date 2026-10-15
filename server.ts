@@ -30,7 +30,8 @@ import {
   deleteResetToken, 
   createAccountRequest, 
   getAccountRequests, 
-  deleteAccountRequest 
+  deleteAccountRequest,
+  deleteUser
 } from './src/db/auth.js';
 import { initLimsDb, getCollection, setCollection } from './src/db/lims.js';
 
@@ -348,6 +349,21 @@ async function startServer() {
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
+  app.delete('/api/users/:id', authenticate, async (req: AuthRequest, res) => {
+    try {
+      if (req.user.role !== 'admin') return res.status(403).json({ error: 'Accès refusé. Seul un administrateur peut supprimer un utilisateur.' });
+      const userIdToDelete = req.params.id;
+      if (req.user.id === userIdToDelete) {
+        return res.status(400).json({ error: 'Vous ne pouvez pas supprimer votre propre compte.' });
+      }
+      await deleteUser(userIdToDelete);
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Erreur lors de la suppression de l utilisateur:', error);
+      res.status(500).json({ error: 'Erreur serveur lors de la suppression' });
     }
   });
 

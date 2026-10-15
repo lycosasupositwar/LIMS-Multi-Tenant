@@ -233,7 +233,14 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
                     <p className="text-[11px] text-slate-500">Chaque instance dispose de son CMS, ses essais, son personnel et ses consommables.</p>
                   </div>
                   <div className="space-y-1">
-                    {laboratories.map(lab => {
+                    {laboratories.filter(lab => {
+                      if (!currentUser) return true;
+                      if (currentUser.role === 'admin') return true;
+                      if (currentUser.role === 'manager' || currentUser.role === 'analyste') {
+                        return !currentUser.labId || currentUser.labId === 'all' || currentUser.labId === lab.id;
+                      }
+                      return true;
+                    }).map(lab => {
                       const isSelected = lab.id === activeLabId;
                       return (
                         <button

@@ -260,6 +260,14 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     checkSession();
   }, []);
 
+  useEffect(() => {
+    if (currentUser && (currentUser.role === 'manager' || currentUser.role === 'analyste')) {
+      if (currentUser.labId && currentUser.labId !== 'all') {
+        setActiveLabIdState(currentUser.labId);
+      }
+    }
+  }, [currentUser]);
+
   const isAuthenticated = !!currentUser;
 
   // ==========================================
@@ -292,6 +300,12 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   }, [currentUser]);
 
   const setActiveLabId = (labId: string) => {
+    if (currentUser?.role === 'manager' || currentUser?.role === 'analyste') {
+      if (currentUser.labId && currentUser.labId !== 'all' && currentUser.labId !== labId) {
+        console.warn('Accès refusé : Vous ne pouvez pas sélectionner un laboratoire auquel vous n\'êtes pas assigné.');
+        return;
+      }
+    }
     setActiveLabIdState(labId);
   };
 

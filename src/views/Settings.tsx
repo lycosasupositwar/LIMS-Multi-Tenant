@@ -69,7 +69,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   const [pwdMsg, setPwdMsg] = useState({ type: '', text: '' });
   
   // États de création d'utilisateurs et approbation
-  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'demandeur', company: '' });
+  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'demandeur', company: '', labId: '' });
   const [userMsg, setUserMsg] = useState({ type: '', text: '' });
   const [accountRequests, setAccountRequests] = useState<any[]>([]);
 
@@ -126,6 +126,21 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   /**
    * Rejet / suppression d'une demande de compte
    */
+  const handleDeleteUser = async (id: string) => {
+    if (!window.confirm("Êtes-vous sûr de vouloir supprimer cet utilisateur ? Cette action est irréversible.")) return;
+
+    try {
+      const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      setUserMsg({ type: 'success', text: 'Utilisateur supprimé avec succès.' });
+      fetchUsers();
+    } catch (err: any) {
+      setUserMsg({ type: 'error', text: err.message });
+    }
+  };
+
   const deleteRequest = async (id: string) => {
     try {
       await fetch(`/api/users/requests/${id}`, { method: 'DELETE' });
@@ -234,7 +249,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setUserMsg({ type: 'success', text: 'Utilisateur créé avec succès.' });
-      setNewUser({ name: '', email: '', password: '', role: 'demandeur', company: '' });
+      setNewUser({ name: '', email: '', password: '', role: 'demandeur', company: '', labId: '' });
       fetchUsers();
     } catch (err: any) {
       setUserMsg({ type: 'error', text: err.message });
@@ -460,10 +475,26 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                     <option value="admin">Admin</option>
                   </select>
                 </div>
-                {newUser.role === 'demandeur' && (
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Entreprise (optionnel)</label>
+                {(newUser.role === 'demandeur' || newUser.role === 'manager' || newUser.role === 'analyste') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Entreprise / Laboratoire</label>
                     <input type="text" value={newUser.company} onChange={e => setNewUser({...newUser, company: e.target.value})} className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                  </div>
+                )}
+                {(newUser.role === 'manager' || newUser.role === 'analyste') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Laboratoire assigné</label>
+                    <select
+                      value={newUser.labId || ''}
+                      onChange={e => setNewUser({...newUser, labId: e.target.value})}
+                      className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    >
+                      <option value="">Aucun (Accès global)</option>
+                      <option value="all">Tous les laboratoires (all)</option>
+                      {laboratories.map(lab => (
+                        <option key={lab.id} value={lab.id}>{lab.name}</option>
+                      ))}
+                    </select>
                   </div>
                 )}
                 <div className="md:col-span-2 mt-2">
@@ -489,8 +520,19 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                     <div className="font-semibold text-slate-900">{u.name}</div>
                     <div className="text-sm text-slate-500">{u.email} {u.company && `- ${u.company}`}</div>
                   </div>
-                  <div className={`text-xs px-2 py-1 rounded-full ${(u.role === 'manager' || u.role === 'admin') ? 'bg-purple-100 text-purple-700' : u.role === 'analyste' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                    {u.role.toUpperCase()}
+                  <div className="flex items-center space-x-2">
+                    <div className={`text-xs px-2 py-1 rounded-full ${(u.role === 'manager' || u.role === 'admin') ? 'bg-purple-100 text-purple-700' : u.role === 'analyste' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                      {u.role.toUpperCase()}
+                    </div>
+                    {currentUser?.role === 'admin' && currentUser.id !== u.id && (
+                      <button
+                        onClick={() => handleDeleteUser(u.id)}
+                        className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded"
+                        title="Supprimer l'utilisateur"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}

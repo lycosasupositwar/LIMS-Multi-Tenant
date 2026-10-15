@@ -262,3 +262,14 @@ export async function deleteAccountRequest(id: string) {
   const stmt = database.prepare('DELETE FROM account_requests WHERE id = ?');
   stmt.run(id);
 }
+
+/**
+ * Supprime un utilisateur par son identifiant unique.
+ *
+ * @param id Identifiant utilisateur (ex: 'usr-1')
+ */
+export async function deleteUser(id: string) {
+  const database = getDb();
+  const stmt = database.prepare('DELETE FROM users WHERE id = ?');
+  stmt.run(id);
+}

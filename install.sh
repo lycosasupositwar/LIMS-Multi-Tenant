@@ -4,29 +4,49 @@ echo "   Installation complète du système      "
 echo "========================================="
 
 echo ""
-echo "[1/5] Vérification et installation des prérequis (Node.js & npm)..."
+echo "[1/5] Vérification et installation des prérequis (Node.js v22+ & npm)..."
 
 SUDO=''
 if (( $EUID != 0 )); then
     SUDO='sudo'
 fi
 
-if ! command -v npm &> /dev/null; then
-    echo "npm n'est pas installé. Installation en cours..."
+# Fonction pour vérifier si Node.js est installé ET est au moins en version 22
+check_node_version() {
+    if command -v node &> /dev/null; then
+        # Extrait le numéro de version principal (ex: 18 pour v18.20.4)
+        local NODE_VERSION=$(node -v | grep -oE '^v[0-9]+' | sed 's/v//')
+        if [ "$NODE_VERSION" -ge 22 ]; then
+            return 0 # Vrai, la version est 22 ou supérieure
+        fi
+    fi
+    return 1 # Faux, non installé ou version inférieure à 22
+}
+
+if ! check_node_version; then
+    echo "Node.js v22+ n'est pas installé ou la version est trop ancienne. Installation en cours..."
+    
+    # Installation selon le gestionnaire de paquets
     if command -v apt-get &> /dev/null; then
-        $SUDO apt-get update
-        $SUDO apt-get install -y nodejs npm
+        $SUDO apt-get update$SUDO apt-get install -y curl
+        curl -fsSL https://deb.nodesource.com/setup_22.x -o nodesource_setup.sh
+        $SUDO -E bash nodesource_setup.sh
+        $SUDO apt-get install -y nodejs
+        rm nodesource_setup.sh
     elif command -v yum &> /dev/null; then
-        $SUDO yum install -y epel-release
-        $SUDO yum install -y nodejs npm
+        $SUDO yum install -y curl
+        curl -fsSL https://rpm.nodesource.com/setup_22.x -o nodesource_setup.sh
+        $SUDO -E bash nodesource_setup.sh
+        $SUDO yum install -y nodejs
+        rm nodesource_setup.sh
     elif command -v apk &> /dev/null; then
-        $SUDO apk add nodejs npm
+        $SUDO apk add --update nodejs npm
     else
-        echo "Gestionnaire de paquets non reconnu. Veuillez installer Node.js et npm manuellement."
+        echo "Gestionnaire de paquets non reconnu. Veuillez installer Node.js v22+ et npm manuellement."
         exit 1
     fi
 else
-    echo "npm est déjà installé."
+    echo "Node.js v22+ et npm sont déjà installés."
 fi
 
 echo ""

@@ -4,11 +4,37 @@ echo "   Installation complète du système      "
 echo "========================================="
 
 echo ""
-echo "[1/4] Installation des dépendances NPM..."
+echo "[1/5] Vérification et installation des prérequis (Node.js & npm)..."
+
+SUDO=''
+if (( $EUID != 0 )); then
+    SUDO='sudo'
+fi
+
+if ! command -v npm &> /dev/null; then
+    echo "npm n'est pas installé. Installation en cours..."
+    if command -v apt-get &> /dev/null; then
+        $SUDO apt-get update
+        $SUDO apt-get install -y nodejs npm
+    elif command -v yum &> /dev/null; then
+        $SUDO yum install -y epel-release
+        $SUDO yum install -y nodejs npm
+    elif command -v apk &> /dev/null; then
+        $SUDO apk add nodejs npm
+    else
+        echo "Gestionnaire de paquets non reconnu. Veuillez installer Node.js et npm manuellement."
+        exit 1
+    fi
+else
+    echo "npm est déjà installé."
+fi
+
+echo ""
+echo "[2/5] Installation des dépendances NPM..."
 npm install
 
 echo ""
-echo "[2/4] Configuration des variables d'environnement..."
+echo "[3/5] Configuration des variables d'environnement..."
 if [ ! -f .env ]; then
   if [ -f .env.example ]; then
     cp .env.example .env
@@ -23,7 +49,7 @@ else
 fi
 
 echo ""
-echo "[3/4] Configuration du Super Administrateur"
+echo "[4/5] Configuration du Super Administrateur"
 read -p "Email de l'administrateur [admin@admin.com] : " ADMIN_EMAIL
 ADMIN_EMAIL=${ADMIN_EMAIL:-admin@admin.com}
 
@@ -34,7 +60,7 @@ read -p "Nom de l'administrateur [Super Administrateur] : " ADMIN_NAME
 ADMIN_NAME=${ADMIN_NAME:-Super Administrateur}
 
 echo ""
-echo "[4/4] Création du compte dans la base de données..."
+echo "[5/5] Création du compte dans la base de données..."
 
 cat << 'JS_EOF' > temp-admin-setup.js
 import { initDb, getDb } from './src/db/auth.js';

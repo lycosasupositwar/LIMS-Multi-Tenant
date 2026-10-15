@@ -1,5 +1,7 @@
 #!/bin/bash
+# Arrête le script à la moindre erreur
 set -e
+
 echo "========================================="
 echo "   Installation complète du système      "
 echo "========================================="
@@ -12,42 +14,41 @@ if (( $EUID != 0 )); then
     SUDO='sudo'
 fi
 
-# Fonction pour vérifier si Node.js est installé ET est au moins en version 22
+# Fonction pour vérifier si Node.js est installé et au moins en version 22
 check_node_version() {
     if command -v node &> /dev/null; then
-        # Extrait le numéro de version principal (ex: 18 pour v18.20.4)
         local NODE_VERSION=$(node -v | grep -oE '^v[0-9]+' | sed 's/v//')
         if [ "$NODE_VERSION" -ge 22 ]; then
-            return 0 # Vrai, la version est 22 ou supérieure
+            return 0
         fi
     fi
-    return 1 # Faux, non installé ou version inférieure à 22
+    return 1
 }
 
 if ! check_node_version; then
     echo "Node.js v22+ n'est pas installé ou la version est trop ancienne. Installation en cours..."
     
-    # Installation selon le gestionnaire de paquets
     if command -v apt-get &> /dev/null; then
-        $SUDO apt-get update$SUDO apt-get install -y curl
-        curl -fsSL https://deb.nodesource.com/setup_22.x -o nodesource_setup.sh
-        $SUDO -E bash nodesource_setup.sh
-        $SUDO apt-get install -y nodejs
-        rm nodesource_setup.sh
+        # Utilisation de -qq pour rendre l'update silencieux et éviter les erreurs d'arguments
+        $SUDO apt-get update -qq \vert{}\vert{} true$SUDO apt-get install -y curl ca-certificates
+        curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO bash -$SUDO apt-get install -y nodejs
     elif command -v yum &> /dev/null; then
-        $SUDO yum install -y curl
-        curl -fsSL https://rpm.nodesource.com/setup_22.x -o nodesource_setup.sh
-        $SUDO -E bash nodesource_setup.sh
-        $SUDO yum install -y nodejs
-        rm nodesource_setup.sh
+        $SUDO yum install -y curl ca-certificates
+        curl -fsSL https://rpm.nodesource.com/setup_22.x | $SUDO bash -$SUDO yum install -y nodejs
     elif command -v apk &> /dev/null; then
-        $SUDO apk add --update nodejs npm
+        $SUDO apk add --no-cache curl nodejs npm
     else
-        echo "Gestionnaire de paquets non reconnu. Veuillez installer Node.js v22+ et npm manuellement."
+        echo "Erreur : Gestionnaire de paquets non reconnu. Veuillez installer Node.js v22+ manuellement."
         exit 1
     fi
 else
     echo "Node.js v22+ et npm sont déjà installés."
+fi
+
+# Vérification finale pour s'assurer que npm est bien disponible avant de continuer
+if ! command -v npm &> /dev/null; then
+    echo "Erreur fatale : npm n'a pas pu être installé."
+    exit 1
 fi
 
 echo ""
@@ -118,7 +119,7 @@ createAdmin().catch(err => {
 });
 JS_EOF
 
-# Utilisation de tsx (installé dans node_modules) pour pouvoir importer le TS si nécessaire
+# Utilisation de tsx (installé dans node_modules) pour pouvoir importer le TS
 npx tsx temp-admin-setup.js "$ADMIN_EMAIL" "$ADMIN_PASSWORD" "$ADMIN_NAME"
 rm temp-admin-setup.js
 

@@ -14,7 +14,7 @@ Ce LIMS a été conçu pour gérer efficacement les flux de travail au sein d'un
 ## 2. Installation et Démarrage
 
 ### Prérequis
-- [Node.js](https://nodejs.org/) (version 18 ou supérieure recommandée)
+- [Node.js](https://nodejs.org/) (version 22 ou supérieure recommandée)
 - [npm](https://www.npmjs.com/) ou [Bun](https://bun.sh/)
 
 ### Étapes d'installation

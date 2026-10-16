@@ -45,35 +45,43 @@ npm run start &
 
 ## 3. Fonctionnalités et Utilisation
 
-### 3.1. Tableau de bord (Dashboard)
+### 3.1. Page de connexion
+L'accès à l'application est sécurisé et nécessite une authentification.
+![Page de connexion](docs/images/login.png)
+
+### 3.2. Tableau de bord (Dashboard)
 Le tableau de bord offre une vue d'ensemble de l'activité du laboratoire :
 - **KPIs** : Nombre de demandes, échantillons, analyses en attente.
 - **Graphiques** : Répartition des statuts, évolution des demandes.
-*(Insérez une capture d'écran du dashboard ici)*
+![Tableau de bord](docs/images/dashboard.png)
 
-### 3.2. Gestion des Demandes (Requests)
+### 3.3. Gestion des Demandes (Requests)
 - **Création** : Un demandeur peut créer une nouvelle demande en spécifiant les informations générales.
 - **Suivi** : Les statuts permettent de suivre l'avancement (Brouillon, Soumise, En cours, Terminée).
 - **Assignation** : Les managers peuvent assigner des demandes à des analystes spécifiques.
+![Gestion des demandes](docs/images/requests.png)
 
-### 3.3. Gestion des Échantillons (Samples)
+### 3.4. Gestion des Échantillons (Samples)
 Chaque demande peut contenir plusieurs échantillons.
 - **Réception** : Enregistrement de la réception physique.
 - **Préparation** : Suivi des étapes de préparation (ex: montage, polissage).
 - **Traçabilité** : Code unique pour chaque échantillon.
+![Gestion des échantillons](docs/images/samples.png)
 
-### 3.4. Analyses et Résultats
+### 3.5. Analyses et Résultats
 - **Saisie** : Les analystes saisissent les résultats des mesures.
 - **Validation** : Processus de validation des résultats (ex: ISO 17025) par un manager.
 - **Pièces jointes** : Ajout d'images ou de documents liés à l'analyse.
+![Analyses et Résultats](docs/images/analyses.png)
 
-### 3.5. Génération de Rapports
+### 3.6. Génération de Rapports
 - **Modèles** : Utilisation de modèles de rapports préconfigurés.
 - **Génération PDF/Word** : Export automatique des résultats validés vers un format final.
+![Génération de rapports](docs/images/reports.png)
 
 ## 4. Administration et Paramètres
 
-### 4.1. Gestion des Utilisateurs (Nouveau !)
+### 4.1. Gestion des Utilisateurs
 L'onglet Paramètres > Utilisateurs permet aux administrateurs de :
 - **Créer des utilisateurs** : Définir le nom, l'email, le mot de passe provisoire et le rôle.
 - **Rôles disponibles** :

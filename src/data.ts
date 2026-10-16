@@ -92,14 +92,7 @@ export const initialLaboratories: Laboratory[] = [
 /**
  * Utilisateurs de démonstration
  */
-export const mockUsers: User[] = [
-  { id: 'usr-1', email: 'jean.dupont@entreprise.com', name: 'Jean Dupont', role: 'demandeur', company: 'AeroTech Industries' },
-  { id: 'usr-2', email: 'sophie.martin@labo.com', name: 'Sophie Martin', role: 'analyste', company: 'Laboratoire Métallographie', labId: 'lab-metallurgie' },
-  { id: 'usr-3', email: 'marc.durand@labo.com', name: 'Dr. Marc Durand', role: 'manager', company: 'Laboratoire Métallographie', labId: 'lab-metallurgie' },
-  { id: 'usr-4', email: 'claire.leroy@labo-meca.com', name: 'Claire Leroy', role: 'analyste', company: 'Laboratoire Mécanique', labId: 'lab-mecanique' },
-  { id: 'usr-5', email: 'alexandre.roux@labo-meca.com', name: 'Alexandre Roux', role: 'manager', company: 'Laboratoire Mécanique', labId: 'lab-mecanique' },
-  { id: 'usr-6', email: 'directeur@groupelabo.com', name: 'Dr. Hélène Voisin', role: 'manager', company: 'Direction des Laboratoires', labId: 'all' }
-];
+
 
 /**
  * Modèles de formulaires de demandes configurés par laboratoire

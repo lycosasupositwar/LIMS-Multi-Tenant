@@ -472,7 +472,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                     <option value="demandeur">Demandeur (Client)</option>
                     <option value="analyste">Analyste (Labo)</option>
                     <option value="manager">Manager</option>
-                    <option value="admin">Admin</option>
+                    {currentUser?.role === 'admin' && (<option value="admin">Admin</option>)}
                   </select>
                 </div>
                 {(newUser.role === 'demandeur' || newUser.role === 'manager' || newUser.role === 'analyste') && (

@@ -79,49 +79,51 @@ export async function initDb() {
     )
   `);
 
-  // Comptes de référence représentatifs de l'architecture multi-laboratoires
-  const referenceUsers = [
-    // 1. Demandeur commun accédant aux deux laboratoires depuis une page unique
-    { id: 'usr-1', email: 'jean.dupont@entreprise.com', name: 'Jean Dupont', role: 'demandeur', company: 'AeroTech Industries', labId: null },
-    // 2. Équipe dédiée du Laboratoire 1 : Métallographie & Microstructure
-    { id: 'usr-2', email: 'sophie.martin@labo.com', name: 'Sophie Martin', role: 'analyste', company: 'Laboratoire Métallographie', labId: 'lab-metallurgie' },
-    { id: 'usr-3', email: 'marc.durand@labo.com', name: 'Dr. Marc Durand', role: 'manager', company: 'Laboratoire Métallographie', labId: 'lab-metallurgie' },
-    // 3. Équipe dédiée du Laboratoire 2 : Essais Mécaniques & Physico-Chimie
-    { id: 'usr-4', email: 'claire.leroy@labo-meca.com', name: 'Claire Leroy', role: 'analyste', company: 'Laboratoire Mécanique', labId: 'lab-mecanique' },
-    { id: 'usr-5', email: 'alexandre.roux@labo-meca.com', name: 'Alexandre Roux', role: 'manager', company: 'Laboratoire Mécanique', labId: 'lab-mecanique' },
-    // 4. Direction générale / Responsable Qualité multi-sites (accès global commutable)
-    { id: 'usr-6', email: 'directeur@groupelabo.com', name: 'Dr. Hélène Voisin', role: 'manager', company: 'Direction des Laboratoires', labId: 'all' },
-  ];
+// Insertion des comptes de référence uniquement hors production
+  if (process.env.NODE_ENV !== 'production') {
+    const referenceUsers = [
+      // 1. Demandeur commun accédant aux deux laboratoires depuis une page unique
+      { id: 'usr-1', email: 'jean.dupont@entreprise.com', name: 'Jean Dupont', role: 'demandeur', company: 'AeroTech Industries', labId: null },
+      // 2. Équipe dédiée du Laboratoire 1 : Métallographie & Microstructure
+      { id: 'usr-2', email: 'sophie.martin@labo.com', name: 'Sophie Martin', role: 'analyste', company: 'Laboratoire Métallographie', labId: 'lab-metallurgie' },
+      { id: 'usr-3', email: 'marc.durand@labo.com', name: 'Dr. Marc Durand', role: 'manager', company: 'Laboratoire Métallographie', labId: 'lab-metallurgie' },
+      // 3. Équipe dédiée du Laboratoire 2 : Essais Mécaniques & Physico-Chimie
+      { id: 'usr-4', email: 'claire.leroy@labo-meca.com', name: 'Claire Leroy', role: 'analyste', company: 'Laboratoire Mécanique', labId: 'lab-mecanique' },
+      { id: 'usr-5', email: 'alexandre.roux@labo-meca.com', name: 'Alexandre Roux', role: 'manager', company: 'Laboratoire Mécanique', labId: 'lab-mecanique' },
+      // 4. Direction générale / Responsable Qualité multi-sites (accès global commutable)
+      { id: 'usr-6', email: 'directeur@groupelabo.com', name: 'Dr. Hélène Voisin', role: 'manager', company: 'Direction des Laboratoires', labId: 'all' },
+    ];
 
-  // Hachage sécurisé du mot de passe initial avec un sel de coût 10
-  const defaultPasswordHash = await bcrypt.hash('password123', 10);
+    // Hachage sécurisé du mot de passe initial avec un sel de coût 10
+    const defaultPasswordHash = await bcrypt.hash('password123', 10);
 
-  // Insertion ou mise à niveau des comptes de test sans collision d'ID ou d'email
-  for (const refUser of referenceUsers) {
-    const existingByEmail = database.prepare('SELECT id, labId FROM users WHERE email = ?').get(refUser.email) as { id: string; labId: string } | undefined;
-    if (existingByEmail) {
-      database.prepare('UPDATE users SET name = ?, role = ?, company = ?, labId = ? WHERE email = ?').run(
-        refUser.name,
-        refUser.role,
-        refUser.company || '',
-        refUser.labId,
-        refUser.email
-      );
-    } else {
-      const existingById = database.prepare('SELECT id FROM users WHERE id = ?').get(refUser.id);
-      const safeId = existingById 
-        ? `usr-ref-${refUser.email.split('@')[0].replace(/[^a-zA-Z0-9]/g, '-')}` 
-        : refUser.id;
+    // Insertion ou mise à niveau des comptes de test sans collision d'ID ou d'email
+    for (const refUser of referenceUsers) {
+      const existingByEmail = database.prepare('SELECT id, labId FROM users WHERE email = ?').get(refUser.email) as { id: string; labId: string } | undefined;
+      if (existingByEmail) {
+        database.prepare('UPDATE users SET name = ?, role = ?, company = ?, labId = ? WHERE email = ?').run(
+          refUser.name,
+          refUser.role,
+          refUser.company || '',
+          refUser.labId,
+          refUser.email
+        );
+      } else {
+        const existingById = database.prepare('SELECT id FROM users WHERE id = ?').get(refUser.id);
+        const safeId = existingById 
+          ? `usr-ref-${refUser.email.split('@')[0].replace(/[^a-zA-Z0-9]/g, '-')}` 
+          : refUser.id;
 
-      database.prepare('INSERT INTO users (id, email, passwordHash, name, role, company, labId) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-        safeId,
-        refUser.email,
-        defaultPasswordHash,
-        refUser.name,
-        refUser.role,
-        refUser.company || '',
-        refUser.labId
-      );
+        database.prepare('INSERT INTO users (id, email, passwordHash, name, role, company, labId) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+          safeId,
+          refUser.email,
+          defaultPasswordHash,
+          refUser.name,
+          refUser.role,
+          refUser.company || '',
+          refUser.labId
+        );
+      }
     }
   }
 }

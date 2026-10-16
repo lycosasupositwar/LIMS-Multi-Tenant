@@ -60,8 +60,6 @@ echo "[3/5] Configuration des variables d'environnement..."
 if [ ! -f .env ]; then
   echo "JWT_SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")" > .env
   echo "PORT=3000" >> .env
-  echo 'GEMINI_API_KEY="MY_GEMINI_API_KEY"' >> .env
-  echo 'APP_URL="MY_APP_URL"' >> .env
   echo "Fichier .env généré avec les configurations par défaut et un JWT_SECRET sécurisé."
 else
   echo "Le fichier .env existe déjà."

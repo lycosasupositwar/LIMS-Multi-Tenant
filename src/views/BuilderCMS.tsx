@@ -340,48 +340,6 @@ export function BuilderCMS() {
 
   return (
     <div className="space-y-6 h-full flex flex-col">
-      {/* Sélecteur & Indicateur d'Instance de Laboratoire pour le CMS */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 shadow-xs">
-        <div className="flex items-center gap-3">
-          <div className={`p-2.5 rounded-lg ${activeLab.id === 'lab-metallurgie' ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'}`}>
-            <Building2 className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Instance active :</span>
-              <span className="font-bold text-sm text-slate-900">{activeLab.name}</span>
-              <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                activeLab.id === 'lab-metallurgie' ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'
-              }`}>
-                {activeLab.code}
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Les gabarits (matériaux, essais, formulaires client, rapports) sont hermétiquement isolés par instance de laboratoire.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg">
-          {laboratories.map(lab => {
-            const isSelected = lab.id === activeLabId;
-            return (
-              <button
-                key={lab.id}
-                onClick={() => setActiveLabId(lab.id)}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${
-                  isSelected 
-                    ? 'bg-white text-slate-900 shadow-xs' 
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {lab.shortName}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-2xl font-display font-bold text-slate-900">CMS Modulaire & Configuration</h2>

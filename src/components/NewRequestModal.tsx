@@ -31,7 +31,7 @@ export function NewRequestModal({ isOpen, onClose }: Props) {
   } = useLims();
   
   // Laboratoire sélectionné pour la demande (par défaut le lab actif ou le premier disponible)
-  const [selectedLabId, setSelectedLabId] = useState<string>(activeLabId || 'lab-metallurgie');
+  const [selectedLabId, setSelectedLabId] = useState<string>(activeLabId || laboratories[0]?.id || '');
   
   // Modèles de formulaires disponibles pour le laboratoire choisi
   const labTemplates = allRequestTemplates.filter(t => t.labId === selectedLabId && t.isActive !== false);
@@ -66,7 +66,7 @@ export function NewRequestModal({ isOpen, onClose }: Props) {
     e.preventDefault();
     if (!currentUser || !activeTemplate) return;
 
-    const prefix = targetLab.settings?.idPrefixes?.request || (selectedLabId === 'lab-metallurgie' ? 'REQ-MET' : 'REQ-MEC');
+    const prefix = targetLab.settings?.idPrefixes?.request || 'REQ';
     const newRequest: AnalysisRequest = {
       id: `${prefix}-${new Date().getFullYear().toString().slice(2)}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`,
       labId: selectedLabId,
@@ -116,16 +116,16 @@ export function NewRequestModal({ isOpen, onClose }: Props) {
                 1. Laboratoire Destinataire *
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {laboratories.map(lab => {
+                {laboratories.map((lab, index) => {
                   const isSelected = lab.id === selectedLabId;
-                  const isMet = lab.id === 'lab-metallurgie';
+                  const isPrimary = index % 2 === 0;
                   return (
                     <div
                       key={lab.id}
                       onClick={() => setSelectedLabId(lab.id)}
                       className={`p-3.5 rounded-xl border-2 transition-all cursor-pointer flex flex-col justify-between ${
                         isSelected 
-                          ? isMet 
+                          ? isPrimary
                             ? 'border-blue-600 bg-blue-50/50 ring-2 ring-blue-100' 
                             : 'border-emerald-600 bg-emerald-50/50 ring-2 ring-emerald-100'
                           : 'border-slate-200 bg-white hover:border-slate-300'
@@ -133,11 +133,11 @@ export function NewRequestModal({ isOpen, onClose }: Props) {
                     >
                       <div className="flex items-center justify-between mb-1.5">
                         <div className="flex items-center gap-2">
-                          <Building2 className={`w-4 h-4 ${isMet ? 'text-blue-600' : 'text-emerald-600'}`} />
+                          <Building2 className={`w-4 h-4 ${isPrimary ? 'text-blue-600' : 'text-emerald-600'}`} />
                           <span className="font-bold text-sm text-slate-900">{lab.shortName}</span>
                         </div>
                         <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                          isMet ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'
+                          isPrimary ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'
                         }`}>
                           {lab.code}
                         </span>

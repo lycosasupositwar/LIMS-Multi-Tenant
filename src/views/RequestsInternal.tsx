@@ -207,7 +207,7 @@ export function RequestsInternal() {
       const sampleId = `ECH-${new Date().getFullYear().toString().slice(2)}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
       const newSample: Sample = {
         id: sampleId,
-        labId: selectedRequest.labId || 'lab-metallurgie',
+        labId: selectedRequest.labId || activeLabId,
         barcode: `REQ-${Math.floor(Math.random() * 100000).toString().padStart(6, '0')}`,
         templateId: sampleMaterialTemplateId,
         requestId: selectedRequest.id,

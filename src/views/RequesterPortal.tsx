@@ -65,14 +65,15 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
    * Badge identifiant le laboratoire traitant
    */
   const getLabBadge = (labId?: string) => {
-    const lab = laboratories.find(l => l.id === labId);
+    const labIndex = laboratories.findIndex(l => l.id === labId);
+    const lab = laboratories[labIndex];
     if (!lab) return null;
-    const isMet = lab.id === 'lab-metallurgie';
+    const isPrimary = labIndex % 2 === 0;
     return (
       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border ${
-        isMet ? 'bg-blue-50 text-blue-800 border-blue-200' : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+        isPrimary ? 'bg-blue-50 text-blue-800 border-blue-200' : 'bg-emerald-50 text-emerald-800 border-emerald-200'
       }`}>
-        <span className={`w-2 h-2 rounded-full ${isMet ? 'bg-blue-600' : 'bg-emerald-600'}`} />
+        <span className={`w-2 h-2 rounded-full ${isPrimary ? 'bg-blue-600' : 'bg-emerald-600'}`} />
         {lab.shortName} <span className="font-mono opacity-70">[{lab.code}]</span>
       </span>
     );
@@ -162,41 +163,33 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
             <p className="text-xs text-slate-500 mt-0.5">Dossiers déposés au total</p>
           </div>
 
-          <div 
-            onClick={() => setSelectedLabFilter('lab-metallurgie')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              selectedLabFilter === 'lab-metallurgie' ? 'bg-blue-50/50 border-blue-500 ring-2 ring-blue-100 shadow-sm' : 'bg-white border-slate-200 hover:border-slate-300'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-blue-700 uppercase tracking-wider flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-blue-600" /> Métallographie (MET)
-              </span>
-              <span className="text-[10px] font-mono font-bold bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded">MET</span>
-            </div>
-            <p className="text-2xl font-bold text-slate-900 mt-2">
-              {myRequests.filter(r => r.labId === 'lab-metallurgie').length}
-            </p>
-            <p className="text-xs text-slate-500 mt-0.5">Micrographie, dureté & corrosion</p>
-          </div>
-
-          <div 
-            onClick={() => setSelectedLabFilter('lab-mecanique')}
-            className={`p-4 rounded-xl border transition-all cursor-pointer ${
-              selectedLabFilter === 'lab-mecanique' ? 'bg-emerald-50/50 border-emerald-500 ring-2 ring-emerald-100 shadow-sm' : 'bg-white border-slate-200 hover:border-slate-300'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-emerald-700 uppercase tracking-wider flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-600" /> Mécanique & Chimie (MEC)
-              </span>
-              <span className="text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">MEC</span>
-            </div>
-            <p className="text-2xl font-bold text-slate-900 mt-2">
-              {myRequests.filter(r => r.labId === 'lab-mecanique').length}
-            </p>
-            <p className="text-xs text-slate-500 mt-0.5">Traction, Charpy, granulométrie & BET</p>
-          </div>
+          {laboratories.map((lab, index) => {
+            const isPrimary = index % 2 === 0;
+            return (
+              <div
+                key={lab.id}
+                onClick={() => setSelectedLabFilter(lab.id)}
+                className={`p-4 rounded-xl border transition-all cursor-pointer ${
+                  selectedLabFilter === lab.id
+                    ? (isPrimary ? 'bg-blue-50/50 border-blue-500 ring-2 ring-blue-100 shadow-sm' : 'bg-emerald-50/50 border-emerald-500 ring-2 ring-emerald-100 shadow-sm')
+                    : 'bg-white border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className={`text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 ${isPrimary ? 'text-blue-700' : 'text-emerald-700'}`}>
+                    <span className={`w-2 h-2 rounded-full ${isPrimary ? 'bg-blue-600' : 'bg-emerald-600'}`} /> {lab.name}
+                  </span>
+                  <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${isPrimary ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                    {lab.code}
+                  </span>
+                </div>
+                <p className="text-2xl font-bold text-slate-900 mt-2">
+                  {myRequests.filter(r => r.labId === lab.id).length}
+                </p>
+                <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">{lab.description}</p>
+              </div>
+            );
+          })}
         </div>
 
         {/* 3. Liste des demandes avec filtrage */}

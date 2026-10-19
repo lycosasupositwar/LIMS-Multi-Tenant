@@ -359,6 +359,17 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     message: string,
     type: 'system' | 'email' = 'email'
   ) => {
+
+    console.trace('[addNotification] Appel', {
+      userId,
+      title,
+      message,
+      type,
+      timestamp: new Date().toISOString()
+    });
+
+
+
     // La notification est toujours enregistrée dans le système.
     const newNotif: Notification = {
       id: `NOTIF-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -382,16 +393,32 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
             headers: {
               'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ userId, title, message })
+            body: JSON.stringify({
+              userId,
+              title,
+              message
+            })
           });
 
+          // Lire la réponse même en cas d'erreur HTTP
+          const data = await res.json().catch(() => ({}));
+
           if (!res.ok) {
-            throw new Error(`Erreur HTTP ${res.status}`);
+            console.warn('[Notification Mail] Échec HTTP', {
+              userId,
+              status: res.status,
+              title,
+              error: data.error ?? data.message ?? 'Erreur inconnue',
+              details: data
+            });
+            return;
           }
 
-          const data = await res.json();
-
-          if (!data.sent) {
+          if (data.sent === true) {
+            console.info(
+              `[Notification Mail] E-mail envoyé avec succès pour ${userId}`
+            );
+          } else {
             console.warn(
               `[Notification Mail] Envoi non confirmé pour ${userId}`,
               data
@@ -399,7 +426,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
           }
         } catch (error) {
           console.error(
-            `[Notification Mail] Échec pour ${userId}`,
+            `[Notification Mail] Erreur réseau pour ${userId}`,
             error
           );
         }

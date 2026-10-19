@@ -21,18 +21,18 @@ const libreConvertAsync = promisify(libre.convert);
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import nodemailer from 'nodemailer';
-import { 
-  initDb, 
-  getUserByEmail, 
-  createUser, 
-  getUserById, 
-  getUsers, 
-  updatePassword, 
-  createResetToken, 
-  getResetToken, 
-  deleteResetToken, 
-  createAccountRequest, 
-  getAccountRequests, 
+import {
+  initDb,
+  getUserByEmail,
+  createUser,
+  getUserById,
+  getUsers,
+  updatePassword,
+  createResetToken,
+  getResetToken,
+  deleteResetToken,
+  createAccountRequest,
+  getAccountRequests,
   deleteAccountRequest,
   deleteUser
 } from './src/db/auth.js';
@@ -150,29 +150,293 @@ async function getSmtpConfig(): Promise<SmtpConfig> {
 /**
  * Construit un gabarit HTML propre et professionnel pour les e-mails envoyés par le LIMS
  */
-function buildHtmlEmailTemplate(title: string, message: string, recipientName?: string): string {
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildHtmlEmailTemplate(
+  title: string,
+  message: string,
+  recipientName?: string
+): string {
+  const safeTitle = escapeHtml(title);
+  const safeMessage = escapeHtml(message);
+  const safeRecipientName = recipientName
+    ? escapeHtml(recipientName)
+    : "";
+
   return `
-    <div style="font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; padding: 32px 16px; color: #0f172a;">
-      <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
-        <div style="background-color: #1e3a8a; padding: 20px 24px; color: #ffffff;">
-          <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #93c5fd; font-weight: 700;">Notification Système LIMS</div>
-          <h1 style="margin: 6px 0 0 0; font-size: 18px; font-weight: 700;">${title}</h1>
-        </div>
-        <div style="padding: 24px;">
-          ${recipientName ? `<p style="margin-top: 0; font-size: 14px; color: #334155;">Bonjour <strong>${recipientName}</strong>,</p>` : ''}
-          <div style="background-color: #f1f5f9; border-left: 4px solid #2563eb; padding: 16px; border-radius: 4px; font-size: 14px; line-height: 1.6; color: #1e293b; white-space: pre-line;">
-            ${message}
-          </div>
-          <p style="margin-top: 24px; margin-bottom: 0; font-size: 12px; color: #64748b;">
-            Connectez-vous à votre portail LIMS pour consulter les détails du dossier.
-          </p>
-        </div>
-        <div style="background-color: #f8fafc; padding: 14px 24px; border-top: 1px solid #e2e8f0; text-align: center; font-size: 11px; color: #94a3b8;">
-          Cet e-mail a été envoyé automatiquement par le système de gestion de laboratoire (LIMS). Merci de ne pas y répondre directement.
-        </div>
-      </div>
-    </div>
-  `;
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light">
+  <title>${safeTitle}</title>
+</head>
+<body style="
+  margin: 0;
+  padding: 0;
+  background-color: #f1f5f9;
+  font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  color: #1e293b;
+  -webkit-font-smoothing: antialiased;
+">
+
+  <!-- Pré-en-tête affiché dans la boîte de réception -->
+  <div style="
+    display: none;
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    color: transparent;
+  ">
+    Notification LIMS : ${safeTitle}
+  </div>
+
+  <table role="presentation" width="100%" cellpadding="0"
+    cellspacing="0" border="0" style="background-color: #f1f5f9;">
+    <tr>
+      <td align="center" style="padding: 36px 16px;">
+
+        <table role="presentation" width="100%" cellpadding="0"
+          cellspacing="0" border="0"
+          style="
+            max-width: 600px;
+            background-color: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            overflow: hidden;
+          ">
+
+          <!-- En-tête -->
+          <tr>
+            <td style="
+              padding: 28px 32px 30px;
+              background-color: #0f2747;
+              background-image: linear-gradient(135deg, #0f2747, #174477);
+            ">
+              <table role="presentation" width="100%"
+                cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td>
+                    <table role="presentation" cellpadding="0"
+                      cellspacing="0" border="0">
+                      <tr>
+                        <td valign="middle" style="padding-right: 10px;">
+                          <div style="
+                            width: 38px;
+                            height: 38px;
+                            line-height: 38px;
+                            text-align: center;
+                            background-color: #1e88b5;
+                            border-radius: 10px;
+                            color: #ffffff;
+                            font-size: 17px;
+                            font-weight: 800;
+                          ">L</div>
+                        </td>
+                        <td valign="middle">
+                          <div style="
+                            color: #ffffff;
+                            font-size: 16px;
+                            font-weight: 700;
+                            letter-spacing: 1.5px;
+                          ">LIMS</div>
+                          <div style="
+                            margin-top: 3px;
+                            color: #a9c5e5;
+                            font-size: 10px;
+                            letter-spacing: 1.6px;
+                            text-transform: uppercase;
+                          ">Laboratory Management System</div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding-top: 28px;">
+                    <div style="
+                      display: inline-block;
+                      padding: 5px 10px;
+                      border: 1px solid #35618c;
+                      border-radius: 20px;
+                      color: #b9dcff;
+                      font-size: 10px;
+                      font-weight: 700;
+                      letter-spacing: 1.2px;
+                      text-transform: uppercase;
+                    ">Notification système</div>
+
+                    <h1 style="
+                      margin: 14px 0 0;
+                      color: #ffffff;
+                      font-size: 25px;
+                      line-height: 1.35;
+                      font-weight: 700;
+                      letter-spacing: -0.4px;
+                    ">${safeTitle}</h1>
+
+                    <div style="
+                      margin-top: 16px;
+                      width: 44px;
+                      height: 4px;
+                      background-color: #38bdf8;
+                      border-radius: 4px;
+                      font-size: 0;
+                      line-height: 0;
+                    ">&nbsp;</div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Contenu principal -->
+          <tr>
+            <td style="padding: 32px;">
+
+              ${safeRecipientName
+      ? `
+                    <p style="
+                      margin: 0 0 22px;
+                      color: #334155;
+                      font-size: 15px;
+                      line-height: 1.7;
+                    ">
+                      Bonjour <strong style="color: #0f2747;">
+                        ${safeRecipientName}
+                      </strong>,
+                    </p>
+                  `
+      : ""
+    }
+
+              <p style="
+                margin: 0 0 14px;
+                color: #64748b;
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 1.2px;
+                text-transform: uppercase;
+              ">Détails de la notification</p>
+
+              <table role="presentation" width="100%" cellpadding="0"
+                cellspacing="0" border="0"
+                style="
+                  border: 1px solid #dbeafe;
+                  border-radius: 10px;
+                  background-color: #f8fbff;
+                ">
+                <tr>
+                  <td width="4" style="
+                    background-color: #0ea5e9;
+                    border-radius: 10px 0 0 10px;
+                    font-size: 0;
+                  ">&nbsp;</td>
+                  <td style="
+                    padding: 22px 20px;
+                    color: #334155;
+                    font-size: 14px;
+                    line-height: 1.9;
+                    white-space: pre-line;
+                    overflow-wrap: anywhere;
+                  ">${safeMessage}</td>
+                </tr>
+              </table>
+
+              <table role="presentation" width="100%" cellpadding="0"
+                cellspacing="0" border="0" style="margin-top: 28px;">
+                <tr>
+                  <td valign="top" width="34" style="padding-right: 12px;">
+                    <div style="
+                      width: 30px;
+                      height: 30px;
+                      line-height: 30px;
+                      text-align: center;
+                      border-radius: 50%;
+                      background-color: #e0f2fe;
+                      color: #0369a1;
+                      font-size: 16px;
+                      font-weight: 700;
+                    ">i</div>
+                  </td>
+                  <td valign="top" style="
+                    color: #64748b;
+                    font-size: 12px;
+                    line-height: 1.8;
+                  ">
+                    Connectez-vous à votre portail LIMS pour consulter
+                    les informations complémentaires et accéder aux détails
+                    du dossier concerné.
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+
+          <!-- Pied de page -->
+          <tr>
+            <td style="
+              padding: 22px 32px;
+              background-color: #f8fafc;
+              border-top: 1px solid #e2e8f0;
+              text-align: center;
+            ">
+              <p style="
+                margin: 0;
+                color: #475569;
+                font-size: 12px;
+                font-weight: 600;
+                line-height: 1.7;
+              ">Notification automatique du système LIMS</p>
+
+              <p style="
+                margin: 7px 0 0;
+                color: #94a3b8;
+                font-size: 11px;
+                line-height: 1.7;
+              ">
+                Cet e-mail a été généré automatiquement.
+                Merci de ne pas répondre directement à ce message.
+              </p>
+
+              <div style="
+                margin-top: 18px;
+                padding-top: 14px;
+                border-top: 1px solid #e2e8f0;
+                color: #94a3b8;
+                font-size: 10px;
+                letter-spacing: 0.3px;
+              ">© LIMS · Gestion de laboratoire</div>
+            </td>
+          </tr>
+
+        </table>
+
+        <p style="
+          margin: 18px 0 0;
+          color: #94a3b8;
+          font-size: 10px;
+          line-height: 1.6;
+          text-align: center;
+        ">
+          Ce message contient des informations relatives à votre activité LIMS.
+        </p>
+
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>`;
 }
 
 /**
@@ -203,7 +467,7 @@ async function sendMailViaSmtp(toEmail: string, subject: string, textMessage: st
     }
   });
 
-  const fromHeader = config.fromName 
+  const fromHeader = config.fromName
     ? `"${config.fromName.replace(/"/g, '')}" <${config.fromEmail || config.user}>`
     : (config.fromEmail || config.user);
 
@@ -466,7 +730,7 @@ async function startServer() {
 
       await transporter.verify();
 
-      const fromHeader = config.fromName 
+      const fromHeader = config.fromName
         ? `"${config.fromName.replace(/"/g, '')}" <${config.fromEmail || config.user}>`
         : (config.fromEmail || config.user);
 
@@ -639,7 +903,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Email et mot de passe requis' });
       }
 
-      const user = await getUserByEmail(email.trim()); 
+      const user = await getUserByEmail(email.trim());
       if (!user) {
         console.warn(`Échec de connexion : compte introuvable (${email.trim()})`);
         return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
@@ -656,15 +920,15 @@ async function startServer() {
 
       console.info(`Connexion réussie : ${user.name} (${user.email}) [${user.role}]`);
 
-      res.json({ 
-        user: { 
-          id: user.id, 
-          email: user.email, 
-          name: user.name, 
-          role: user.role, 
+      res.json({
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
           company: user.company,
           labId: user.labId
-        } 
+        }
       });
     } catch (error) {
       console.error('Erreur lors du login :', error);
@@ -726,17 +990,17 @@ async function startServer() {
       if (caller.role !== 'manager' && caller.role !== 'admin') {
         return res.status(403).json({ error: 'Accès refusé' });
       }
-      
+
       const { email, password, name, role, company, labId } = req.body;
       if (!email || !password || password.length < 8 || !name || !role) {
         return res.status(400).json({ error: 'Données invalides (le mot de passe doit contenir au moins 8 caractères).' });
       }
 
       // Seul un admin peut créer un autre admin
-      const allowedRoles = caller.role === 'admin' 
-        ? ['demandeur', 'analyste', 'manager', 'admin'] 
+      const allowedRoles = caller.role === 'admin'
+        ? ['demandeur', 'analyste', 'manager', 'admin']
         : ['demandeur', 'analyste', 'manager'];
-      
+
       if (!allowedRoles.includes(role)) {
         return res.status(403).json({ error: 'Vous n\'êtes pas autorisé à attribuer ce rôle.' });
       }
@@ -752,7 +1016,7 @@ async function startServer() {
       const id = `usr-${crypto.randomUUID()}`;
       const passwordHash = await bcrypt.hash(password, 10);
       await createUser(id, email, passwordHash, name, role, company, enforcedLabId);
-      
+
       console.info(`Nouvel utilisateur créé : ${email} (${role}) par ${caller.email}`);
 
       // Envoi automatique des identifiants par e-mail si SMTP est activé
@@ -814,7 +1078,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Email requis' });
       }
 
-      const user = await getUserByEmail(email.trim()); 
+      const user = await getUserByEmail(email.trim());
       if (!user) {
         return res.json({ success: true, message: 'Si l\'email existe, un code a été envoyé.' });
       }
@@ -822,7 +1086,7 @@ async function startServer() {
       // Génération cryptographiquement sûre d'un code à 6 chiffres
       const code = crypto.randomInt(100000, 1000000).toString();
       const expiry = Date.now() + 15 * 60 * 1000; // Valable 15 minutes
-      
+
       await createResetToken(email.trim(), code, expiry);
       otpFailedAttempts.delete(email.trim());
 
@@ -837,7 +1101,7 @@ async function startServer() {
       if (!IS_PROD) {
         console.log(`[CODE RESET MOT DE PASSE] Pour ${email} : ${code}`);
       }
-      
+
       res.json({ success: true, message: 'Si l\'email existe, un code a été envoyé.' });
     } catch (error) {
       console.error('Erreur forgot-password :', error);
@@ -862,7 +1126,7 @@ async function startServer() {
 
       const cleanEmail = email.trim();
       const resetRecord = await getResetToken(cleanEmail);
-      
+
       if (!resetRecord || Date.now() > resetRecord.expiry) {
         await deleteResetToken(cleanEmail);
         return res.status(400).json({ error: 'Code invalide ou expiré' });
@@ -880,7 +1144,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Code invalide ou expiré' });
       }
 
-      const user = await getUserByEmail(cleanEmail); 
+      const user = await getUserByEmail(cleanEmail);
       if (!user) return res.status(404).json({ error: 'Utilisateur introuvable' });
 
       const newHash = await bcrypt.hash(newPassword, 10);
@@ -1006,7 +1270,7 @@ async function startServer() {
       if (!docxBase64 || typeof docxBase64 !== 'string') {
         return res.status(400).json({ error: 'Document Word base64 manquant' });
       }
-      
+
       const docxBuf = Buffer.from(docxBase64, 'base64');
       // Vérification minimale de la signature ZIP/DOCX (PK\x03\x04) et de la taille (max 15 Mo)
       if (docxBuf.length > 15 * 1024 * 1024 || docxBuf.length < 4 || docxBuf[0] !== 0x50 || docxBuf[1] !== 0x4b) {
@@ -1015,21 +1279,21 @@ async function startServer() {
 
       activePdfConversions++;
       const pdfBuf = await libreConvertAsync(docxBuf, '.pdf', undefined);
-      
+
       const id = crypto.randomUUID();
-      tempPdfs.set(id, { 
-        buffer: pdfBuf, 
+      tempPdfs.set(id, {
+        buffer: pdfBuf,
         timestamp: Date.now(),
         ownerId: req.user!.id,
         labId: req.user!.labId
       });
-      
+
       // Purge des fichiers temporaires conservés depuis plus d'une heure
       for (const [key, value] of tempPdfs.entries()) {
         if (Date.now() - value.timestamp > 3600000) tempPdfs.delete(key);
       }
-      
-      res.json({ 
+
+      res.json({
         pdfBase64: pdfBuf.toString('base64'),
         pdfUrl: `/api/temp-pdf/${id}`
       });

@@ -31,7 +31,8 @@ export function RequestsInternal() {
     updateRequestData, 
     samples, 
     analyses, 
-    globalSearchQuery 
+    globalSearchQuery,
+    activeLabId
   } = useLims();
 
   // États locaux de sélection et d'édition
@@ -48,7 +49,10 @@ export function RequestsInternal() {
   const [sampleMaterialState, setSampleMaterialState] = useState<MaterialState>('Massif');
 
   // Liste des utilisateurs ayant le rôle analyste pour l'assignation
-  const analysts = users.filter(u => u.role === 'analyste');
+  const analysts = users.filter(u =>
+    (u.role === 'analyste' || u.role === 'manager') &&
+    (!u.labId || u.labId === 'all' || u.labId === (selectedRequest?.labId || activeLabId))
+  );
 
   /**
    * Filtrage des demandes visibles selon l'onglet (actives/terminées), la recherche et le rôle

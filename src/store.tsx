@@ -551,8 +551,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       if (analystId) {
         addNotification(analystId, `Nouvelle assignation (${reqToUpdate.id})`, `La demande ${reqToUpdate.id} ("${reqToUpdate.title}") vous a été assignée pour réalisation des essais.`, 'email');
         addNotification(reqToUpdate.requesterId, `Demande ${reqToUpdate.id} prise en charge`, `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a été assignée à notre équipe technique (${analyst?.name || 'Analyste'}).`, 'email');
-      } else {
-        addNotification(reqToUpdate.requesterId, `Demande ${reqToUpdate.id} mise à jour`, `L'assignation de votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a été annulée.`, 'email');
       }
     }
 

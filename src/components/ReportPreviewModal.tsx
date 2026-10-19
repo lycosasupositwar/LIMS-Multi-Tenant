@@ -17,7 +17,8 @@ import React, { useRef, useEffect, useState } from "react";
 import { X, Printer, Download, CheckCircle2 } from "lucide-react";
 import { Report, AnalysisRequest, Sample, Analysis, AnalysisTemplate, User } from "../types";
 import { useLims } from "../store";
-import html2pdf from "html2pdf.js";
+import html2canvas from "html2canvas";
+import { jsPDF } from "jspdf";
 // @ts-ignore
 import Docxtemplater from "docxtemplater";
 // @ts-ignore
@@ -538,71 +539,89 @@ export function ReportPreviewModal({
 
       setIsDownloadingPdf(true);
       try {
-        // Compatibilité d'import ESM / CommonJS avec Vite
-        const html2pdfLib = (html2pdf as any).default || html2pdf;
+        const canvas = await html2canvas(element, {
+          scale: 2,
+          useCORS: true,
+          allowTaint: true,
+          logging: false,
+          scrollY: 0,
+          onclone: (clonedDoc: Document) => {
+            // 1. Masque les images cassées dans le clone pour éviter que html2canvas ne plante
+            const imgs = clonedDoc.querySelectorAll('img');
+            imgs.forEach((img) => {
+              if (!img.complete || img.naturalWidth === 0) {
+                img.style.display = 'none';
+              }
+            });
 
-        const opt = {
-          margin:       [10, 10, 10, 10] as [number, number, number, number],
-          filename:     `Rapport_${report.id}.pdf`,
-          image:        { type: 'jpeg' as const, quality: 0.98 },
-          pagebreak:    { mode: ['css', 'legacy'] },
-          html2canvas:  { 
-            scale: 2, 
-            useCORS: true, 
-            allowTaint: true,
-            logging: false,
-            scrollY: 0,
-            onclone: (clonedDoc: Document) => {
-              // 1. Masque les images cassées dans le clone pour éviter que html2canvas ne plante
-              const imgs = clonedDoc.querySelectorAll('img');
-              imgs.forEach((img) => {
-                if (!img.complete || img.naturalWidth === 0) {
-                  img.style.display = 'none';
+            // 2. Convertit les couleurs oklch/oklab (Tailwind v4) en RGB standard pour html2canvas
+            const tempCanvas = clonedDoc.createElement('canvas');
+            tempCanvas.width = 1;
+            tempCanvas.height = 1;
+            const ctx = tempCanvas.getContext('2d');
+            const resolveColor = (val: string, fallback: string) => {
+              if (!ctx) return fallback;
+              try {
+                ctx.fillStyle = val;
+                return ctx.fillStyle;
+              } catch {
+                return fallback;
+              }
+            };
+
+            const allElements = clonedDoc.querySelectorAll('*');
+            const win = clonedDoc.defaultView;
+            if (win) {
+              allElements.forEach((el) => {
+                const htmlEl = el as HTMLElement;
+                const style = win.getComputedStyle(htmlEl);
+                if (style.backgroundColor && (style.backgroundColor.includes('oklch') || style.backgroundColor.includes('oklab'))) {
+                  htmlEl.style.backgroundColor = resolveColor(style.backgroundColor, '#ffffff');
+                }
+                if (style.color && (style.color.includes('oklch') || style.color.includes('oklab'))) {
+                  htmlEl.style.color = resolveColor(style.color, '#0f172a');
+                }
+                if (style.borderColor && (style.borderColor.includes('oklch') || style.borderColor.includes('oklab'))) {
+                  htmlEl.style.borderColor = resolveColor(style.borderColor, '#e2e8f0');
                 }
               });
-
-              // 2. Convertit les couleurs oklch/oklab (Tailwind v4) en RGB standard pour html2canvas
-              const canvas = clonedDoc.createElement('canvas');
-              canvas.width = 1;
-              canvas.height = 1;
-              const ctx = canvas.getContext('2d');
-              const resolveColor = (val: string, fallback: string) => {
-                if (!ctx) return fallback;
-                try {
-                  ctx.fillStyle = val;
-                  return ctx.fillStyle;
-                } catch {
-                  return fallback;
-                }
-              };
-
-              const allElements = clonedDoc.querySelectorAll('*');
-              const win = clonedDoc.defaultView;
-              if (win) {
-                allElements.forEach((el) => {
-                  const htmlEl = el as HTMLElement;
-                  const style = win.getComputedStyle(htmlEl);
-                  if (style.backgroundColor && (style.backgroundColor.includes('oklch') || style.backgroundColor.includes('oklab'))) {
-                    htmlEl.style.backgroundColor = resolveColor(style.backgroundColor, '#ffffff');
-                  }
-                  if (style.color && (style.color.includes('oklch') || style.color.includes('oklab'))) {
-                    htmlEl.style.color = resolveColor(style.color, '#0f172a');
-                  }
-                  if (style.borderColor && (style.borderColor.includes('oklch') || style.borderColor.includes('oklab'))) {
-                    htmlEl.style.borderColor = resolveColor(style.borderColor, '#e2e8f0');
-                  }
-                });
-              }
             }
-          },
-          jsPDF: { unit: 'mm' as const, format: 'a4' as const, orientation: 'portrait' as const }
-        };
+          }
+        });
 
-        await html2pdfLib().set(opt).from(element).save();
+        const imgData = canvas.toDataURL('image/jpeg', 0.98);
+        const pdf = new jsPDF({
+          orientation: 'portrait',
+          unit: 'mm',
+          format: 'a4'
+        });
+
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+        
+        const pageHeight = pdf.internal.pageSize.getHeight();
+        let heightLeft = pdfHeight;
+        let position = 0;
+        let isFirstPage = true;
+
+        while (heightLeft > 0) {
+          if (!isFirstPage) {
+            pdf.addPage();
+          }
+          pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pdfHeight);
+          heightLeft -= pageHeight;
+          position -= pageHeight;
+          isFirstPage = false;
+        }
+
+        pdf.save(`Rapport_${report.id}.pdf`);
       } catch (err) {
         console.error("Erreur lors de la génération du PDF générique :", err);
-        alert("La conversion directe a rencontré un problème. L'outil d'impression PDF va s'ouvrir.");
-        window.print();
+        alert("La conversion directe a rencontré un problème. L'outil d'impression PDF va s'ouvrir en alternative.");
+        // Unblock UI before showing the blocking print dialog
+        setTimeout(() => {
+          window.print();
+        }, 500);
       } finally {
         setIsDownloadingPdf(false);
       }

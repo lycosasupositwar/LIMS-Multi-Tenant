@@ -1,0 +1,52 @@
+<<<<<<< SEARCH
+  const updateConsumableStock = (id: string, newLevel: number) => {
+    setConsumables(prev => prev.map(c => {
+      if (c.id === id) {
+        const isReplenished = newLevel > c.stockLevel;
+        // Si le stock passe sous le seuil critique, alerte les managers du labo par mail
+        if (newLevel <= c.minThreshold && c.stockLevel > c.minThreshold) {
+          const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === c.labId || u.labId === 'all' || !u.labId));
+          labManagers.forEach(m => addNotification(
+            m.id,
+            `Alerte Stock Bas : ${c.name}`,
+            `Le niveau de stock pour "${c.name}" est passé sous le seuil minimal (${newLevel} ${c.unit} restants, seuil fixé à ${c.minThreshold} ${c.unit}).`,
+            'email'
+          ));
+        }
+        return {
+          ...c,
+          stockLevel: newLevel,
+          lastRestocked: isReplenished ? new Date().toISOString() : c.lastRestocked
+        };
+      }
+      return c;
+    }));
+  };
+=======
+  const updateConsumableStock = (id: string, newLevel: number) => {
+    const c = rawConsumables.find(cons => cons.id === id);
+    if (c) {
+      if (newLevel <= c.minThreshold && c.stockLevel > c.minThreshold) {
+        const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === c.labId || u.labId === 'all' || !u.labId));
+        labManagers.forEach(m => addNotification(
+          m.id,
+          `Alerte Stock Bas : ${c.name}`,
+          `Le niveau de stock pour "${c.name}" est passé sous le seuil minimal (${newLevel} ${c.unit} restants, seuil fixé à ${c.minThreshold} ${c.unit}).`,
+          'email'
+        ));
+      }
+    }
+
+    setConsumables(prev => prev.map(c => {
+      if (c.id === id) {
+        const isReplenished = newLevel > c.stockLevel;
+        return {
+          ...c,
+          stockLevel: newLevel,
+          lastRestocked: isReplenished ? new Date().toISOString() : c.lastRestocked
+        };
+      }
+      return c;
+    }));
+  };
+>>>>>>> REPLACE

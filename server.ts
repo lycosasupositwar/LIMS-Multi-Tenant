@@ -7,6 +7,7 @@
  * - Les endpoints CRUD pour les collections métier avec contrôle d'accès par rôle (RBAC)
  * - La gestion cloisonnée des habilitations utilisateurs et des demandes d'accès
  * - Le service de conversion documentaire Word -> PDF authentifié et limité en concurrence
+ * - Le journal d'événements et d'erreurs système réservé aux administrateurs
  */
 
 import express, { Request, Response, NextFunction } from 'express';
@@ -36,6 +37,76 @@ import {
 import { initLimsDb, getCollection, setCollection } from './src/db/lims.js';
 
 const IS_PROD = process.env.NODE_ENV === 'production';
+
+// ==========================================
+// Collecteur de Logs Système (Backend)
+// ==========================================
+interface ServerLogEntry {
+  id: string;
+  timestamp: string;
+  level: 'info' | 'warn' | 'error';
+  source: 'backend';
+  message: string;
+  details?: string;
+}
+
+const MAX_SERVER_LOGS = 500;
+const serverLogs: ServerLogEntry[] = [];
+
+const origConsoleLog = console.log.bind(console);
+const origConsoleInfo = console.info.bind(console);
+const origConsoleWarn = console.warn.bind(console);
+const origConsoleError = console.error.bind(console);
+
+function formatServerArg(arg: any): string {
+  if (arg instanceof Error) {
+    return `${arg.name}: ${arg.message}${arg.stack ? `\n${arg.stack}` : ''}`;
+  }
+  if (typeof arg === 'object' && arg !== null) {
+    try {
+      return JSON.stringify(arg, null, 2);
+    } catch {
+      return String(arg);
+    }
+  }
+  return String(arg);
+}
+
+function recordServerLog(level: 'info' | 'warn' | 'error', args: any[]) {
+  const formatted = args.map(formatServerArg);
+  const message = formatted[0] || '';
+  const details = formatted.slice(1).join('\n');
+
+  serverLogs.unshift({
+    id: `be-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    timestamp: new Date().toISOString(),
+    level,
+    source: 'backend',
+    message,
+    details: details || undefined,
+  });
+
+  if (serverLogs.length > MAX_SERVER_LOGS) {
+    serverLogs.length = MAX_SERVER_LOGS;
+  }
+}
+
+console.log = (...args: any[]) => {
+  origConsoleLog(...args);
+  recordServerLog('info', args);
+};
+console.info = (...args: any[]) => {
+  origConsoleInfo(...args);
+  recordServerLog('info', args);
+};
+console.warn = (...args: any[]) => {
+  origConsoleWarn(...args);
+  recordServerLog('warn', args);
+};
+console.error = (...args: any[]) => {
+  origConsoleError(...args);
+  recordServerLog('error', args);
+};
 
 /** 
  * Clé secrète pour la signature cryptographique des jetons JWT.
@@ -166,9 +237,44 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   app.use(cookieParser());
 
+  // Journalisation automatique des erreurs d'API (4xx et 5xx)
+  app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+      if (req.path.startsWith('/api') && req.path !== '/api/admin/logs' && res.statusCode >= 400) {
+        const duration = Date.now() - start;
+        const level = res.statusCode >= 500 ? 'error' : 'warn';
+        recordServerLog(level, [
+          `[HTTP ${res.statusCode}] ${req.method} ${req.originalUrl} (${duration}ms)`
+        ]);
+      }
+    });
+    next();
+  });
+
   // Initialisation des schémas SQLite (utilisateurs et collections LIMS)
   await initDb();
   await initLimsDb();
+
+  // ==========================================
+  // 0. Endpoints Console de Logs (Admin uniquement)
+  // ==========================================
+
+  app.get('/api/admin/logs', authenticate, (req: AuthRequest, res) => {
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Accès réservé aux administrateurs.' });
+    }
+    res.json({ logs: serverLogs });
+  });
+
+  app.delete('/api/admin/logs', authenticate, (req: AuthRequest, res) => {
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Accès réservé aux administrateurs.' });
+    }
+    serverLogs.length = 0;
+    console.info(`Journal des logs serveur purgé par l'administrateur (${req.user.email}).`);
+    res.json({ success: true });
+  });
 
   // ==========================================
   // 1. Endpoints Sécurisés pour les Collections
@@ -204,6 +310,7 @@ async function startServer() {
 
       res.json(data);
     } catch (e) {
+      console.error(`Erreur de lecture de la collection ${req.params.collection}:`, e);
       res.status(500).json({ error: 'Erreur de lecture de la collection' });
     }
   });
@@ -268,6 +375,7 @@ async function startServer() {
       await setCollection(collection, req.body);
       res.json({ success: true });
     } catch (e) {
+      console.error(`Erreur d'écriture de la collection ${req.params.collection}:`, e);
       res.status(500).json({ error: 'Erreur d\'écriture de la collection' });
     }
   });
@@ -283,6 +391,7 @@ async function startServer() {
     try {
       const ip = req.ip || 'unknown';
       if (!checkRateLimit(`login:${ip}`, 10, 15 * 60 * 1000)) {
+        console.warn(`Tentative de connexion bloquée (rate limit) depuis l'IP ${ip}`);
         return res.status(429).json({ error: 'Trop de tentatives de connexion. Veuillez réessayer dans 15 minutes.' });
       }
 
@@ -293,16 +402,20 @@ async function startServer() {
 
       const user = await getUserByEmail(email.trim()); 
       if (!user) {
+        console.warn(`Échec de connexion : compte introuvable (${email.trim()})`);
         return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
       }
 
       const isValid = await bcrypt.compare(password, user.passwordHash);
       if (!isValid) {
+        console.warn(`Échec de connexion : mot de passe incorrect pour ${email.trim()}`);
         return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
       }
 
       const token = jwt.sign({ id: user.id, role: user.role, labId: user.labId }, JWT_SECRET, { expiresIn: '24h' });
       res.cookie('token', token, COOKIE_OPTIONS);
+
+      console.info(`Connexion réussie : ${user.name} (${user.email}) [${user.role}]`);
 
       res.json({ 
         user: { 
@@ -360,6 +473,7 @@ async function startServer() {
 
       res.json(users);
     } catch (error) {
+      console.error('Erreur lors de la récupération des utilisateurs :', error);
       res.status(500).json({ error: 'Erreur lors de la récupération des utilisateurs' });
     }
   });
@@ -400,6 +514,7 @@ async function startServer() {
       const passwordHash = await bcrypt.hash(password, 10);
       await createUser(id, email, passwordHash, name, role, company, enforcedLabId);
       
+      console.info(`Nouvel utilisateur créé : ${email} (${role}) par ${caller.email}`);
       res.status(201).json({ success: true, user: { id, email, name, role, company, labId: enforcedLabId } });
     } catch (error) {
       console.error(error);
@@ -431,6 +546,7 @@ async function startServer() {
       await updatePassword(user.id, newHash);
       res.json({ success: true });
     } catch (error) {
+      console.error('Erreur changement de mot de passe :', error);
       res.status(500).json({ error: 'Erreur lors du changement de mot de passe' });
     }
   });
@@ -466,9 +582,9 @@ async function startServer() {
         console.log(`[SIMULATION EMAIL DEV] Code de réinitialisation pour ${email} : ${code}`);
       }
       
-      // Correctif : _devCode n'est jamais exposé dans la réponse HTTP
       res.json({ success: true, message: 'Si l\'email existe, un code a été envoyé.' });
     } catch (error) {
+      console.error('Erreur forgot-password :', error);
       res.status(500).json({ error: 'Erreur système' });
     }
   });
@@ -518,6 +634,7 @@ async function startServer() {
 
       res.json({ success: true });
     } catch (error) {
+      console.error('Erreur reset-password :', error);
       res.status(500).json({ error: 'Erreur lors de la réinitialisation' });
     }
   });
@@ -541,8 +658,10 @@ async function startServer() {
 
       const id = `req-${crypto.randomUUID()}`;
       await createAccountRequest(id, name.trim(), email.trim(), company || '', message || '');
+      console.info(`Nouvelle demande de compte déposée par ${name.trim()} (${email.trim()})`);
       res.json({ success: true, message: 'Votre demande a été envoyée. Un manager la traitera prochainement.' });
     } catch (error) {
+      console.error('Erreur request-account :', error);
       res.status(500).json({ error: 'Erreur lors de l\'envoi de la demande.' });
     }
   });
@@ -581,6 +700,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Vous ne pouvez pas supprimer votre propre compte.' });
       }
       await deleteUser(userIdToDelete);
+      console.info(`Utilisateur ${userIdToDelete} supprimé par l'admin ${req.user!.email}`);
       res.json({ success: true });
     } catch (error) {
       console.error('Erreur lors de la suppression de l\'utilisateur:', error);

@@ -9,10 +9,14 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import { initFrontendLogger } from './utils/logger';
+
+// Démarrage de l'interception des logs et erreurs côté client
+initFrontendLogger();
 
 // Montage de l'application dans l'élément racine du document HTML
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <App/>
   </StrictMode>,
 );

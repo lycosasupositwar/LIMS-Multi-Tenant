@@ -502,10 +502,13 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comment?: string) => {
+    const reqToUpdate = rawRequests.find(r => r.id === id);
+    if (reqToUpdate) {
+      addNotification(reqToUpdate.requesterId, `Mise à jour de votre demande ${reqToUpdate.id}`, `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) est passée au statut : ${status}.${comment ? `\nCommentaire : ${comment}` : ''}`, 'email');
+    }
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
         const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}.${comment ? ` Raison : ${comment}` : ''}`);
-        addNotification(r.requesterId, `Mise à jour de votre demande ${r.id}`, `Votre demande "${r.title}" (${r.id}) est passée au statut : ${status}.${comment ? `\nCommentaire : ${comment}` : ''}`, 'email');
         return { ...r, status, auditTrail: [audit, ...(r.auditTrail || [])] };
       }
       return r;
@@ -513,10 +516,13 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const rejectRequest = (id: string, reason: string) => {
+    const reqToUpdate = rawRequests.find(r => r.id === id);
+    if (reqToUpdate) {
+      addNotification(reqToUpdate.requesterId, `Demande ${reqToUpdate.id} refusée`, `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a été refusée.\nMotif : ${reason}`, 'email');
+    }
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
         const audit = createAuditLog('Rejetée', `Demande refusée. Motif : ${reason}`);
-        addNotification(r.requesterId, `Demande ${r.id} refusée`, `Votre demande "${r.title}" (${r.id}) a été refusée.\nMotif : ${reason}`, 'email');
         return { ...r, status: 'rejetee', rejectionReason: reason, auditTrail: [audit, ...(r.auditTrail || [])] };
       }
       return r;
@@ -524,11 +530,14 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const resubmitRequest = (id: string, customData: Record<string, any>) => {
+    const reqToUpdate = rawRequests.find(r => r.id === id);
+    if (reqToUpdate) {
+      const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === reqToUpdate.labId || u.labId === 'all' || !u.labId));
+      labManagers.forEach(m => addNotification(m.id, `Demande ${reqToUpdate.id} resoumise`, `La demande ${reqToUpdate.id} ("${reqToUpdate.title}") a été corrigée et resoumise par le client.`, 'email'));
+    }
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
         const audit = createAuditLog('Resoumission', `Demande modifiée et resoumise par le demandeur.`);
-        const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === r.labId || u.labId === 'all' || !u.labId));
-        labManagers.forEach(m => addNotification(m.id, `Demande ${r.id} resoumise`, `La demande ${r.id} ("${r.title}") a été corrigée et resoumise par le client.`, 'email'));
         return { ...r, status: 'soumise', customData, rejectionReason: undefined, auditTrail: [audit, ...(r.auditTrail || [])] };
       }
       return r;
@@ -536,15 +545,22 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const assignRequest = (requestId: string, analystId: string) => {
+    const reqToUpdate = rawRequests.find(r => r.id === requestId);
+    if (reqToUpdate) {
+      const analyst = users.find(u => u.id === analystId);
+      if (analystId) {
+        addNotification(analystId, `Nouvelle assignation (${reqToUpdate.id})`, `La demande ${reqToUpdate.id} ("${reqToUpdate.title}") vous a été assignée pour réalisation des essais.`, 'email');
+        addNotification(reqToUpdate.requesterId, `Demande ${reqToUpdate.id} prise en charge`, `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a été assignée à notre équipe technique (${analyst?.name || 'Analyste'}).`, 'email');
+      } else {
+        addNotification(reqToUpdate.requesterId, `Demande ${reqToUpdate.id} mise à jour`, `L'assignation de votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a été annulée.`, 'email');
+      }
+    }
+
     setRequests(prev => prev.map(r => {
       if (r.id === requestId) {
         const analyst = users.find(u => u.id === analystId);
-        const audit = createAuditLog('Assignation', `Demande assignée à l'analyste : ${analyst?.name}`);
-
-        addNotification(analystId, `Nouvelle assignation (${r.id})`, `La demande ${r.id} ("${r.title}") vous a été assignée pour réalisation des essais.`, 'email');
-        addNotification(r.requesterId, `Demande ${r.id} prise en charge`, `Votre demande "${r.title}" (${r.id}) a été assignée à notre équipe technique (${analyst?.name || 'Analyste'}).`, 'email');
-
-        return { ...r, assignedTo: analystId, status: 'assignee', auditTrail: [audit, ...(r.auditTrail || [])] };
+        const audit = createAuditLog(analystId ? 'Assignation' : 'Désassignation', analystId ? `Demande assignée à l'analyste : ${analyst?.name}` : `Demande non assignée`);
+        return { ...r, assignedTo: analystId || undefined, status: analystId ? 'assignee' : (r.status === 'assignee' ? 'validee' : r.status), auditTrail: [audit, ...(r.auditTrail || [])] };
       }
       return r;
     }));
@@ -593,14 +609,17 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const updateAnalysisStatus = (id: string, status: Analysis['status']) => {
+    if (status === 'a_valider') {
+      const a = rawAnalyses.find(analysis => analysis.id === id);
+      if (a) {
+        const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === a.labId || u.labId === 'all' || !u.labId));
+        labManagers.forEach(m => addNotification(m.id, `Analyse ${a.id} à valider`, `L'analyse ${a.id} sur l'échantillon ${a.sampleId} est prête pour validation technique.`, 'email'));
+      }
+    }
+
     setAnalyses(prev => prev.map(a => {
       if (a.id === id) {
         const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}`);
-        // Si l'analyse passe à "a_valider", on notifie les managers du labo par mail
-        if (status === 'a_valider') {
-          const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === a.labId || u.labId === 'all' || !u.labId));
-          labManagers.forEach(m => addNotification(m.id, `Analyse ${a.id} à valider`, `L'analyse ${a.id} sur l'échantillon ${a.sampleId} est prête pour validation technique.`, 'email'));
-        }
         return { ...a, status, updatedAt: new Date().toISOString(), auditTrail: [audit, ...(a.auditTrail || [])] };
       }
       return a;
@@ -675,19 +694,22 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const updateConsumableStock = (id: string, newLevel: number) => {
+    const c = rawConsumables.find(cons => cons.id === id);
+    if (c) {
+      if (newLevel <= c.minThreshold && c.stockLevel > c.minThreshold) {
+        const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === c.labId || u.labId === 'all' || !u.labId));
+        labManagers.forEach(m => addNotification(
+          m.id,
+          `Alerte Stock Bas : ${c.name}`,
+          `Le niveau de stock pour "${c.name}" est passé sous le seuil minimal (${newLevel} ${c.unit} restants, seuil fixé à ${c.minThreshold} ${c.unit}).`,
+          'email'
+        ));
+      }
+    }
+
     setConsumables(prev => prev.map(c => {
       if (c.id === id) {
         const isReplenished = newLevel > c.stockLevel;
-        // Si le stock passe sous le seuil critique, alerte les managers du labo par mail
-        if (newLevel <= c.minThreshold && c.stockLevel > c.minThreshold) {
-          const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === c.labId || u.labId === 'all' || !u.labId));
-          labManagers.forEach(m => addNotification(
-            m.id,
-            `Alerte Stock Bas : ${c.name}`,
-            `Le niveau de stock pour "${c.name}" est passé sous le seuil minimal (${newLevel} ${c.unit} restants, seuil fixé à ${c.minThreshold} ${c.unit}).`,
-            'email'
-          ));
-        }
         return {
           ...c,
           stockLevel: newLevel,

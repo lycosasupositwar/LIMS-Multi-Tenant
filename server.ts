@@ -1,5 +1,5 @@
 /**
- * Serveur Backend Express & Passerelle API LIMS (Version Sécurisée)
+ * Serveur Backend Express & Passerelle API LIMS (Version Sécurisée + SMTP)
  * 
  * Ce fichier constitue le point d'entrée du serveur backend. Il expose :
  * - L'authentification par cookies de session sécurisés (JWT + HttpOnly + SameSite Lax)
@@ -7,6 +7,7 @@
  * - Les endpoints CRUD pour les collections métier avec contrôle d'accès par rôle (RBAC)
  * - La gestion cloisonnée des habilitations utilisateurs et des demandes d'accès
  * - Le service de conversion documentaire Word -> PDF authentifié et limité en concurrence
+ * - Le service de notifications par e-mail (SMTP via Nodemailer) administrable par les admins
  * - Le journal d'événements et d'erreurs système réservé aux administrateurs
  */
 
@@ -19,6 +20,7 @@ import { promisify } from 'util';
 const libreConvertAsync = promisify(libre.convert);
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import nodemailer from 'nodemailer';
 import { 
   initDb, 
   getUserByEmail, 
@@ -108,9 +110,117 @@ console.error = (...args: any[]) => {
   recordServerLog('error', args);
 };
 
+// ==========================================
+// Configuration & Service d'Envoi SMTP
+// ==========================================
+export interface SmtpConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  pass: string;
+  fromName: string;
+  fromEmail: string;
+}
+
+const DEFAULT_SMTP_CONFIG: SmtpConfig = {
+  enabled: false,
+  host: '',
+  port: 587,
+  secure: false,
+  user: '',
+  pass: '',
+  fromName: 'LIMS Laboratoire',
+  fromEmail: 'noreply@laboratoire.fr'
+};
+
+async function getSmtpConfig(): Promise<SmtpConfig> {
+  try {
+    const saved = await getCollection('smtpSettings');
+    if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+      return { ...DEFAULT_SMTP_CONFIG, ...saved };
+    }
+  } catch (e) {
+    console.error('Erreur lors de la lecture de la configuration SMTP :', e);
+  }
+  return DEFAULT_SMTP_CONFIG;
+}
+
+/**
+ * Construit un gabarit HTML propre et professionnel pour les e-mails envoyés par le LIMS
+ */
+function buildHtmlEmailTemplate(title: string, message: string, recipientName?: string): string {
+  return `
+    <div style="font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; padding: 32px 16px; color: #0f172a;">
+      <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+        <div style="background-color: #1e3a8a; padding: 20px 24px; color: #ffffff;">
+          <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #93c5fd; font-weight: 700;">Notification Système LIMS</div>
+          <h1 style="margin: 6px 0 0 0; font-size: 18px; font-weight: 700;">${title}</h1>
+        </div>
+        <div style="padding: 24px;">
+          ${recipientName ? `<p style="margin-top: 0; font-size: 14px; color: #334155;">Bonjour <strong>${recipientName}</strong>,</p>` : ''}
+          <div style="background-color: #f1f5f9; border-left: 4px solid #2563eb; padding: 16px; border-radius: 4px; font-size: 14px; line-height: 1.6; color: #1e293b; white-space: pre-line;">
+            ${message}
+          </div>
+          <p style="margin-top: 24px; margin-bottom: 0; font-size: 12px; color: #64748b;">
+            Connectez-vous à votre portail LIMS pour consulter les détails du dossier.
+          </p>
+        </div>
+        <div style="background-color: #f8fafc; padding: 14px 24px; border-top: 1px solid #e2e8f0; text-align: center; font-size: 11px; color: #94a3b8;">
+          Cet e-mail a été envoyé automatiquement par le système de gestion de laboratoire (LIMS). Merci de ne pas y répondre directement.
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Envoie un e-mail via le serveur SMTP configuré
+ */
+async function sendMailViaSmtp(toEmail: string, subject: string, textMessage: string, recipientName?: string): Promise<boolean> {
+  const config = await getSmtpConfig();
+  if (!config.enabled) {
+    console.info(`[EMAIL IGNORÉ - SMTP DÉSACTIVÉ] Destinataire: ${toEmail} | Sujet: ${subject}`);
+    return false;
+  }
+
+  if (!config.host || !config.port) {
+    console.warn(`[EMAIL ÉCHEC] Hôte ou port SMTP non configuré. Destinataire: ${toEmail}`);
+    return false;
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: config.host.trim(),
+    port: Number(config.port),
+    secure: Boolean(config.secure),
+    auth: config.user ? {
+      user: config.user.trim(),
+      pass: config.pass,
+    } : undefined,
+    tls: {
+      rejectUnauthorized: false // Permet le fonctionnement avec les relais SMTP internes d'entreprise
+    }
+  });
+
+  const fromHeader = config.fromName 
+    ? `"${config.fromName.replace(/"/g, '')}" <${config.fromEmail || config.user}>`
+    : (config.fromEmail || config.user);
+
+  await transporter.sendMail({
+    from: fromHeader,
+    to: toEmail,
+    subject: `[LIMS] ${subject}`,
+    text: textMessage,
+    html: buildHtmlEmailTemplate(subject, textMessage, recipientName),
+  });
+
+  console.info(`[EMAIL ENVOYÉ] Vers: ${toEmail} | Sujet: "${subject}"`);
+  return true;
+}
+
 /** 
  * Clé secrète pour la signature cryptographique des jetons JWT.
- * En production, l'absence de variable d'environnement bloque le démarrage.
  */
 if (IS_PROD && !process.env.JWT_SECRET) {
   console.error('ERREUR CRITIQUE : La variable d\'environnement JWT_SECRET est obligatoire en production.');
@@ -257,7 +367,7 @@ async function startServer() {
   await initLimsDb();
 
   // ==========================================
-  // 0. Endpoints Console de Logs (Admin uniquement)
+  // 0. Endpoints Console de Logs & Configuration SMTP (Admin uniquement)
   // ==========================================
 
   app.get('/api/admin/logs', authenticate, (req: AuthRequest, res) => {
@@ -274,6 +384,135 @@ async function startServer() {
     serverLogs.length = 0;
     console.info(`Journal des logs serveur purgé par l'administrateur (${req.user.email}).`);
     res.json({ success: true });
+  });
+
+  /**
+   * Récupère la configuration SMTP (Admin uniquement, mot de passe masqué)
+   */
+  app.get('/api/admin/smtp', authenticate, async (req: AuthRequest, res) => {
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Accès réservé aux administrateurs.' });
+    }
+    const config = await getSmtpConfig();
+    res.json({
+      ...config,
+      pass: config.pass ? '••••••••' : '',
+      hasPassword: Boolean(config.pass)
+    });
+  });
+
+  /**
+   * Sauvegarde la configuration SMTP (Admin uniquement)
+   */
+  app.post('/api/admin/smtp', authenticate, async (req: AuthRequest, res) => {
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Accès réservé aux administrateurs.' });
+    }
+    try {
+      const current = await getSmtpConfig();
+      const { enabled, host, port, secure, user, pass, fromName, fromEmail } = req.body;
+
+      const updated: SmtpConfig = {
+        enabled: Boolean(enabled),
+        host: typeof host === 'string' ? host.trim() : current.host,
+        port: Number(port) || 587,
+        secure: Boolean(secure),
+        user: typeof user === 'string' ? user.trim() : current.user,
+        // Conserve le mot de passe existant si l'admin n'a pas saisi un nouveau mot de passe
+        pass: (typeof pass === 'string' && pass !== '••••••••' && pass !== '') ? pass : (pass === '' ? '' : current.pass),
+        fromName: typeof fromName === 'string' ? fromName.trim() : current.fromName,
+        fromEmail: typeof fromEmail === 'string' ? fromEmail.trim() : current.fromEmail,
+      };
+
+      await setCollection('smtpSettings', updated);
+      console.info(`Configuration SMTP mise à jour par l'administrateur (${req.user.email}). Service actif: ${updated.enabled}`);
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('Erreur lors de la sauvegarde SMTP :', e);
+      res.status(500).json({ error: 'Impossible d\'enregistrer la configuration SMTP.' });
+    }
+  });
+
+  /**
+   * Envoie un e-mail de test pour valider les paramètres SMTP (Admin uniquement)
+   */
+  app.post('/api/admin/smtp/test', authenticate, async (req: AuthRequest, res) => {
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Accès réservé aux administrateurs.' });
+    }
+    try {
+      const targetEmail = (req.body.testEmail || req.user.email || '').trim();
+      if (!targetEmail) {
+        return res.status(400).json({ error: 'Veuillez renseigner une adresse e-mail destinataire pour le test.' });
+      }
+
+      const config = await getSmtpConfig();
+      if (!config.host || !config.port) {
+        return res.status(400).json({ error: 'Veuillez d\'abord enregistrer l\'hôte et le port du serveur SMTP.' });
+      }
+
+      const transporter = nodemailer.createTransport({
+        host: config.host.trim(),
+        port: Number(config.port),
+        secure: Boolean(config.secure),
+        auth: config.user ? {
+          user: config.user.trim(),
+          pass: config.pass,
+        } : undefined,
+        tls: {
+          rejectUnauthorized: false
+        }
+      });
+
+      await transporter.verify();
+
+      const fromHeader = config.fromName 
+        ? `"${config.fromName.replace(/"/g, '')}" <${config.fromEmail || config.user}>`
+        : (config.fromEmail || config.user);
+
+      await transporter.sendMail({
+        from: fromHeader,
+        to: targetEmail,
+        subject: '[LIMS] Test de connexion SMTP réussi',
+        text: 'Félicitations, votre serveur SMTP est correctement configuré sur votre application LIMS.',
+        html: buildHtmlEmailTemplate(
+          'Test de configuration SMTP réussi',
+          `Votre serveur d'envoi d'e-mails (${config.host}:${config.port}) est parfaitement opérationnel.\nToutes les notifications de l'application LIMS seront désormais acheminées par ce canal.`,
+          req.user.name
+        ),
+      });
+
+      console.info(`[TEST SMTP RÉUSSI] E-mail de test envoyé à ${targetEmail} par ${req.user.email}`);
+      res.json({ success: true, message: `E-mail de test envoyé avec succès à ${targetEmail}` });
+    } catch (e: any) {
+      console.error('Échec du test de connexion SMTP :', e);
+      res.status(500).json({ error: `Échec SMTP : ${e.message || 'Erreur de connexion au serveur mail'}` });
+    }
+  });
+
+  /**
+   * Endpoint appelé automatiquement par le Frontend lors de chaque création de notification
+   * pour envoyer la notification par e-mail à l'utilisateur concerné.
+   */
+  app.post('/api/notifications/send-email', authenticate, async (req: AuthRequest, res) => {
+    try {
+      const { userId, title, message } = req.body;
+      if (!userId || !title || !message) {
+        return res.status(400).json({ error: 'Paramètres de notification incomplets.' });
+      }
+
+      const recipient = await getUserById(userId);
+      if (!recipient || !recipient.email) {
+        console.warn(`[EMAIL NOTIFICATION] Utilisateur ${userId} introuvable ou sans adresse e-mail.`);
+        return res.status(404).json({ error: 'Destinataire introuvable.' });
+      }
+
+      const sent = await sendMailViaSmtp(recipient.email, title, message, recipient.name);
+      res.json({ success: true, sent });
+    } catch (e: any) {
+      console.error('Erreur lors de l\'envoi de l\'e-mail de notification :', e);
+      res.status(500).json({ error: e.message || 'Erreur lors de l\'envoi de l\'e-mail' });
+    }
   });
 
   // ==========================================
@@ -479,7 +718,7 @@ async function startServer() {
   });
 
   /**
-   * Création d'un nouvel utilisateur (avec prévention d'escalade de privilèges)
+   * Création d'un nouvel utilisateur (avec prévention d'escalade de privilèges et notification e-mail)
    */
   app.post('/api/users', authenticate, async (req: AuthRequest, res) => {
     try {
@@ -515,6 +754,15 @@ async function startServer() {
       await createUser(id, email, passwordHash, name, role, company, enforcedLabId);
       
       console.info(`Nouvel utilisateur créé : ${email} (${role}) par ${caller.email}`);
+
+      // Envoi automatique des identifiants par e-mail si SMTP est activé
+      sendMailViaSmtp(
+        email.trim(),
+        'Création de votre compte LIMS',
+        `Votre compte d'accès au portail LIMS a été créé.\n\nIdentifiant : ${email.trim()}\nMot de passe temporaire : ${password}\nRôle : ${role}\n\nNous vous invitons à modifier votre mot de passe dès votre première connexion dans l'onglet Paramètres.`,
+        name
+      ).catch((err) => console.warn('Impossible d\'envoyer l\'e-mail de bienvenue :', err.message));
+
       res.status(201).json({ success: true, user: { id, email, name, role, company, labId: enforcedLabId } });
     } catch (error) {
       console.error(error);
@@ -552,7 +800,7 @@ async function startServer() {
   });
 
   /**
-   * Demande de réinitialisation de mot de passe oublié (SANS fuite de _devCode)
+   * Demande de réinitialisation de mot de passe oublié (envoi via SMTP si actif)
    */
   app.post('/api/auth/forgot-password', async (req, res) => {
     try {
@@ -578,8 +826,16 @@ async function startServer() {
       await createResetToken(email.trim(), code, expiry);
       otpFailedAttempts.delete(email.trim());
 
+      // Envoi réel via SMTP si configuré
+      sendMailViaSmtp(
+        email.trim(),
+        'Code de réinitialisation de votre mot de passe',
+        `Vous avez demandé la réinitialisation de votre mot de passe LIMS.\n\nVotre code de vérification à 6 chiffres est : ${code}\n\nCe code est valable pendant 15 minutes.`,
+        user.name
+      ).catch((err) => console.error('Erreur envoi mail code reset :', err.message));
+
       if (!IS_PROD) {
-        console.log(`[SIMULATION EMAIL DEV] Code de réinitialisation pour ${email} : ${code}`);
+        console.log(`[CODE RESET MOT DE PASSE] Pour ${email} : ${code}`);
       }
       
       res.json({ success: true, message: 'Si l\'email existe, un code a été envoyé.' });

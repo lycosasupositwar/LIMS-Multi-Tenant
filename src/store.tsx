@@ -1,25 +1,5 @@
 /**
  * Gestionnaire d'État Global & Multi-Laboratoires (LIMS React Context)
- * 
- * Ce module orchestre le fonctionnement applicatif côté client pour une
- * architecture multi-instances (Multi-Tenancy) :
- * 
- * 1. Isolation Étanche Multi-Laboratoires :
- *    - Gestion dynamique des entités Laboratoire (Métallographie vs Mécanique & Chimie)
- *    - Ségrégation stricte des collections métier selon le laboratoire actif :
- *      * Catalogues de gabarits (CMS Builder : analyses, formulaires, matériaux, rapports)
- *      * Équipes et habilitations (managers et techniciens rattachés)
- *      * Dossiers en cours (échantillons, essais, rapports, consommables)
- * 
- * 2. Portail Demandeur Unifié :
- *    - Point d'accès unique pour les donneurs d'ordre et clients externes
- *    - Vision consolidée de l'ensemble de leurs demandes tous laboratoires confondus
- *    - Sélection intuitive du laboratoire technique destinataire lors du dépôt
- * 
- * 3. Synchronisation & Traçabilité :
- *    - Synchronisation bidirectionnelle avec la base de données persistante SQLite
- *    - Enregistrement automatique des pistes d'audit (Audit Trail) garantissant l'intégrité ISO 17025
- *    - Alertes e-mail et notifications en temps réel
  */
 
 import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react';
@@ -52,22 +32,16 @@ import {
   initialReportTemplates 
 } from './data';
 
-/**
- * Contrat d'interface complet exposé par le contexte applicatif LIMS
- */
 interface LimsContextType {
-  // Recherche globale
   globalSearchQuery: string;
   setGlobalSearchQuery: (query: string) => void;
 
-  // Session & Utilisateurs
   currentUser: User | null;
   users: User[];
   fetchUsers: () => Promise<void>;
   login: (user: User) => void;
   logout: () => void;
   
-  // Multi-Tenancy & Laboratoires
   laboratories: Laboratory[];
   activeLabId: string;
   activeLab: Laboratory;
@@ -76,18 +50,15 @@ interface LimsContextType {
   addLaboratory: (lab: Laboratory) => void;
   deleteLaboratory: (id: string) => void;
   
-  // Notifications système
   notifications: Notification[];
   markNotificationAsRead: (id: string) => void;
   addNotification: (userId: string, title: string, message: string, type?: 'system' | 'email') => void;
   
-  // Modèles configurables (CMS Builder - filtrés selon le lab actif)
   materialTemplates: MaterialTemplate[];
   analysisTemplates: AnalysisTemplate[];
   requestTemplates: RequestTemplate[];
   reportTemplates: ReportTemplate[];
   
-  // Collections brutes complètes (tous laboratoires confondus)
   allMaterialTemplates: MaterialTemplate[];
   allAnalysisTemplates: AnalysisTemplate[];
   allRequestTemplates: RequestTemplate[];
@@ -98,7 +69,6 @@ interface LimsContextType {
   allRequests: AnalysisRequest[];
   allConsumables: Consumable[];
 
-  // Entités opérationnelles (filtrées selon le contexte actif)
   samples: Sample[];
   analyses: Analysis[];
   reports: Report[];
@@ -106,27 +76,22 @@ interface LimsContextType {
   consumables: Consumable[];
   labSettings: LabSettings;
   
-  // Opérations CMS - Matériaux
   addMaterialTemplate: (template: MaterialTemplate) => void;
   updateMaterialTemplate: (id: string, updates: Partial<MaterialTemplate>) => void;
   deleteMaterialTemplate: (id: string) => void;
 
-  // Opérations CMS - Méthodes d'analyses
   addAnalysisTemplate: (template: AnalysisTemplate) => void;
   updateAnalysisTemplate: (id: string, updates: Partial<AnalysisTemplate>) => void;
   deleteAnalysisTemplate: (id: string) => void;
 
-  // Opérations CMS - Formulaires de demandes
   addRequestTemplate: (template: RequestTemplate) => void;
   updateRequestTemplate: (id: string, updates: Partial<RequestTemplate>) => void;
   deleteRequestTemplate: (id: string) => void;
 
-  // Opérations CMS - Modèles de rapports
   addReportTemplate: (template: ReportTemplate) => void;
   updateReportTemplate: (id: string, updates: Partial<ReportTemplate>) => void;
   deleteReportTemplate: (id: string) => void;
   
-  // Cycle de vie des demandes clients
   addRequest: (request: AnalysisRequest) => void;
   updateRequestStatus: (id: string, status: AnalysisRequest['status'], comment?: string) => void;
   updateRequestData: (id: string, updates: Partial<AnalysisRequest>, summary: string) => void;
@@ -134,45 +99,31 @@ interface LimsContextType {
   resubmitRequest: (id: string, customData: Record<string, any>) => void;
   assignRequest: (requestId: string, analystId: string) => void;
   
-  // Traitement et préparation des échantillons
   addSample: (sample: Sample) => void;
   updateSampleStatus: (id: string, status: Sample['status']) => void;
   updateSampleMounting: (id: string, mountingInfo: Sample['mountingInfo']) => void;
   addSampleImage: (id: string, imageUrl: string) => void;
 
-  // Exécution et validation des analyses
   addAnalysis: (analysis: Analysis) => void;
   updateAnalysisStatus: (id: string, status: Analysis['status']) => void;
   updateAnalysisResult: (id: string, resultId: string, value: any) => void;
   addAnalysisImage: (id: string, imageUrl: string) => void;
 
-  // Rapports et certificats
   addReport: (report: Report) => void;
   deleteReport: (id: string) => void;
   
-  // Gestion de stock des consommables
   updateConsumableStock: (id: string, newLevel: number) => void;
   addConsumable: (consumable: Consumable) => void;
   deleteConsumable: (id: string) => void;
   
-  // Paramétrage du laboratoire actif
   updateLabSettings: (settings: Partial<LabSettings>) => void;
 
-  // Maintenance & Patches
   purgeData: (options: Record<string, boolean>) => void;
   applyPatch: (patch: any) => void;
 }
 
-/** Création de l'instance du contexte React */
 const LimsContext = createContext<LimsContextType | undefined>(undefined);
 
-/**
- * Hook de synchronisation avec la couche de persistance SQLite du serveur.
- * 
- * @param collection Identifiant unique de la collection en base
- * @param initialData Valeurs de repli lors du premier amorçage
- * @param isAuthenticated Conditionne les requêtes à la présence d'une session valide
- */
 function useSyncedState<T>(collection: string, initialData: T, isAuthenticated: boolean) {
   const [data, setData] = useState<T>(initialData);
 
@@ -184,7 +135,6 @@ function useSyncedState<T>(collection: string, initialData: T, isAuthenticated: 
         if (res !== null && !res.error) {
           setData(res);
         } else if (res === null) {
-          // Injection initiale de la collection dans SQLite
           fetch(`/api/db/${collection}`, { 
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' }, 
@@ -212,21 +162,13 @@ function useSyncedState<T>(collection: string, initialData: T, isAuthenticated: 
   return [data, setSyncedData] as const;
 }
 
-/**
- * Fournisseur principal du Contexte LIMS
- */
 export const LimsProvider = ({ children }: { children: ReactNode }) => {
-  // Recherche transversale rapide
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
 
-  // Gestion de la session utilisateur
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [isInitializing, setIsInitializing] = useState(true);
 
-  /**
-   * Recharge la liste des utilisateurs du système depuis le serveur
-   */
   const fetchUsers = async () => {
     try {
       const res = await fetch('/api/users');
@@ -239,9 +181,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  /**
-   * Vérifie la session active lors du chargement initial via le cookie de session
-   */
   useEffect(() => {
     const checkSession = async () => {
       try {
@@ -270,9 +209,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
 
   const isAuthenticated = !!currentUser;
 
-  // ==========================================
-  // 1. Collections Métier Synchronisées
-  // ==========================================
   const [laboratories, setLaboratories] = useSyncedState<Laboratory[]>('laboratories', initialLaboratories, isAuthenticated);
   const [notifications, setNotifications] = useSyncedState<Notification[]>('notifications', [], isAuthenticated);
   
@@ -287,12 +223,8 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const [rawRequests, setRequests] = useSyncedState<AnalysisRequest[]>('requests', initialRequests, isAuthenticated);
   const [rawConsumables, setConsumables] = useSyncedState<Consumable[]>('consumables', initialConsumables, isAuthenticated);
 
-  // ==========================================
-  // 2. Sélection & Contexte du Laboratoire Actif
-  // ==========================================
   const [activeLabId, setActiveLabIdState] = useState<string>('lab-metallurgie');
 
-  // Ajustement automatique du laboratoire actif à la connexion selon le rattachement de l'utilisateur
   useEffect(() => {
     if (currentUser?.labId && currentUser.labId !== 'all') {
       setActiveLabIdState(currentUser.labId);
@@ -309,21 +241,12 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setActiveLabIdState(labId);
   };
 
-  /**
-   * Laboratoire actif résolu (ou repli sur le premier laboratoire enregistré)
-   */
   const activeLab = useMemo(() => {
     return laboratories.find(l => l.id === activeLabId) || laboratories[0] || initialLaboratories[0];
   }, [laboratories, activeLabId]);
 
-  /**
-   * Paramètres de configuration du laboratoire actuellement sélectionné
-   */
   const labSettings = activeLab.settings;
 
-  /**
-   * Met à jour les métadonnées ou paramètres d'un laboratoire
-   */
   const updateLaboratory = (id: string, updates: Partial<Laboratory>) => {
     setLaboratories(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
   };
@@ -339,10 +262,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-
-  /**
-   * Met à jour les paramètres administratifs et charte du laboratoire actif
-   */
   const updateLabSettings = (settings: Partial<LabSettings>) => {
     setLaboratories(prev => prev.map(l => {
       if (l.id === activeLabId) {
@@ -355,13 +274,8 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }));
   };
 
-  // ==========================================
-  // 3. Filtrage Dynamique selon le Rôle et le Contexte
-  // ==========================================
   const isRequester = currentUser?.role === 'demandeur';
 
-  // Pour les demandeurs : vision unifiée sur leurs demandes à travers tous les laboratoires
-  // Pour le personnel interne (analystes, managers) : isolation stricte par laboratoire actif
   const requests = useMemo(() => {
     if (isRequester) {
       return rawRequests.filter(r => r.requesterId === currentUser?.id);
@@ -371,7 +285,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
 
   const samples = useMemo(() => {
     if (isRequester) {
-      // Les échantillons rattachés aux demandes du demandeur
       const myRequestIds = new Set(requests.map(r => r.id));
       return rawSamples.filter(s => s.requestId && myRequestIds.has(s.requestId));
     }
@@ -398,8 +311,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     return rawConsumables.filter(c => c.labId === activeLabId);
   }, [rawConsumables, activeLabId]);
 
-  // Pour le Builder CMS : affichage et configuration des templates du laboratoire actif
-  // Pour le portail demandeur : possibilité d'accéder aux modèles selon le lab choisi
   const materialTemplates = useMemo(() => {
     if (isRequester) return rawMaterialTemplates;
     return rawMaterialTemplates.filter(t => t.labId === activeLabId);
@@ -420,9 +331,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     return rawReportTemplates.filter(t => t.labId === activeLabId);
   }, [rawReportTemplates, isRequester, activeLabId]);
 
-  // ==========================================
-  // 4. Authentification & Cycle de Session
-  // ==========================================
   const login = async (user: User) => {
     setCurrentUser(user);
     if (user.labId && user.labId !== 'all') {
@@ -440,10 +348,11 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setCurrentUser(null);
   };
 
-  // ==========================================
-  // 5. Journalisation & Notifications
-  // ==========================================
-  const addNotification = (userId: string, title: string, message: string, type: 'system' | 'email' = 'system') => {
+  /**
+   * Ajoute une notification dans l'application ET déclenche systématiquement
+   * l'envoi d'un e-mail au destinataire via le serveur SMTP configuré.
+   */
+  const addNotification = (userId: string, title: string, message: string, type: 'system' | 'email' = 'email') => {
     const newNotif: Notification = {
       id: `NOTIF-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       userId,
@@ -454,9 +363,22 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       type
     };
     setNotifications(prev => [newNotif, ...prev]);
-    if (type === 'email') {
-      console.log(`[SIMULATION EMAIL vers Utilisateur ${userId}] ${title} - ${message}`);
-    }
+
+    // Envoi systématique de la notification par e-mail via le backend
+    fetch('/api/notifications/send-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, title, message })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.sent) {
+          console.info(`[Notification Mail] E-mail envoyé avec succès à l'utilisateur ${userId} : ${title}`);
+        }
+      })
+      .catch(err => {
+        console.warn(`[Notification Mail] Échec de l'envoi d'e-mail pour ${userId} :`, err);
+      });
   };
 
   const markNotificationAsRead = (id: string) => {
@@ -471,9 +393,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     details
   });
 
-  // ==========================================
-  // 6. Opérations Métier (avec injection de labId)
-  // ==========================================
   const addMaterialTemplate = (template: MaterialTemplate) => {
     const item = { ...template, labId: template.labId || activeLabId };
     setMaterialTemplates(prev => [...prev, item]);
@@ -518,25 +437,21 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setReportTemplates(prev => prev.filter(t => t.id !== id));
   };
 
-  /**
-   * Création d'une demande avec rattachement au laboratoire destinataire
-   */
   const addRequest = (request: AnalysisRequest) => {
     const targetLabId = request.labId || activeLabId;
     const initialAudit = createAuditLog('Création', `Demande soumise au laboratoire [${targetLabId}]`);
     const newReq = { ...request, labId: targetLabId, auditTrail: [initialAudit] };
     setRequests(prev => [newReq, ...prev]);
     
-    // Notification des managers rattachés à ce laboratoire spécifique
-    const labManagers = users.filter(u => u.role === 'manager' && (u.labId === targetLabId || u.labId === 'all' || !u.labId));
-    labManagers.forEach(m => addNotification(m.id, 'Nouvelle demande', `Demande ${request.id} soumise par ${currentUser?.name || 'le client'}.`, 'email'));
+    const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === targetLabId || u.labId === 'all' || !u.labId));
+    labManagers.forEach(m => addNotification(m.id, 'Nouvelle demande d\'analyse', `La demande ${request.id} ("${request.title}") a été soumise par ${currentUser?.name || 'un client'}.`, 'email'));
   };
 
   const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comment?: string) => {
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
         const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}.${comment ? ` Raison : ${comment}` : ''}`);
-        addNotification(r.requesterId, 'Mise à jour de votre demande', `Votre demande ${r.id} est maintenant : ${status}`, 'email');
+        addNotification(r.requesterId, `Mise à jour de votre demande ${r.id}`, `Votre demande "${r.title}" (${r.id}) est passée au statut : ${status}.${comment ? `\nCommentaire : ${comment}` : ''}`, 'email');
         return { ...r, status, auditTrail: [audit, ...(r.auditTrail || [])] };
       }
       return r;
@@ -547,7 +462,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
         const audit = createAuditLog('Rejetée', `Demande refusée. Motif : ${reason}`);
-        addNotification(r.requesterId, 'Demande refusée', `Votre demande ${r.id} a été refusée. Motif : ${reason}`, 'email');
+        addNotification(r.requesterId, `Demande ${r.id} refusée`, `Votre demande "${r.title}" (${r.id}) a été refusée.\nMotif : ${reason}`, 'email');
         return { ...r, status: 'rejetee', rejectionReason: reason, auditTrail: [audit, ...(r.auditTrail || [])] };
       }
       return r;
@@ -558,8 +473,8 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
         const audit = createAuditLog('Resoumission', `Demande modifiée et resoumise par le demandeur.`);
-        const labManagers = users.filter(u => u.role === 'manager' && (u.labId === r.labId || u.labId === 'all' || !u.labId));
-        labManagers.forEach(m => addNotification(m.id, 'Demande resoumise', `La demande ${r.id} a été corrigée et resoumise.`, 'system'));
+        const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === r.labId || u.labId === 'all' || !u.labId));
+        labManagers.forEach(m => addNotification(m.id, `Demande ${r.id} resoumise`, `La demande ${r.id} ("${r.title}") a été corrigée et resoumise par le client.`, 'email'));
         return { ...r, status: 'soumise', customData, rejectionReason: undefined, auditTrail: [audit, ...(r.auditTrail || [])] };
       }
       return r;
@@ -572,15 +487,14 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
         const analyst = users.find(u => u.id === analystId);
         const audit = createAuditLog('Assignation', `Demande assignée à l'analyste : ${analyst?.name}`);
         
-        addNotification(analystId, 'Nouvelle assignation', `La demande ${r.id} vous a été assignée.`, 'email');
-        addNotification(r.requesterId, 'Demande prise en charge', `Votre demande ${r.id} a été assignée à un analyste.`, 'system');
+        addNotification(analystId, `Nouvelle assignation (${r.id})`, `La demande ${r.id} ("${r.title}") vous a été assignée pour réalisation des essais.`, 'email');
+        addNotification(r.requesterId, `Demande ${r.id} prise en charge`, `Votre demande "${r.title}" (${r.id}) a été assignée à notre équipe technique (${analyst?.name || 'Analyste'}).`, 'email');
 
         return { ...r, assignedTo: analystId, status: 'assignee', auditTrail: [audit, ...(r.auditTrail || [])] };
       }
       return r;
     }));
     
-    // Propagation du technicien assigné aux analyses associées
     const analystName = users.find(u => u.id === analystId)?.name || 'Non assigné';
     setAnalyses(prev => prev.map(a => {
       const isRelated = rawSamples.some(s => s.requestId === requestId && s.id === a.sampleId);
@@ -602,9 +516,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }));
   };
 
-  // ==========================================
-  // 7. Échantillons & Préparations
-  // ==========================================
   const addSample = (sample: Sample) => {
     const item = { ...sample, labId: sample.labId || activeLabId };
     setSamples(prev => [item, ...prev]);
@@ -622,9 +533,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setSamples(prev => prev.map(s => s.id === id ? { ...s, images: [...s.images, imageUrl] } : s));
   };
 
-  // ==========================================
-  // 8. Analyses & Mesures
-  // ==========================================
   const addAnalysis = (analysis: Analysis) => {
     const item = { ...analysis, labId: analysis.labId || activeLabId };
     setAnalyses(prev => [item, ...prev]);
@@ -634,6 +542,11 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setAnalyses(prev => prev.map(a => {
       if (a.id === id) {
         const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}`);
+        // Si l'analyse passe à "a_valider", on notifie les managers du labo par mail
+        if (status === 'a_valider') {
+          const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === a.labId || u.labId === 'all' || !u.labId));
+          labManagers.forEach(m => addNotification(m.id, `Analyse ${a.id} à valider`, `L'analyse ${a.id} sur l'échantillon ${a.sampleId} est prête pour validation technique.`, 'email'));
+        }
         return { ...a, status, updatedAt: new Date().toISOString(), auditTrail: [audit, ...(a.auditTrail || [])] };
       }
       return a;
@@ -643,8 +556,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const updateAnalysisResult = (id: string, resultId: string, value: any) => {
     setAnalyses(prev => prev.map(a => {
       if (a.id === id) {
-        const isManager = currentUser?.role === 'manager';
-        // Verrouillage ISO 17025 pour les statuts validés
+        const isManager = currentUser?.role === 'manager' || currentUser?.role === 'admin';
         const isLocked = (!isManager && (a.status === 'a_valider' || a.status === 'valide' || a.status === 'termine')) || (isManager && a.status === 'termine');
         if (isLocked) {
           console.warn('Modification refusée : l\'analyse est verrouillée pour ce profil.');
@@ -667,7 +579,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const addAnalysisImage = (id: string, imageUrl: string) => {
     setAnalyses(prev => prev.map(a => {
       if (a.id === id) {
-        const isManager = currentUser?.role === 'manager';
+        const isManager = currentUser?.role === 'manager' || currentUser?.role === 'admin';
         const isLocked = (!isManager && (a.status === 'a_valider' || a.status === 'valide' || a.status === 'termine')) || (isManager && a.status === 'termine');
         if (isLocked) return a;
         
@@ -677,12 +589,22 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }));
   };
 
-  // ==========================================
-  // 9. Rapports & Consommables
-  // ==========================================
   const addReport = (report: Report) => {
     const item = { ...report, labId: report.labId || activeLabId };
     setReports(prev => [item, ...prev]);
+
+    // Notifie automatiquement le client par e-mail lorsque son rapport est généré
+    if (item.requestId) {
+      const parentReq = rawRequests.find(r => r.id === item.requestId);
+      if (parentReq) {
+        addNotification(
+          parentReq.requesterId,
+          `Nouveau rapport disponible (${item.id})`,
+          `Le rapport d'analyse "${item.title}" (${item.id}) concernant votre demande ${parentReq.id} a été publié et est disponible sur votre espace client.`,
+          'email'
+        );
+      }
+    }
   };
 
   const deleteReport = (id: string) => {
@@ -702,6 +624,16 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setConsumables(prev => prev.map(c => {
       if (c.id === id) {
         const isReplenished = newLevel > c.stockLevel;
+        // Si le stock passe sous le seuil critique, alerte les managers du labo par mail
+        if (newLevel <= c.minThreshold && c.stockLevel > c.minThreshold) {
+          const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === c.labId || u.labId === 'all' || !u.labId));
+          labManagers.forEach(m => addNotification(
+            m.id,
+            `Alerte Stock Bas : ${c.name}`,
+            `Le niveau de stock pour "${c.name}" est passé sous le seuil minimal (${newLevel} ${c.unit} restants, seuil fixé à ${c.minThreshold} ${c.unit}).`,
+            'email'
+          ));
+        }
         return { 
           ...c, 
           stockLevel: newLevel,
@@ -712,9 +644,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }));
   };
 
-  // ==========================================
-  // 10. Patches & Maintenance
-  // ==========================================
   const applyPatch = (patch: any) => {
     if (patch.laboratories) setLaboratories(patch.laboratories);
     if (patch.materialTemplates) setMaterialTemplates(patch.materialTemplates);
@@ -775,9 +704,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   );
 };
 
-/**
- * Hook d'accès rapide au contexte LIMS
- */
 export const useLims = () => {
   const context = useContext(LimsContext);
   if (context === undefined) {

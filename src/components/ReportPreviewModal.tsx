@@ -17,7 +17,7 @@ import React, { useRef, useEffect, useState } from "react";
 import { X, Printer, Download, CheckCircle2 } from "lucide-react";
 import { Report, AnalysisRequest, Sample, Analysis, AnalysisTemplate, User } from "../types";
 import { useLims } from "../store";
-import html2canvas from "html2canvas";
+import domtoimage from "dom-to-image-more";
 import { jsPDF } from "jspdf";
 // @ts-ignore
 import Docxtemplater from "docxtemplater";
@@ -539,57 +539,20 @@ export function ReportPreviewModal({
 
       setIsDownloadingPdf(true);
       try {
-        const canvas = await html2canvas(element, {
-          scale: 2,
-          useCORS: true,
-          allowTaint: true,
-          logging: false,
-          scrollY: 0,
-          onclone: (clonedDoc: Document) => {
-            // 1. Masque les images cassées dans le clone pour éviter que html2canvas ne plante
-            const imgs = clonedDoc.querySelectorAll('img');
-            imgs.forEach((img) => {
-              if (!img.complete || img.naturalWidth === 0) {
-                img.style.display = 'none';
-              }
-            });
-
-            // 2. Convertit les couleurs oklch/oklab (Tailwind v4) en RGB standard pour html2canvas
-            const tempCanvas = clonedDoc.createElement('canvas');
-            tempCanvas.width = 1;
-            tempCanvas.height = 1;
-            const ctx = tempCanvas.getContext('2d');
-            const resolveColor = (val: string, fallback: string) => {
-              if (!ctx) return fallback;
-              try {
-                ctx.fillStyle = val;
-                return ctx.fillStyle;
-              } catch {
-                return fallback;
-              }
-            };
-
-            const allElements = clonedDoc.querySelectorAll('*');
-            const win = clonedDoc.defaultView;
-            if (win) {
-              allElements.forEach((el) => {
-                const htmlEl = el as HTMLElement;
-                const style = win.getComputedStyle(htmlEl);
-                if (style.backgroundColor && (style.backgroundColor.includes('oklch') || style.backgroundColor.includes('oklab'))) {
-                  htmlEl.style.backgroundColor = resolveColor(style.backgroundColor, '#ffffff');
-                }
-                if (style.color && (style.color.includes('oklch') || style.color.includes('oklab'))) {
-                  htmlEl.style.color = resolveColor(style.color, '#0f172a');
-                }
-                if (style.borderColor && (style.borderColor.includes('oklch') || style.borderColor.includes('oklab'))) {
-                  htmlEl.style.borderColor = resolveColor(style.borderColor, '#e2e8f0');
-                }
-              });
-            }
-          }
+        const scale = 2;
+        const imgData = await domtoimage.toJpeg(element, {
+          quality: 0.98,
+          bgcolor: '#ffffff',
+          width: element.clientWidth * scale,
+          height: element.clientHeight * scale,
+          style: {
+            transform: `scale(${scale})`,
+            transformOrigin: 'top left',
+            width: `${element.clientWidth}px`,
+            height: `${element.clientHeight}px`,
+          },
         });
 
-        const imgData = canvas.toDataURL('image/jpeg', 0.98);
         const pdf = new jsPDF({
           orientation: 'portrait',
           unit: 'mm',
@@ -597,7 +560,7 @@ export function ReportPreviewModal({
         });
 
         const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+        const pdfHeight = (element.clientHeight * pdfWidth) / element.clientWidth;
 
         const pageHeight = pdf.internal.pageSize.getHeight();
         let heightLeft = pdfHeight;

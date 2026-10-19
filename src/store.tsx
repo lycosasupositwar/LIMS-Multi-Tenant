@@ -3,33 +3,33 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react';
-import { 
+import {
   Laboratory,
-  Sample, 
-  Analysis, 
-  Report, 
-  MaterialTemplate, 
-  AnalysisTemplate, 
-  User, 
-  RequestTemplate, 
-  AnalysisRequest, 
-  Notification, 
-  AuditLog, 
-  Consumable, 
-  LabSettings, 
-  ReportTemplate 
+  Sample,
+  Analysis,
+  Report,
+  MaterialTemplate,
+  AnalysisTemplate,
+  User,
+  RequestTemplate,
+  AnalysisRequest,
+  Notification,
+  AuditLog,
+  Consumable,
+  LabSettings,
+  ReportTemplate
 } from './types';
-import { 
+import {
   initialLaboratories,
-  initialSamples, 
-  initialAnalyses, 
-  initialReports, 
-  initialMaterialTemplates, 
-  initialAnalysisTemplates, 
-  initialRequestTemplates, 
-  initialRequests, 
-  initialConsumables, 
-  initialReportTemplates 
+  initialSamples,
+  initialAnalyses,
+  initialReports,
+  initialMaterialTemplates,
+  initialAnalysisTemplates,
+  initialRequestTemplates,
+  initialRequests,
+  initialConsumables,
+  initialReportTemplates
 } from './data';
 
 interface LimsContextType {
@@ -41,7 +41,7 @@ interface LimsContextType {
   fetchUsers: () => Promise<void>;
   login: (user: User) => void;
   logout: () => void;
-  
+
   laboratories: Laboratory[];
   activeLabId: string;
   activeLab: Laboratory;
@@ -49,16 +49,16 @@ interface LimsContextType {
   updateLaboratory: (id: string, updates: Partial<Laboratory>) => void;
   addLaboratory: (lab: Laboratory) => void;
   deleteLaboratory: (id: string) => void;
-  
+
   notifications: Notification[];
   markNotificationAsRead: (id: string) => void;
   addNotification: (userId: string, title: string, message: string, type?: 'system' | 'email') => void;
-  
+
   materialTemplates: MaterialTemplate[];
   analysisTemplates: AnalysisTemplate[];
   requestTemplates: RequestTemplate[];
   reportTemplates: ReportTemplate[];
-  
+
   allMaterialTemplates: MaterialTemplate[];
   allAnalysisTemplates: AnalysisTemplate[];
   allRequestTemplates: RequestTemplate[];
@@ -75,7 +75,7 @@ interface LimsContextType {
   requests: AnalysisRequest[];
   consumables: Consumable[];
   labSettings: LabSettings;
-  
+
   addMaterialTemplate: (template: MaterialTemplate) => void;
   updateMaterialTemplate: (id: string, updates: Partial<MaterialTemplate>) => void;
   deleteMaterialTemplate: (id: string) => void;
@@ -91,14 +91,14 @@ interface LimsContextType {
   addReportTemplate: (template: ReportTemplate) => void;
   updateReportTemplate: (id: string, updates: Partial<ReportTemplate>) => void;
   deleteReportTemplate: (id: string) => void;
-  
+
   addRequest: (request: AnalysisRequest) => void;
   updateRequestStatus: (id: string, status: AnalysisRequest['status'], comment?: string) => void;
   updateRequestData: (id: string, updates: Partial<AnalysisRequest>, summary: string) => void;
   rejectRequest: (id: string, reason: string) => void;
   resubmitRequest: (id: string, customData: Record<string, any>) => void;
   assignRequest: (requestId: string, analystId: string) => void;
-  
+
   addSample: (sample: Sample) => void;
   updateSampleStatus: (id: string, status: Sample['status']) => void;
   updateSampleMounting: (id: string, mountingInfo: Sample['mountingInfo']) => void;
@@ -111,11 +111,11 @@ interface LimsContextType {
 
   addReport: (report: Report) => void;
   deleteReport: (id: string) => void;
-  
+
   updateConsumableStock: (id: string, newLevel: number) => void;
   addConsumable: (consumable: Consumable) => void;
   deleteConsumable: (id: string) => void;
-  
+
   updateLabSettings: (settings: Partial<LabSettings>) => void;
 
   purgeData: (options: Record<string, boolean>) => void;
@@ -135,10 +135,10 @@ function useSyncedState<T>(collection: string, initialData: T, isAuthenticated: 
         if (res !== null && !res.error) {
           setData(res);
         } else if (res === null) {
-          fetch(`/api/db/${collection}`, { 
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify(initialData) 
+          fetch(`/api/db/${collection}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(initialData)
           });
         }
       })
@@ -149,10 +149,10 @@ function useSyncedState<T>(collection: string, initialData: T, isAuthenticated: 
     setData(prev => {
       const next = typeof action === 'function' ? (action as any)(prev) : action;
       if (isAuthenticated) {
-        fetch(`/api/db/${collection}`, { 
-          method: 'POST', 
-          headers: { 'Content-Type': 'application/json' }, 
-          body: JSON.stringify(next) 
+        fetch(`/api/db/${collection}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(next)
         }).catch(console.error);
       }
       return next;
@@ -211,12 +211,12 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
 
   const [laboratories, setLaboratories] = useSyncedState<Laboratory[]>('laboratories', initialLaboratories, isAuthenticated);
   const [notifications, setNotifications] = useSyncedState<Notification[]>('notifications', [], isAuthenticated);
-  
+
   const [rawMaterialTemplates, setMaterialTemplates] = useSyncedState<MaterialTemplate[]>('materialTemplates', initialMaterialTemplates, isAuthenticated);
   const [rawAnalysisTemplates, setAnalysisTemplates] = useSyncedState<AnalysisTemplate[]>('analysisTemplates', initialAnalysisTemplates, isAuthenticated);
   const [rawRequestTemplates, setRequestTemplates] = useSyncedState<RequestTemplate[]>('requestTemplates', initialRequestTemplates, isAuthenticated);
   const [rawReportTemplates, setReportTemplates] = useSyncedState<ReportTemplate[]>('reportTemplates', initialReportTemplates, isAuthenticated);
-  
+
   const [rawSamples, setSamples] = useSyncedState<Sample[]>('samples', initialSamples, isAuthenticated);
   const [rawAnalyses, setAnalyses] = useSyncedState<Analysis[]>('analyses', initialAnalyses, isAuthenticated);
   const [rawReports, setReports] = useSyncedState<Report[]>('reports', initialReports, isAuthenticated);
@@ -338,7 +338,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }
     await fetchUsers();
   };
-  
+
   const logout = async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
@@ -352,7 +352,14 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
    * Ajoute une notification dans l'application ET déclenche systématiquement
    * l'envoi d'un e-mail au destinataire via le serveur SMTP configuré.
    */
-  const addNotification = (userId: string, title: string, message: string, type: 'system' | 'email' = 'email') => {
+
+  const addNotification = (
+    userId: string,
+    title: string,
+    message: string,
+    type: 'system' | 'email' = 'email'
+  ) => {
+    // La notification est toujours enregistrée dans le système.
     const newNotif: Notification = {
       id: `NOTIF-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       userId,
@@ -362,24 +369,44 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       createdAt: new Date().toISOString(),
       type
     };
+
     setNotifications(prev => [newNotif, ...prev]);
 
-    // Envoi systématique de la notification par e-mail via le backend
-    fetch('/api/notifications/send-email', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, title, message })
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (data.sent) {
-          console.info(`[Notification Mail] E-mail envoyé avec succès à l'utilisateur ${userId} : ${title}`);
+    // Le canal e-mail est indépendant de la notification interne.
+    // Les appels de type "system" ne déclenchent pas de mail.
+    if (type === 'email') {
+      void (async () => {
+        try {
+          const res = await fetch('/api/notifications/send-email', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ userId, title, message })
+          });
+
+          if (!res.ok) {
+            throw new Error(`Erreur HTTP ${res.status}`);
+          }
+
+          const data = await res.json();
+
+          if (!data.sent) {
+            console.warn(
+              `[Notification Mail] Envoi non confirmé pour ${userId}`,
+              data
+            );
+          }
+        } catch (error) {
+          console.error(
+            `[Notification Mail] Échec pour ${userId}`,
+            error
+          );
         }
-      })
-      .catch(err => {
-        console.warn(`[Notification Mail] Échec de l'envoi d'e-mail pour ${userId} :`, err);
-      });
+      })();
+    }
   };
+
 
   const markNotificationAsRead = (id: string) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
@@ -403,7 +430,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const deleteMaterialTemplate = (id: string) => {
     setMaterialTemplates(prev => prev.filter(t => t.id !== id));
   };
-  
+
   const addAnalysisTemplate = (template: AnalysisTemplate) => {
     const item = { ...template, labId: template.labId || activeLabId };
     setAnalysisTemplates(prev => [...prev, item]);
@@ -414,7 +441,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const deleteAnalysisTemplate = (id: string) => {
     setAnalysisTemplates(prev => prev.filter(t => t.id !== id));
   };
-  
+
   const addRequestTemplate = (template: RequestTemplate) => {
     const item = { ...template, labId: template.labId || activeLabId };
     setRequestTemplates(prev => [...prev, item]);
@@ -425,7 +452,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const deleteRequestTemplate = (id: string) => {
     setRequestTemplates(prev => prev.filter(t => t.id !== id));
   };
-  
+
   const addReportTemplate = (template: ReportTemplate) => {
     const item = { ...template, labId: template.labId || activeLabId };
     setReportTemplates(prev => [...prev, item]);
@@ -442,7 +469,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     const initialAudit = createAuditLog('Création', `Demande soumise au laboratoire [${targetLabId}]`);
     const newReq = { ...request, labId: targetLabId, auditTrail: [initialAudit] };
     setRequests(prev => [newReq, ...prev]);
-    
+
     const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === targetLabId || u.labId === 'all' || !u.labId));
     labManagers.forEach(m => addNotification(m.id, 'Nouvelle demande d\'analyse', `La demande ${request.id} ("${request.title}") a été soumise par ${currentUser?.name || 'un client'}.`, 'email'));
   };
@@ -486,7 +513,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       if (r.id === requestId) {
         const analyst = users.find(u => u.id === analystId);
         const audit = createAuditLog('Assignation', `Demande assignée à l'analyste : ${analyst?.name}`);
-        
+
         addNotification(analystId, `Nouvelle assignation (${r.id})`, `La demande ${r.id} ("${r.title}") vous a été assignée pour réalisation des essais.`, 'email');
         addNotification(r.requesterId, `Demande ${r.id} prise en charge`, `Votre demande "${r.title}" (${r.id}) a été assignée à notre équipe technique (${analyst?.name || 'Analyste'}).`, 'email');
 
@@ -494,7 +521,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       }
       return r;
     }));
-    
+
     const analystName = users.find(u => u.id === analystId)?.name || 'Non assigné';
     setAnalyses(prev => prev.map(a => {
       const isRelated = rawSamples.some(s => s.requestId === requestId && s.id === a.sampleId);
@@ -520,11 +547,11 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     const item = { ...sample, labId: sample.labId || activeLabId };
     setSamples(prev => [item, ...prev]);
   };
-  
+
   const updateSampleStatus = (id: string, status: Sample['status']) => {
     setSamples(prev => prev.map(s => s.id === id ? { ...s, status } : s));
   };
-  
+
   const updateSampleMounting = (id: string, mountingInfo: Sample['mountingInfo']) => {
     setSamples(prev => prev.map(s => s.id === id ? { ...s, mountingInfo } : s));
   };
@@ -537,7 +564,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     const item = { ...analysis, labId: analysis.labId || activeLabId };
     setAnalyses(prev => [item, ...prev]);
   };
-  
+
   const updateAnalysisStatus = (id: string, status: Analysis['status']) => {
     setAnalyses(prev => prev.map(a => {
       if (a.id === id) {
@@ -565,11 +592,11 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
 
         const previous = a.results[resultId] ?? 'N/A';
         const audit = createAuditLog('Modification de résultat', `${resultId}: ${previous} -> ${value}`);
-        return { 
-          ...a, 
-          results: { ...a.results, [resultId]: value }, 
-          updatedAt: new Date().toISOString(), 
-          auditTrail: [audit, ...(a.auditTrail || [])] 
+        return {
+          ...a,
+          results: { ...a.results, [resultId]: value },
+          updatedAt: new Date().toISOString(),
+          auditTrail: [audit, ...(a.auditTrail || [])]
         };
       }
       return a;
@@ -582,7 +609,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
         const isManager = currentUser?.role === 'manager' || currentUser?.role === 'admin';
         const isLocked = (!isManager && (a.status === 'a_valider' || a.status === 'valide' || a.status === 'termine')) || (isManager && a.status === 'termine');
         if (isLocked) return a;
-        
+
         return { ...a, images: [...a.images, imageUrl], updatedAt: new Date().toISOString() };
       }
       return a;
@@ -634,8 +661,8 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
             'email'
           ));
         }
-        return { 
-          ...c, 
+        return {
+          ...c,
           stockLevel: newLevel,
           lastRestocked: isReplenished ? new Date().toISOString() : c.lastRestocked
         };
@@ -686,17 +713,17 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       allRequests: rawRequests,
       allConsumables: rawConsumables,
       samples, analyses, reports, requests, consumables, labSettings,
-      addMaterialTemplate, updateMaterialTemplate, deleteMaterialTemplate, 
+      addMaterialTemplate, updateMaterialTemplate, deleteMaterialTemplate,
       addAnalysisTemplate, updateAnalysisTemplate, deleteAnalysisTemplate,
-      addRequestTemplate, updateRequestTemplate, deleteRequestTemplate, 
-      addReportTemplate, updateReportTemplate, deleteReportTemplate, 
+      addRequestTemplate, updateRequestTemplate, deleteRequestTemplate,
+      addReportTemplate, updateReportTemplate, deleteReportTemplate,
       addRequest, updateRequestStatus, updateRequestData, rejectRequest, resubmitRequest, assignRequest,
-      addSample, updateSampleStatus, 
-      updateSampleMounting, addSampleImage, 
-      addAnalysis, updateAnalysisStatus, 
-      updateAnalysisResult, addAnalysisImage, 
-      addReport, deleteReport, 
-      addConsumable, deleteConsumable, updateConsumableStock, 
+      addSample, updateSampleStatus,
+      updateSampleMounting, addSampleImage,
+      addAnalysis, updateAnalysisStatus,
+      updateAnalysisResult, addAnalysisImage,
+      addReport, deleteReport,
+      addConsumable, deleteConsumable, updateConsumableStock,
       updateLabSettings, purgeData, applyPatch
     }}>
       {children}

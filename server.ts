@@ -228,19 +228,6 @@ function buildHtmlEmailTemplate(
                     <table role="presentation" cellpadding="0"
                       cellspacing="0" border="0">
                       <tr>
-                        <td valign="middle" style="padding-right: 10px;">
-                          <div style="
-                            width: 38px;
-                            height: 38px;
-                            line-height: 38px;
-                            text-align: center;
-                            background-color: #1e88b5;
-                            border-radius: 10px;
-                            color: #ffffff;
-                            font-size: 17px;
-                            font-weight: 800;
-                          ">L</div>
-                        </td>
                         <td valign="middle">
                           <div style="
                             color: #ffffff;

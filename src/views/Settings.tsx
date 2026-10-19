@@ -4,9 +4,9 @@
  * Cette vue centralise la gouvernance et le paramétrage du laboratoire :
  * 1. Sécurité du profil utilisateur :
  *    - Modification sécurisée du mot de passe avec contrôle de l'ancien mot de passe
- * 2. Gestion des utilisateurs & habilitations (Manager uniquement) :
+ * 2. Gestion des utilisateurs & habilitations (Manager & Admin) :
  *    - Approbation ou rejet des demandes d'accès formulées depuis le portail client
- *    - Création d'utilisateurs avec attribution de rôle (Demandeur, Analyste, Manager) et génération de mot de passe provisoire
+ *    - Création d'utilisateurs avec attribution de rôle (Demandeur, Analyste, Manager, Admin)
  *    - Liste d'audit des comptes existants
  * 3. Configuration et identité du laboratoire :
  *    - Raison sociale, logo institutionnel, coordonnées géographiques et contacts publics
@@ -16,12 +16,43 @@
  * 4. Sauvegarde, Patchs & Déploiement à chaud :
  *    - Export de la configuration structurelle (templates de matériaux, essais, rapports)
  *    - Import / application à chaud d'un patch de configuration sans régression de la base de données
- * 5. Maintenance et purge contrôlée (Zone de danger avec double confirmation)
+ * 5. Console de Diagnostic & Logs (Admin uniquement) :
+ *    - Surveillance centralisée en temps réel des logs Frontend et Backend pour détecter les bugs
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useLims } from '../store';
-import { Building, Phone, Mail, Award, Save, Image as ImageIcon, Key, UserPlus, Users, Shield, Clock, Check, X, ArrowLeft, AlertTriangle, Download, Upload, Settings2, Trash2, Plus } from 'lucide-react';
+import { 
+  Building, 
+  Phone, 
+  Mail, 
+  Award, 
+  Save, 
+  Key, 
+  UserPlus, 
+  Users, 
+  Shield, 
+  Clock, 
+  Check, 
+  X, 
+  ArrowLeft, 
+  AlertTriangle, 
+  Download, 
+  Upload, 
+  Settings2, 
+  Trash2, 
+  Plus, 
+  Terminal, 
+  RefreshCw, 
+  Search, 
+  Bug 
+} from 'lucide-react';
+import { 
+  LogEntry, 
+  getFrontendLogs, 
+  clearFrontendLogs, 
+  subscribeFrontendLogs 
+} from '../utils/logger';
 
 export function Settings({ onBack }: { onBack?: () => void }) {
   const { 
@@ -41,8 +72,8 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     deleteLaboratory
   } = useLims();
 
-  // Navigation par onglets
-  const [activeTab, setActiveTab] = useState<'profile' | 'lab' | 'users' | 'system'>('profile');
+  // Navigation par onglets ('logs' est réservé aux admins)
+  const [activeTab, setActiveTab] = useState<'profile' | 'lab' | 'users' | 'system' | 'logs'>('profile');
   
   // Options de la zone de purge
   const [purgeOptions, setPurgeOptions] = useState({
@@ -72,6 +103,116 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'demandeur', company: '', labId: '' });
   const [userMsg, setUserMsg] = useState({ type: '', text: '' });
   const [accountRequests, setAccountRequests] = useState<any[]>([]);
+
+  // ==========================================
+  // États de la Console de Logs (Admin uniquement)
+  // ==========================================
+  const [frontendLogs, setFrontendLogs] = useState<LogEntry[]>(getFrontendLogs());
+  const [backendLogs, setBackendLogs] = useState<LogEntry[]>([]);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+  const [autoRefreshLogs, setAutoRefreshLogs] = useState(true);
+  const [logLevelFilter, setLogLevelFilter] = useState<'all' | 'info' | 'warn' | 'error'>('all');
+  const [logSourceFilter, setLogSourceFilter] = useState<'all' | 'frontend' | 'backend'>('all');
+  const [logSearchQuery, setLogSearchQuery] = useState('');
+
+  // Abonnement aux nouveaux logs Frontend
+  useEffect(() => {
+    return subscribeFrontendLogs(() => {
+      setFrontendLogs([...getFrontendLogs()]);
+    });
+  }, []);
+
+  /**
+   * Récupère les logs du serveur Express (réservé aux admins)
+   */
+  const fetchBackendLogs = async () => {
+    if (currentUser?.role !== 'admin') return;
+    setIsLoadingLogs(true);
+    try {
+      const res = await fetch('/api/admin/logs');
+      if (res.ok) {
+        const data = await res.json();
+        setBackendLogs(data.logs || []);
+      }
+    } catch (e) {
+      console.error('Impossible de récupérer les logs serveur:', e);
+    } finally {
+      setIsLoadingLogs(false);
+    }
+  };
+
+  // Rafraîchissement automatique lorsque l'onglet 'logs' est actif
+  useEffect(() => {
+    if (activeTab === 'logs' && currentUser?.role === 'admin') {
+      fetchBackendLogs();
+      if (autoRefreshLogs) {
+        const interval = setInterval(fetchBackendLogs, 4000);
+        return () => clearInterval(interval);
+      }
+    }
+  }, [activeTab, currentUser, autoRefreshLogs]);
+
+  /**
+   * Purge simultanément les logs Frontend et Backend
+   */
+  const handleClearAllLogs = async () => {
+    clearFrontendLogs();
+    if (currentUser?.role === 'admin') {
+      try {
+        await fetch('/api/admin/logs', { method: 'DELETE' });
+        await fetchBackendLogs();
+      } catch (e) {
+        console.error('Erreur lors de la purge des logs serveur:', e);
+      }
+    }
+  };
+
+  /**
+   * Télécharge tous les logs combinés au format JSON pour diagnostic
+   */
+  const exportLogsJson = () => {
+    const combined = [...frontendLogs, ...backendLogs].sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+    const blob = new Blob([JSON.stringify(combined, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `lims_diagnostics_logs_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Fusion et filtrage des logs Frontend + Backend
+  const filteredLogs = useMemo(() => {
+    const merged = [...frontendLogs, ...backendLogs].sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+
+    return merged.filter((log) => {
+      if (logLevelFilter !== 'all' && log.level !== logLevelFilter) return false;
+      if (logSourceFilter !== 'all' && log.source !== logSourceFilter) return false;
+      if (logSearchQuery.trim() !== '') {
+        const q = logSearchQuery.toLowerCase();
+        const matchMsg = log.message.toLowerCase().includes(q);
+        const matchDetails = log.details?.toLowerCase().includes(q) || false;
+        if (!matchMsg && !matchDetails) return false;
+      }
+      return true;
+    });
+  }, [frontendLogs, backendLogs, logLevelFilter, logSourceFilter, logSearchQuery]);
+
+  const errorCount = useMemo(
+    () => [...frontendLogs, ...backendLogs].filter((l) => l.level === 'error').length,
+    [frontendLogs, backendLogs]
+  );
+
+  const warnCount = useMemo(
+    () => [...frontendLogs, ...backendLogs].filter((l) => l.level === 'warn').length,
+    [frontendLogs, backendLogs]
+  );
 
   /**
    * Récupération des demandes de création de compte en attente
@@ -124,7 +265,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   };
 
   /**
-   * Rejet / suppression d'une demande de compte
+   * Rejet / suppression d'un utilisateur
    */
   const handleDeleteUser = async (id: string) => {
     if (!window.confirm("Êtes-vous sûr de vouloir supprimer cet utilisateur ? Cette action est irréversible.")) return;
@@ -268,7 +409,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   /**
    * Gestion standard des champs de formulaire
    */
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement HTMLTextAreaElement |>) => {
     const { name, value } = e.target;
     setFormData({ ...formData, [name]: value });
     setSaved(false);
@@ -301,10 +442,10 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   };
 
   return (
-    <div className="p-8 max-w-4xl mx-auto space-y-6">
+    <div className="p-8 max-w-5xl mx-auto space-y-6">
       {onBack && (
         <button onClick={onBack} className="flex items-center text-sm font-medium text-slate-500 hover:text-slate-800 transition-colors mb-2">
-          <ArrowLeft className="w-4 h-4 mr-1" /> Retour à l'espace client
+          <ArrowLeft className="w-4 h-4 mr-1"/> Retour à l'espace client
         </button>
       )}
       <div className="flex justify-between items-center mb-4">
@@ -317,19 +458,19 @@ export function Settings({ onBack }: { onBack?: () => void }) {
             onClick={handleSave}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center"
           >
-            <Save className="w-5 h-5 mr-2" />
+            <Save className="w-5 h-5 mr-2"/>
             {saved ? 'Enregistré !' : 'Enregistrer'}
           </button>
         )}
       </div>
 
       {/* Onglets de configuration */}
-      <div className="flex space-x-1 border-b border-slate-200 mb-6">
+      <div className="flex flex-wrap space-x-1 border-b border-slate-200 mb-6">
         <button
           onClick={() => setActiveTab('profile')}
           className={`py-2 px-4 text-sm font-medium border-b-2 outline-none transition-colors ${activeTab === 'profile' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
         >
-          <Shield className="w-4 h-4 inline mr-2" />
+          <Shield className="w-4 h-4 inline mr-2"/>
           Sécurité du profil
         </button>
         {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
@@ -338,24 +479,39 @@ export function Settings({ onBack }: { onBack?: () => void }) {
               onClick={() => setActiveTab('lab')}
               className={`py-2 px-4 text-sm font-medium border-b-2 outline-none transition-colors ${activeTab === 'lab' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
             >
-              <Building className="w-4 h-4 inline mr-2" />
+              <Building className="w-4 h-4 inline mr-2"/>
               Laboratoire
             </button>
             <button
               onClick={() => setActiveTab('users')}
               className={`py-2 px-4 text-sm font-medium border-b-2 outline-none transition-colors ${activeTab === 'users' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
             >
-              <Users className="w-4 h-4 inline mr-2" />
+              <Users className="w-4 h-4 inline mr-2"/>
               Utilisateurs
             </button>
             <button
               onClick={() => setActiveTab('system')}
               className={`py-2 px-4 text-sm font-medium border-b-2 outline-none transition-colors ${activeTab === 'system' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
             >
-              <Settings2 className="w-4 h-4 inline mr-2" />
+              <Settings2 className="w-4 h-4 inline mr-2"/>
               Sauvegarde Config.
             </button>
           </>
+        )}
+        {/* Onglet Console Logs strictement visible par les administrateurs */}
+        {currentUser?.role === 'admin' && (
+          <button
+            onClick={() => setActiveTab('logs')}
+            className={`py-2 px-4 text-sm font-medium border-b-2 outline-none transition-colors flex items-center ${activeTab === 'logs' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+          >
+            <Terminal className="w-4 h-4 inline mr-2"/>
+            Console Logs
+            {errorCount > 0 && (
+              <span className="ml-2 px-1.5 py-0.5 text-[10px] font-bold bg-red-100 text-red-700 rounded-full">
+                {errorCount}
+              </span>
+            )}
+          </button>
         )}
       </div>
 
@@ -364,7 +520,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="p-6 border-b border-slate-200">
             <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-              <Key className="w-5 h-5 mr-2 text-slate-400" />
+              <Key className="w-5 h-5 mr-2 text-slate-400"/>
               Changer mon mot de passe
             </h3>
           </div>
@@ -414,7 +570,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
             <div className="bg-amber-50 rounded-xl shadow-sm border border-amber-200 overflow-hidden">
               <div className="p-4 border-b border-amber-200 bg-amber-100 flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-amber-800 flex items-center">
-                  <Clock className="w-4 h-4 mr-2" />
+                  <Clock className="w-4 h-4 mr-2"/>
                   Demandes de création de compte en attente ({accountRequests.length})
                 </h3>
               </div>
@@ -428,10 +584,10 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                     </div>
                     <div className="flex gap-2 shrink-0">
                       <button onClick={() => handleApproveRequest(req)} className="flex items-center px-3 py-1.5 bg-emerald-600 text-white text-xs font-medium rounded hover:bg-emerald-700">
-                        <Check className="w-3 h-3 mr-1" /> Approuver
+                        <Check className="w-3 h-3 mr-1"/> Approuver
                       </button>
                       <button onClick={() => deleteRequest(req.id)} className="flex items-center px-3 py-1.5 bg-red-100 text-red-700 text-xs font-medium rounded hover:bg-red-200">
-                        <X className="w-3 h-3 mr-1" /> Refuser
+                        <X className="w-3 h-3 mr-1"/> Refuser
                       </button>
                     </div>
                   </div>
@@ -443,7 +599,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="p-6 border-b border-slate-200">
               <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-                <UserPlus className="w-5 h-5 mr-2 text-slate-400" />
+                <UserPlus className="w-5 h-5 mr-2 text-slate-400"/>
                 Créer un utilisateur
               </h3>
             </div>
@@ -499,7 +655,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                 )}
                 <div className="md:col-span-2 mt-2">
                   <button type="submit" className="w-full sm:w-auto flex items-center justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700">
-                    <UserPlus className="w-4 h-4 mr-2" /> Créer le compte
+                    <UserPlus className="w-4 h-4 mr-2"/> Créer le compte
                   </button>
                 </div>
               </form>
@@ -509,7 +665,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="p-6 border-b border-slate-200">
               <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-                <Users className="w-5 h-5 mr-2 text-slate-400" />
+                <Users className="w-5 h-5 mr-2 text-slate-400"/>
                 Utilisateurs existants ({users.length})
               </h3>
             </div>
@@ -530,7 +686,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                         className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded"
                         title="Supprimer l'utilisateur"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="w-4 h-4"/>
                       </button>
                     )}
                   </div>
@@ -547,7 +703,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="p-6 border-b border-slate-200">
               <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-                <Building className="w-5 h-5 mr-2 text-slate-400" />
+                <Building className="w-5 h-5 mr-2 text-slate-400"/>
                 Identité
               </h3>
             </div>
@@ -591,7 +747,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="p-6 border-b border-slate-200">
               <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-                <Mail className="w-5 h-5 mr-2 text-slate-400" />
+                <Mail className="w-5 h-5 mr-2 text-slate-400"/>
                 Contact
               </h3>
             </div>
@@ -599,7 +755,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1 flex items-center">
-                    <Mail className="w-4 h-4 mr-1 text-slate-400" /> Email public
+                    <Mail className="w-4 h-4 mr-1 text-slate-400"/> Email public
                   </label>
                   <input
                     type="email"
@@ -611,7 +767,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1 flex items-center">
-                    <Phone className="w-4 h-4 mr-1 text-slate-400" /> Téléphone
+                    <Phone className="w-4 h-4 mr-1 text-slate-400"/> Téléphone
                   </label>
                   <input
                     type="text"
@@ -628,7 +784,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="p-6 border-b border-slate-200">
               <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-                <Award className="w-5 h-5 mr-2 text-slate-400" />
+                <Award className="w-5 h-5 mr-2 text-slate-400"/>
                 Accréditations
               </h3>
             </div>
@@ -653,7 +809,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
           <div className="bg-white border border-slate-200 rounded-xl shadow-sm">
             <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 rounded-t-xl">
               <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-                <Building className="w-5 h-5 mr-2 text-slate-400" />
+                <Building className="w-5 h-5 mr-2 text-slate-400"/>
                 Configuration des Identifiants (Préfixes)
               </h3>
             </div>
@@ -703,7 +859,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mt-8">
             <div className="p-6 border-b border-slate-200">
               <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 mr-2 text-slate-400"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><path d="M21 9H3"/><path d="M21 15H3"/><path d="M12 3v18"/></svg>
+                <svg xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 mr-2 text-slate-400"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><path d="M21 9H3"/><path d="M21 15H3"/><path d="M12 3v18"/></svg>
                 Design des tableaux générés (Rapports)
               </h3>
             </div>
@@ -785,7 +941,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
           <div className="bg-red-50 rounded-xl shadow-sm border border-red-200 overflow-hidden mt-8">
             <div className="p-6 border-b border-red-200">
               <h3 className="text-lg font-semibold text-red-800 flex items-center">
-                <AlertTriangle className="w-5 h-5 mr-2" />
+                <AlertTriangle className="w-5 h-5 mr-2"/>
                 Zone de danger
               </h3>
             </div>
@@ -864,13 +1020,12 @@ export function Settings({ onBack }: { onBack?: () => void }) {
         </div>
       )}
 
-
       {/* SECTION ADMIN: GESTION DES LABORATOIRES */}
       {activeTab === 'lab' && currentUser?.role === 'admin' && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mt-6">
           <div className="p-6 border-b border-slate-200">
             <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-              <Building className="w-5 h-5 mr-2 text-slate-400" />
+              <Building className="w-5 h-5 mr-2 text-slate-400"/>
               Gestion des Laboratoires
             </h3>
           </div>
@@ -890,7 +1045,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                       }}
                       className="text-red-600 hover:bg-red-50 p-2 rounded"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-4 h-4"/>
                     </button>
                  </div>
                ))}
@@ -918,9 +1073,9 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                       isoCertifications: [],
                       logoUrl: '',
                       tableStyles: {
-                        headerBg: '#f8fafc',
-                        headerColor: '#0f172a',
-                        borderColor: '#e2e8f0'
+                        headerBgColor: 'F8FAFC',
+                        borderColor: 'E2E8F0',
+                        borderSize: 2
                       }
                     }
                   });
@@ -928,7 +1083,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
               }}
               className="mt-4 flex items-center justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
             >
-              <Plus className="w-4 h-4 mr-2" /> Créer un laboratoire
+              <Plus className="w-4 h-4 mr-2"/> Créer un laboratoire
             </button>
           </div>
         </div>
@@ -940,7 +1095,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="p-6 border-b border-slate-200">
               <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-                <Download className="w-5 h-5 mr-2 text-blue-500" />
+                <Download className="w-5 h-5 mr-2 text-blue-500"/>
                 Exporter la Configuration (Templates)
               </h3>
               <p className="text-sm text-slate-500 mt-1">
@@ -955,7 +1110,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                 onClick={exportPatch}
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-sm transition-colors flex items-center"
               >
-                <Download className="w-4 h-4 mr-2" />
+                <Download className="w-4 h-4 mr-2"/>
                 Télécharger lims_config.json
               </button>
             </div>
@@ -964,7 +1119,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="p-6 border-b border-slate-200">
               <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-                <Upload className="w-5 h-5 mr-2 text-emerald-500" />
+                <Upload className="w-5 h-5 mr-2 text-emerald-500"/>
                 Importer une Configuration
               </h3>
               <p className="text-sm text-slate-500 mt-1">
@@ -974,12 +1129,12 @@ export function Settings({ onBack }: { onBack?: () => void }) {
             <div className="p-6">
               {patchMsg.text && (
                 <div className={`mb-4 p-4 rounded-md text-sm border ${patchMsg.type === 'error' ? 'bg-red-50 text-red-600 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'} flex items-center`}>
-                  {patchMsg.type === 'success' ? <Check className="w-5 h-5 mr-2" /> : <AlertTriangle className="w-5 h-5 mr-2" />}
+                  {patchMsg.type === 'success' ? <Check className="w-5 h-5 mr-2"/> : <AlertTriangle className="w-5 h-5 mr-2"/>}
                   {patchMsg.text}
                 </div>
               )}
               <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-10 hover:bg-slate-50 transition-colors">
-                <Upload className="w-10 h-10 text-slate-300 mb-3" />
+                <Upload className="w-10 h-10 text-slate-300 mb-3"/>
                 <div className="text-slate-600 font-medium mb-1">Glissez-déposez un patch JSON ou cliquez pour parcourir</div>
                 <div className="text-slate-400 text-xs mb-4">Seuls les fichiers lims_config_*.json sont acceptés</div>
                 <label className="cursor-pointer bg-slate-800 hover:bg-slate-900 text-white px-6 py-2.5 rounded-lg font-medium shadow-sm transition-colors">
@@ -987,6 +1142,198 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                   <input type="file" accept=".json" className="hidden" onChange={importPatch} />
                 </label>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Onglet 5 : Console de Logs Applicatifs (Uniquement visible pour les Admins) */}
+      {activeTab === 'logs' && currentUser?.role === 'admin' && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+          {/* Bandeau de synthèse des anomalies */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Événements</div>
+                <div className="text-2xl font-bold text-slate-900 mt-1">{frontendLogs.length + backendLogs.length}</div>
+              </div>
+              <div className="p-3 bg-slate-100 rounded-lg text-slate-600">
+                <Terminal className="w-5 h-5"/>
+              </div>
+            </div>
+            <div className="bg-white border border-amber-200 rounded-xl p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wider text-amber-600">Avertissements (Warn)</div>
+                <div className="text-2xl font-bold text-amber-700 mt-1">{warnCount}</div>
+              </div>
+              <div className="p-3 bg-amber-50 rounded-lg text-amber-600">
+                <AlertTriangle className="w-5 h-5"/>
+              </div>
+            </div>
+            <div className="bg-white border border-red-200 rounded-xl p-4 shadow-sm flex items-center justify-between">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wider text-red-600">Erreurs & Bugs (Error)</div>
+                <div className="text-2xl font-bold text-red-700 mt-1">{errorCount}</div>
+              </div>
+              <div className="p-3 bg-red-50 rounded-lg text-red-600">
+                <Bug className="w-5 h-5"/>
+              </div>
+            </div>
+          </div>
+
+          {/* Console principale */}
+          <div className="bg-slate-950 rounded-xl shadow-xl border border-slate-800 overflow-hidden text-slate-100">
+            {/* Barre d'outils de la console */}
+            <div className="p-4 bg-slate-900 border-b border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="flex items-center space-x-3">
+                <div className="flex space-x-1.5">
+                  <span className="w-3 h-3 rounded-full bg-red-500 inline-block"></span>
+                  <span className="w-3 h-3 rounded-full bg-amber-500 inline-block"></span>
+                  <span className="w-3 h-3 rounded-full bg-emerald-500 inline-block"></span>
+                </div>
+                <h3 className="text-sm font-mono font-bold text-slate-200 flex items-center">
+                  <Terminal className="w-4 h-4 mr-2 text-blue-400"/>
+                  Console Système (Frontend + Backend)
+                </h3>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Recherche */}
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2"/>
+                  <input
+                    type="text"
+                    value={logSearchQuery}
+                    onChange={(e) => setLogSearchQuery(e.target.value)}
+                    placeholder="Filtrer un message, stack..."
+                    className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg pl-8 pr-3 py-1.5 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                {/* Filtre Source */}
+                <select
+                  value={logSourceFilter}
+                  onChange={(e) => setLogSourceFilter(e.target.value as any)}
+                  className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-500"
+                >
+                  <option value="all">Source : Toutes</option>
+                  <option value="frontend">Frontend (Navigateur)</option>
+                  <option value="backend">Backend (Serveur API)</option>
+                </select>
+
+                {/* Filtre Niveau */}
+                <select
+                  value={logLevelFilter}
+                  onChange={(e) => setLogLevelFilter(e.target.value as any)}
+                  className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-500"
+                >
+                  <option value="all">Niveau : Tous</option>
+                  <option value="info">Info</option>
+                  <option value="warn">Warn</option>
+                  <option value="error">Error (Bugs)</option>
+                </select>
+
+                {/* Auto-refresh */}
+                <label className="flex items-center space-x-1.5 text-xs text-slate-300 bg-slate-800 border border-slate-700 px-2.5 py-1.5 rounded-lg cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoRefreshLogs}
+                    onChange={(e) => setAutoRefreshLogs(e.target.checked)}
+                    className="rounded border-slate-600 text-blue-500 focus:ring-0"
+                  />
+                  <span>Live (4s)</span>
+                </label>
+
+                {/* Rafraîchir manuellement */}
+                <button
+                  onClick={fetchBackendLogs}
+                  disabled={isLoadingLogs}
+                  className="p-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-slate-200 transition-colors"
+                  title="Actualiser les logs serveur"
+                >
+                  <RefreshCw ${isLoadingLogs ''}`} 'animate-spin : ? className="{`w-4" h-4 text-blue-400'/>
+                </button>
+
+                {/* Exporter JSON */}
+                <button
+                  onClick={exportLogsJson}
+                  className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg transition-colors flex items-center"
+                  title="Exporter les logs en JSON"
+                >
+                  <Download className="w-3.5 h-3.5 mr-1"/>
+                  Exporter
+                </button>
+
+                {/* Vider */}
+                <button
+                  onClick={handleClearAllLogs}
+                  className="px-2.5 py-1.5 bg-red-900/60 hover:bg-red-800 text-red-200 border border-red-800 text-xs font-medium rounded-lg transition-colors flex items-center"
+                  title="Vider tous les logs"
+                >
+                  <Trash2 className="w-3.5 h-3.5 mr-1"/>
+                  Vider
+                </button>
+              </div>
+            </div>
+
+            {/* Flux des logs */}
+            <div className="p-4 font-mono text-xs max-h-[560px] overflow-y-auto space-y-2 divide-y divide-slate-900">
+              {filteredLogs.length === 0 ? (
+                <div className="py-16 text-center text-slate-500">
+                  Aucun événement à afficher pour les filtres sélectionnés.
+                </div>
+              ) : (
+                filteredLogs.map((log) => {
+                  const levelBadge =
+                    log.level === 'error'
+                      ? 'bg-red-500/20 text-red-400 border-red-500/30'
+                      : log.level === 'warn'
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                      : 'bg-blue-500/20 text-blue-300 border-blue-500/30';
+
+                  const sourceBadge =
+                    log.source === 'backend'
+                      ? 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+                      : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
+
+                  return (
+                    <div
+                      key={log.id}
+                      className={`pt-2 first:pt-0 rounded px-2 py-1.5 ${
+                        log.level === 'error'
+                          ? 'bg-red-950/30'
+                          : log.level === 'warn'
+                          ? 'bg-amber-950/20'
+                          : 'hover:bg-slate-900/60'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-start gap-2">
+                        <span className="text-slate-500 shrink-0">
+                          {new Date(log.timestamp).toLocaleTimeString('fr-FR', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                          })}
+                        </span>
+                        <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold uppercase border shrink-0 ${sourceBadge}`}>
+                          {log.source === 'backend' ? 'API' : 'UI'}
+                        </span>
+                        <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold uppercase border shrink-0 ${levelBadge}`}>
+                          {log.level}
+                        </span>
+                        <span className="text-slate-200 break-all whitespace-pre-wrap flex-1">
+                          {log.message}
+                        </span>
+                      </div>
+                      {log.details && (
+                        <pre className="mt-1.5 ml-14 p-2 bg-slate-900/90 border border-slate-800 rounded text-[11px] text-slate-400 overflow-x-auto whitespace-pre-wrap">
+                          {log.details}
+                        </pre>
+                      )}
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>

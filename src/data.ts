@@ -463,7 +463,7 @@ export const initialRequests: AnalysisRequest[] = [
     requesterId: 'usr-1',
     templateId: 'REQ-TPL-MECA',
     title: 'Essais de Traction & Granulométrie Poudre AlSi10Mg',
-    status: 'en_cours',
+    status: 'En Cours',
     createdAt: '2026-03-12T14:15:00Z',
     assignedTo: 'usr-4',
     customData: {
@@ -553,7 +553,7 @@ export const initialAnalyses: Analysis[] = [
     labId: 'lab-metallurgie',
     sampleId: 'ECH-MET-001', 
     templateId: 'ANA-METALLO', 
-    status: 'en_cours', 
+    status: 'En Cours', 
     technician: 'Sophie Martin', 
     updatedAt: '2026-03-15T11:00:00Z',
     results: { 'porosite': 0.35, 'phases': 'Matrice gamma, précipités gamma prime et carbures TiC intragranulaires.' },

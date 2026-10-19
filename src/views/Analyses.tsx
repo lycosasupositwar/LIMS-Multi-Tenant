@@ -86,7 +86,7 @@ export function Analyses() {
     switch (status) {
       case 'planifie': 
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-800">Planifié</span>;
-      case 'en_cours': 
+      case 'En Cours': 
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">En cours</span>;
       case 'a_valider': 
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">À valider</span>;
@@ -367,13 +367,13 @@ export function Analyses() {
               <div className="flex flex-col items-end gap-2 sm:w-40 sm:border-l sm:border-slate-200 sm:pl-6 justify-center">
                 {analysis.status === 'planifie' && (
                   <button 
-                    onClick={() => updateAnalysisStatus(analysis.id, 'en_cours')}
+                    onClick={() => updateAnalysisStatus(analysis.id, 'En Cours')}
                     className="w-full text-xs px-3 py-2 bg-blue-50 text-blue-700 rounded-md font-medium hover:bg-blue-100 transition-colors text-center"
                   >
                     Démarrer l'essai
                   </button>
                 )}
-                {analysis.status === 'en_cours' && (
+                {analysis.status === 'En Cours' && (
                   <button 
                     onClick={() => updateAnalysisStatus(analysis.id, 'a_valider')}
                     className="w-full text-xs px-3 py-2 bg-amber-50 text-amber-700 rounded-md font-medium hover:bg-amber-100 transition-colors text-center"

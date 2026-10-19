@@ -40,15 +40,15 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-800">Brouillon</span>;
       case 'soumise': 
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-800">Soumise</span>;
-      case 'en_revue': 
+      case 'En Revue': 
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-purple-100 text-purple-800">En revue</span>;
       case 'validee': 
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">Validée</span>;
       case 'assignee': 
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800">Prise en charge</span>;
-      case 'en_cours': 
+      case 'En Cours': 
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">Analyse en cours</span>;
-      case 'en_validation': 
+      case 'En Validation': 
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-orange-100 text-orange-800">Contrôle Qualité</span>;
       case 'terminee': 
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">Rapport disponible</span>;

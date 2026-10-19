@@ -639,7 +639,7 @@ export function Reports() {
     (r.format?.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
-  const completedRequests = requests.filter((r: any) => r.status === 'terminee' || r.status === 'en_validation' || r.status === 'validee' || r.status === 'en_cours');
+  const completedRequests = requests.filter((r: any) => r.status === 'terminee' || r.status === 'En Validation' || r.status === 'validee' || r.status === 'En Cours');
 
   return (
     <div className="space-y-6">

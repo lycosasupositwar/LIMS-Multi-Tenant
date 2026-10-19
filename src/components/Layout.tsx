@@ -284,7 +284,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
             {/* Volet déroulant des alertes */}
             <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-xl border border-slate-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 overflow-hidden flex flex-col max-h-96">
               <div className="p-3 border-b border-slate-100 bg-slate-50 font-semibold text-slate-700 text-sm">
-                Notifications (Simulateur Email)
+                Notifications
               </div>
               <div className="flex-1 overflow-y-auto">
                 {notifications.filter(n => n.userId === currentUser?.id).length === 0 ? (

@@ -44,6 +44,10 @@ interface ReportPreviewModalProps {
   analysisTemplates: AnalysisTemplate[];
   /** Liste des utilisateurs (pour la résolution des noms demandeur/technicien) */
   users: User[];
+  /** Déclenche automatiquement le téléchargement PDF à l'ouverture (optionnel) */
+  autoDownload?: boolean;
+  /** Callback appelé une fois le téléchargement automatique lancé */
+  onAutoDownloadComplete?: () => void;
 }
 
 export function ReportPreviewModal({ 
@@ -54,7 +58,9 @@ export function ReportPreviewModal({
   samples, 
   analyses, 
   analysisTemplates, 
-  users 
+  users,
+  autoDownload = false,
+  onAutoDownloadComplete
 }: ReportPreviewModalProps) {
   const { labSettings, reportTemplates } = useLims();
   const [docxError, setDocxError] = useState<string | null>(null);
@@ -421,6 +427,20 @@ export function ReportPreviewModal({
   }, [report, isDocx]);
 
   /**
+   * Déclenchement automatique du téléchargement PDF si demandé depuis le tableau des rapports
+   */
+  useEffect(() => {
+    if (isOpen && report && autoDownload && !isDocx) {
+      const timer = setTimeout(() => {
+        generatePDF().finally(() => {
+          if (onAutoDownloadComplete) onAutoDownloadComplete();
+        });
+      }, 350);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen, report, autoDownload, isDocx]);
+
+  /**
    * Génération et téléchargement direct du fichier Word DOCX
    */
   const generateDOCX = () => {
@@ -487,7 +507,9 @@ export function ReportPreviewModal({
    * Téléchargement du fichier PDF généré
    */
   const generatePDF = async () => {
-    if (isDocx && report?.templateId) {
+    if (!report) return;
+
+    if (isDocx && report.templateId) {
       if (previewPdfBase64) {
         const byteCharacters = atob(previewPdfBase64);
         const byteNumbers = new Array(byteCharacters.length);
@@ -513,15 +535,77 @@ export function ReportPreviewModal({
         alert("Aperçu non disponible pour la conversion PDF.");
         return;
       }
+
       setIsDownloadingPdf(true);
-      const opt = {
-        margin:       10,
-        filename:     `rapport-${report.id}.pdf`,
-        image:        { type: 'jpeg' as const, quality: 0.98 },
-        html2canvas:  { scale: 2, useCORS: true, logging: false },
-        jsPDF:        { unit: 'mm' as const, format: 'a4' as const, orientation: 'portrait' as const }
-      };
-      html2pdf().set(opt).from(element).save().then(() => setIsDownloadingPdf(false));
+      try {
+        // Compatibilité d'import ESM / CommonJS avec Vite
+        const html2pdfLib = (html2pdf as any).default || html2pdf;
+
+        const opt = {
+          margin:       [10, 10, 10, 10] as [number, number, number, number],
+          filename:     `Rapport_${report.id}.pdf`,
+          image:        { type: 'jpeg' as const, quality: 0.98 },
+          pagebreak:    { mode: ['css', 'legacy'] },
+          html2canvas:  { 
+            scale: 2, 
+            useCORS: true, 
+            allowTaint: true,
+            logging: false,
+            scrollY: 0,
+            onclone: (clonedDoc: Document) => {
+              // 1. Masque les images cassées dans le clone pour éviter que html2canvas ne plante
+              const imgs = clonedDoc.querySelectorAll('img');
+              imgs.forEach((img) => {
+                if (!img.complete || img.naturalWidth === 0) {
+                  img.style.display = 'none';
+                }
+              });
+
+              // 2. Convertit les couleurs oklch/oklab (Tailwind v4) en RGB standard pour html2canvas
+              const canvas = clonedDoc.createElement('canvas');
+              canvas.width = 1;
+              canvas.height = 1;
+              const ctx = canvas.getContext('2d');
+              const resolveColor = (val: string, fallback: string) => {
+                if (!ctx) return fallback;
+                try {
+                  ctx.fillStyle = val;
+                  return ctx.fillStyle;
+                } catch {
+                  return fallback;
+                }
+              };
+
+              const allElements = clonedDoc.querySelectorAll('*');
+              const win = clonedDoc.defaultView;
+              if (win) {
+                allElements.forEach((el) => {
+                  const htmlEl = el as HTMLElement;
+                  const style = win.getComputedStyle(htmlEl);
+                  if (style.backgroundColor && (style.backgroundColor.includes('oklch') || style.backgroundColor.includes('oklab'))) {
+                    htmlEl.style.backgroundColor = resolveColor(style.backgroundColor, '#ffffff');
+                  }
+                  if (style.color && (style.color.includes('oklch') || style.color.includes('oklab'))) {
+                    htmlEl.style.color = resolveColor(style.color, '#0f172a');
+                  }
+                  if (style.borderColor && (style.borderColor.includes('oklch') || style.borderColor.includes('oklab'))) {
+                    htmlEl.style.borderColor = resolveColor(style.borderColor, '#e2e8f0');
+                  }
+                });
+              }
+            }
+          },
+          jsPDF: { unit: 'mm' as const, format: 'a4' as const, orientation: 'portrait' as const }
+        };
+
+        await html2pdfLib().set(opt).from(element).save();
+      } catch (err) {
+        console.error("Erreur lors de la génération du PDF générique :", err);
+        alert("La conversion directe a rencontré un problème. L'outil d'impression PDF va s'ouvrir.");
+        window.print();
+      } finally {
+        setIsDownloadingPdf(false);
+      }
     }
   };
 
@@ -575,9 +659,9 @@ export function ReportPreviewModal({
         </div>
 
         {/* Zone de prévisualisation (DOCX converti ou gabarit HTML A4) */}
-        <div className="flex-1 overflow-y-auto bg-slate-200 p-4 sm:p-8 flex justify-center custom-scrollbar">
+        <div className="flex-1 overflow-y-auto bg-slate-200 p-4 sm:p-8 custom-scrollbar">
           {isDocx ? (
-            <div className="w-full flex justify-center flex-col items-center max-w-[1000px]">
+            <div className="w-full flex justify-center flex-col items-center max-w-[1000px] mx-auto">
               {docxError && (
                 <div className="text-red-500 mb-4 bg-red-100 p-4 rounded-lg font-bold">
                   {docxError}
@@ -598,12 +682,22 @@ export function ReportPreviewModal({
               )}
             </div>
           ) : (
-            <div ref={pdfRef} className="bg-white w-full max-w-[210mm] min-h-[297mm] shadow-lg p-10 sm:p-14 text-slate-900" style={{ fontFamily: '"Inter", sans-serif' }}>
+            <div 
+              ref={pdfRef} 
+              className="bg-white w-full max-w-[210mm] min-h-[297mm] h-fit mx-auto shadow-lg p-10 sm:p-14 text-slate-900" 
+              style={{ fontFamily: '"Inter", sans-serif' }}
+            >
               {/* En-tête officiel du laboratoire */}
               <header className="flex justify-between items-start border-b-2 border-blue-900 pb-6 mb-8">
                 <div>
                   {labSettings.logoUrl ? (
-                    <img src={labSettings.logoUrl} alt="Logo Laboratoire" className="h-12 object-contain mb-2" />
+                    <img 
+                      src={labSettings.logoUrl} 
+                      alt="Logo Laboratoire" 
+                      crossOrigin="anonymous"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                      className="h-12 object-contain mb-2" 
+                    />
                   ) : null}
                   <h1 className="text-3xl font-black text-blue-900 uppercase tracking-wider">{labSettings.labName}</h1>
                   <div className="mt-4 text-xs text-slate-600 whitespace-pre-line">
@@ -636,7 +730,7 @@ export function ReportPreviewModal({
               </section>
 
               {/* 2. Matrice des Échantillons */}
-              <section className="mb-8">
+              <section className="mb-8 break-inside-avoid">
                 <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-4 text-slate-800">2. Matrice des Échantillons</h2>
                 <table className="w-full text-sm border-collapse border border-slate-200">
                   <thead>
@@ -683,7 +777,7 @@ export function ReportPreviewModal({
                         if (!tpl) return null;
                         
                         return (
-                          <div key={analysis.id} className="ml-4 mb-4">
+                          <div key={analysis.id} className="ml-4 mb-4 break-inside-avoid">
                             <h4 className="text-sm font-bold text-slate-800 mb-2">{tpl.name}</h4>
                             <table className="w-full text-sm border-collapse border border-slate-100 mb-3">
                               <tbody>
@@ -717,8 +811,15 @@ export function ReportPreviewModal({
                             {analysis.images.length > 0 && (
                               <div className="grid grid-cols-2 gap-4 mt-3">
                                 {analysis.images.map((img, idx) => (
-                                  <div key={idx} className="border border-slate-200 p-1">
-                                    <img src={img} alt={`Micrographie ${idx}`} className="w-full h-auto object-contain bg-slate-100" style={{ maxHeight: '200px' }} />
+                                  <div key={idx} className="border border-slate-200 p-1 break-inside-avoid">
+                                    <img 
+                                      src={img} 
+                                      alt={`Micrographie ${idx + 1}`} 
+                                      crossOrigin="anonymous"
+                                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                                      className="w-full h-auto object-contain bg-slate-100" 
+                                      style={{ maxHeight: '200px' }} 
+                                    />
                                     <div className="text-center text-xs text-slate-500 mt-1 italic">Fig {idx+1}. {tpl.name}</div>
                                   </div>
                                 ))}
@@ -744,7 +845,7 @@ export function ReportPreviewModal({
               </section>
               
               {/* 4. Conclusion & Approbation */}
-              <section className="mt-12 pt-8 border-t-2 border-slate-200 page-break-inside-avoid">
+              <section className="mt-12 pt-8 border-t-2 border-slate-200 break-inside-avoid">
                 <h2 className="text-lg font-bold mb-4 text-slate-800">4. Conclusion & Approbation</h2>
                 <div className="flex justify-between">
                   <div className="w-1/2 pr-4">

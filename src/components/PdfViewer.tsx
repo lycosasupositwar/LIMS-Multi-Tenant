@@ -39,13 +39,13 @@ export function PdfViewer({ url }: PdfViewerProps) {
   }
 
   return (
-    <div className="flex flex-col items-center w-full bg-slate-200 max-h-[800px] overflow-y-auto p-4 custom-scrollbar">
+    <div className="flex flex-col items-center w-full bg-slate-200 p-4 custom-scrollbar">
       <div className="flex flex-col gap-6">
         <Document 
           file={url} 
           onLoadSuccess={onDocumentLoadSuccess} 
           loading={
-            <div className="flex flex-col items-center justify-center h-[500px] w-[800px] bg-white shadow-xl mx-auto">
+            <div className="flex flex-col items-center justify-center h-[500px] w-full max-w-[800px] bg-white shadow-xl mx-auto px-8">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
               <p className="text-slate-600 font-medium">Chargement du PDF...</p>
             </div>

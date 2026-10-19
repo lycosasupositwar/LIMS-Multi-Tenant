@@ -44,6 +44,7 @@ export function Reports() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedRequestId, setSelectedRequestId] = useState('');
   const [previewReport, setPreviewReport] = useState<Report | null>(null);
+  const [autoDownloadPdf, setAutoDownloadPdf] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
 
@@ -344,6 +345,7 @@ export function Reports() {
         }
       }
     } else {
+      setAutoDownloadPdf(false);
       setPreviewReport(report);
     }
   };
@@ -419,7 +421,7 @@ export function Reports() {
   };
 
   /**
-   * Pipeline de conversion serveur DOCX -> PDF
+   * Pipeline de conversion DOCX -> PDF ou déclenchement direct de l'export PDF générique
    */
   const handleDownloadPDF = async (report: Report) => {
     const isDocx = !!report.templateId;
@@ -499,8 +501,9 @@ export function Reports() {
         setDownloadingReportId(null);
       }
     } else {
+      // Ouvre l'aperçu et déclenche automatiquement le téléchargement PDF
+      setAutoDownloadPdf(true);
       setPreviewReport(report);
-      alert("Veuillez cliquer sur 'Télécharger PDF' depuis l'aperçu pour les rapports HTML génériques.");
     }
   };
 
@@ -729,7 +732,10 @@ export function Reports() {
                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                   <div className="flex items-center justify-end space-x-3">
                     <button 
-                      onClick={() => setPreviewReport(report)}
+                      onClick={() => {
+                        setAutoDownloadPdf(false);
+                        setPreviewReport(report);
+                      }}
                       className="flex items-center text-slate-500 hover:text-slate-800 transition-colors"
                       title="Aperçu"
                     >
@@ -914,13 +920,18 @@ export function Reports() {
       {/* Visualiseur de rapport complet */}
       <ReportPreviewModal 
         isOpen={!!previewReport}
-        onClose={() => setPreviewReport(null)}
+        onClose={() => {
+          setPreviewReport(null);
+          setAutoDownloadPdf(false);
+        }}
         report={previewReport}
         requests={requests}
         samples={samples}
         analyses={analyses}
         analysisTemplates={analysisTemplates}
         users={users}
+        autoDownload={autoDownloadPdf}
+        onAutoDownloadComplete={() => setAutoDownloadPdf(false)}
       />
     </div>
   );

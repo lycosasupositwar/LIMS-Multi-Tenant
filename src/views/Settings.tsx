@@ -6,7 +6,8 @@
  * 2. Gestion des utilisateurs & habilitations (Manager & Admin)
  * 3. Configuration et identité du laboratoire
  * 4. Sauvegarde, Patchs & Déploiement à chaud
- * 5. Console de Diagnostic & Logs (Admin uniquement)
+ * 5. Configuration du Serveur Mail SMTP (Admin uniquement)
+ * 6. Console de Diagnostic & Logs (Admin uniquement)
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -34,7 +35,9 @@ import {
   Terminal, 
   RefreshCw, 
   Search, 
-  Bug 
+  Bug,
+  Server,
+  Send
 } from 'lucide-react';
 import { 
   LogEntry, 
@@ -61,8 +64,8 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     deleteLaboratory
   } = useLims();
 
-  // Navigation par onglets ('logs' est réservé aux admins)
-  const [activeTab, setActiveTab] = useState<'profile' | 'lab' | 'users' | 'system' | 'logs'>('profile');
+  // Navigation par onglets ('smtp' et 'logs' sont réservés aux admins)
+  const [activeTab, setActiveTab] = useState<'profile' | 'lab' | 'users' | 'system' | 'smtp' | 'logs'>('profile');
   
   // Options de la zone de purge
   const [purgeOptions, setPurgeOptions] = useState({
@@ -94,6 +97,102 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   const [accountRequests, setAccountRequests] = useState<any[]>([]);
 
   // ==========================================
+  // États Configuration Serveur Mail SMTP (Admin uniquement)
+  // ==========================================
+  const [smtpConfig, setSmtpConfig] = useState({
+    enabled: false,
+    host: '',
+    port: 587,
+    secure: false,
+    user: '',
+    pass: '',
+    fromName: 'LIMS Laboratoire',
+    fromEmail: ''
+  });
+  const [smtpMsg, setSmtpMsg] = useState({ type: '', text: '' });
+  const [isSavingSmtp, setIsSavingSmtp] = useState(false);
+  const [testEmailAddress, setTestEmailAddress] = useState('');
+  const [isTestingSmtp, setIsTestingSmtp] = useState(false);
+
+  const fetchSmtpConfig = async () => {
+    if (currentUser?.role !== 'admin') return;
+    try {
+      const res = await fetch('/api/admin/smtp');
+      if (res.ok) {
+        const data = await res.json();
+        setSmtpConfig({
+          enabled: Boolean(data.enabled),
+          host: data.host || '',
+          port: data.port || 587,
+          secure: Boolean(data.secure),
+          user: data.user || '',
+          pass: data.pass || '',
+          fromName: data.fromName || 'LIMS Laboratoire',
+          fromEmail: data.fromEmail || ''
+        });
+        if (!testEmailAddress && currentUser?.email) {
+          setTestEmailAddress(currentUser.email);
+        }
+      }
+    } catch (e) {
+      console.error('Erreur lors du chargement de la configuration SMTP :', e);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'smtp' && currentUser?.role === 'admin') {
+      fetchSmtpConfig();
+    }
+  }, [activeTab, currentUser]);
+
+  const handleSaveSmtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSmtpMsg({ type: '', text: '' });
+    setIsSavingSmtp(true);
+    try {
+      const res = await fetch('/api/admin/smtp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(smtpConfig)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erreur de sauvegarde');
+      setSmtpMsg({ type: 'success', text: 'Paramètres du serveur mail enregistrés avec succès.' });
+      fetchSmtpConfig();
+    } catch (err: any) {
+      setSmtpMsg({ type: 'error', text: err.message });
+    } finally {
+      setIsSavingSmtp(false);
+    }
+  };
+
+  const handleTestSmtp = async () => {
+    setSmtpMsg({ type: '', text: '' });
+    setIsTestingSmtp(true);
+    try {
+      // On sauvegarde d'abord la configuration courante avant de lancer le test
+      await fetch('/api/admin/smtp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(smtpConfig)
+      });
+
+      const res = await fetch('/api/admin/smtp/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ testEmail: testEmailAddress || currentUser?.email })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Échec du test SMTP');
+      setSmtpMsg({ type: 'success', text: data.message });
+    } catch (err: any) {
+      setSmtpMsg({ type: 'error', text: err.message });
+    } finally {
+      setIsTestingSmtp(false);
+    }
+  };
+
+  // ==========================================
   // États de la Console de Logs (Admin uniquement)
   // ==========================================
   const [frontendLogs, setFrontendLogs] = useState<LogEntry[]>(() => getFrontendLogs());
@@ -104,16 +203,12 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   const [logSourceFilter, setLogSourceFilter] = useState<'all' | 'frontend' | 'backend'>('all');
   const [logSearchQuery, setLogSearchQuery] = useState('');
 
-  // Abonnement aux nouveaux logs Frontend
   useEffect(() => {
     return subscribeFrontendLogs(() => {
       setFrontendLogs([...getFrontendLogs()]);
     });
   }, []);
 
-  /**
-   * Récupère les logs du serveur Express (réservé aux admins)
-   */
   const fetchBackendLogs = async () => {
     if (currentUser?.role !== 'admin') return;
     setIsLoadingLogs(true);
@@ -130,7 +225,6 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
-  // Rafraîchissement automatique lorsque l'onglet 'logs' est actif
   useEffect(() => {
     if (activeTab === 'logs' && currentUser?.role === 'admin') {
       fetchBackendLogs();
@@ -141,9 +235,6 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   }, [activeTab, currentUser, autoRefreshLogs]);
 
-  /**
-   * Purge simultanément les logs Frontend et Backend
-   */
   const handleClearAllLogs = async () => {
     clearFrontendLogs();
     if (currentUser?.role === 'admin') {
@@ -156,9 +247,6 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
-  /**
-   * Télécharge tous les logs combinés au format JSON pour diagnostic
-   */
   const exportLogsJson = () => {
     const combined = [...frontendLogs, ...backendLogs].sort(
       (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
@@ -174,7 +262,6 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     URL.revokeObjectURL(url);
   };
 
-  // Fusion et filtrage des logs Frontend + Backend
   const filteredLogs = useMemo(() => {
     const merged = [...frontendLogs, ...backendLogs].sort(
       (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
@@ -224,9 +311,6 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   }, [activeTab, currentUser]);
 
-  /**
-   * Approbation d'une demande de compte externe avec génération d'un mot de passe temporaire
-   */
   const handleApproveRequest = async (req: any) => {
     try {
       const tempPassword = Math.random().toString(36).slice(-8);
@@ -253,9 +337,6 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
-  /**
-   * Suppression d'un utilisateur
-   */
   const handleDeleteUser = async (id: string) => {
     if (!window.confirm("Êtes-vous sûr de vouloir supprimer cet utilisateur ? Cette action est irréversible.")) return;
 
@@ -280,12 +361,8 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
-  // États pour les patchs de configuration
   const [patchMsg, setPatchMsg] = useState({ type: '', text: '' });
 
-  /**
-   * Exporte un fichier de configuration JSON sans inclure les données métier
-   */
   const exportPatch = () => {
     const patchData = {
       version: '1.0',
@@ -307,9 +384,6 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     URL.revokeObjectURL(url);
   };
 
-  /**
-   * Importe et applique à chaud un fichier de configuration JSON
-   */
   const importPatch = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -334,7 +408,6 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     reader.readAsText(file);
   };
   
-  // Formulaire des paramètres du laboratoire
   const [formData, setFormData] = useState(labSettings);
   const [saved, setSaved] = useState(false);
 
@@ -342,9 +415,6 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     setFormData(labSettings);
   }, [labSettings]);
 
-  /**
-   * Traitement de la modification du mot de passe
-   */
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
     setPwdMsg({ type: '', text: '' });
@@ -364,9 +434,6 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
-  /**
-   * Création manuelle d'un utilisateur par un manager
-   */
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setUserMsg({ type: '', text: '' });
@@ -386,27 +453,18 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
-  /**
-   * Gestion de la saisie des accréditations ISO
-   */
   const handleIsoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const certs = e.target.value.split(',').map(s => s.trim());
     setFormData({ ...formData, isoCertifications: certs });
     setSaved(false);
   };
 
-  /**
-   * Gestion standard des champs de formulaire
-   */
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData({ ...formData, [name]: value });
     setSaved(false);
   };
   
-  /**
-   * Mise à jour des styles visuels des tableaux de rapports générés
-   */
   const handleTableStyleChange = (field: string, value: string | number) => {
     const newSettings = { 
       ...formData, 
@@ -421,9 +479,6 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     setTimeout(() => setSaved(false), 3000);
   };
 
-  /**
-   * Enregistrement des paramètres généraux du laboratoire
-   */
   const handleSave = () => {
     updateLabSettings(formData);
     setSaved(true);
@@ -440,7 +495,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
       <div className="flex justify-between items-center mb-4">
         <div>
           <h2 className="text-2xl font-display font-bold text-slate-900">Paramètres</h2>
-          <p className="text-sm text-slate-500 mt-1">Gérez votre profil, le laboratoire et les utilisateurs.</p>
+          <p className="text-sm text-slate-500 mt-1">Gérez votre profil, le laboratoire et les paramètres système.</p>
         </div>
         {activeTab === 'lab' && (
           <button
@@ -487,20 +542,29 @@ export function Settings({ onBack }: { onBack?: () => void }) {
             </button>
           </>
         )}
-        {/* Onglet Console Logs strictement visible par les administrateurs */}
+        {/* Onglets strictement réservés aux Administrateurs après Sauvegarde Config. */}
         {currentUser?.role === 'admin' && (
-          <button
-            onClick={() => setActiveTab('logs')}
-            className={`py-2 px-4 text-sm font-medium border-b-2 outline-none transition-colors flex items-center ${activeTab === 'logs' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-          >
-            <Terminal className="w-4 h-4 inline mr-2" />
-            Console Logs
-            {errorCount > 0 && (
-              <span className="ml-2 px-1.5 py-0.5 text-[10px] font-bold bg-red-100 text-red-700 rounded-full">
-                {errorCount}
-              </span>
-            )}
-          </button>
+          <>
+            <button
+              onClick={() => setActiveTab('smtp')}
+              className={`py-2 px-4 text-sm font-medium border-b-2 outline-none transition-colors flex items-center ${activeTab === 'smtp' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            >
+              <Mail className="w-4 h-4 inline mr-2" />
+              Serveur Mail (SMTP)
+            </button>
+            <button
+              onClick={() => setActiveTab('logs')}
+              className={`py-2 px-4 text-sm font-medium border-b-2 outline-none transition-colors flex items-center ${activeTab === 'logs' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            >
+              <Terminal className="w-4 h-4 inline mr-2" />
+              Console Logs
+              {errorCount > 0 && (
+                <span className="ml-2 px-1.5 py-0.5 text-[10px] font-bold bg-red-100 text-red-700 rounded-full">
+                  {errorCount}
+                </span>
+              )}
+            </button>
+          </>
         )}
       </div>
 
@@ -1136,7 +1200,170 @@ export function Settings({ onBack }: { onBack?: () => void }) {
         </div>
       )}
 
-      {/* Onglet 5 : Console de Logs Applicatifs (Uniquement visible pour les Admins) */}
+      {/* Onglet 5 : Serveur Mail SMTP (Uniquement visible pour les Admins) */}
+      {activeTab === 'smtp' && currentUser?.role === 'admin' && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-6 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-800 flex items-center">
+                  <Server className="w-5 h-5 mr-2 text-blue-600" />
+                  Configuration du Serveur Mail (SMTP)
+                </h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  Paramétrez le serveur SMTP utilisé pour envoyer automatiquement toutes les notifications de l'application par e-mail (nouvelles demandes, validations, assignations, rapports publiés, alertes de stock).
+                </p>
+              </div>
+              <label className="flex items-center space-x-3 bg-slate-100 px-4 py-2.5 rounded-lg border border-slate-200 cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  checked={smtpConfig.enabled}
+                  onChange={(e) => setSmtpConfig({ ...smtpConfig, enabled: e.target.checked })}
+                  className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className={`text-sm font-semibold ${smtpConfig.enabled ? 'text-emerald-700' : 'text-slate-600'}`}>
+                  {smtpConfig.enabled ? 'Envoi Mail Activé' : 'Envoi Mail Désactivé'}
+                </span>
+              </label>
+            </div>
+
+            <form onSubmit={handleSaveSmtp} className="p-6 space-y-6">
+              {smtpMsg.text && (
+                <div className={`p-4 rounded-lg text-sm border flex items-center ${smtpMsg.type === 'error' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                  {smtpMsg.type === 'error' ? <AlertTriangle className="w-5 h-5 mr-2 shrink-0" /> : <Check className="w-5 h-5 mr-2 shrink-0" />}
+                  <span>{smtpMsg.text}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Serveur Hôte SMTP</label>
+                  <input
+                    type="text"
+                    placeholder="ex: smtp.office365.com, smtp.gmail.com, mail.domaine.fr"
+                    value={smtpConfig.host}
+                    onChange={(e) => setSmtpConfig({ ...smtpConfig, host: e.target.value })}
+                    className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Port SMTP</label>
+                  <input
+                    type="number"
+                    placeholder="587"
+                    value={smtpConfig.port}
+                    onChange={(e) => setSmtpConfig({ ...smtpConfig, port: parseInt(e.target.value, 10) || 587 })}
+                    className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Utilisateur / Identifiant SMTP</label>
+                  <input
+                    type="text"
+                    placeholder="ex: notifications@laboratoire.fr"
+                    value={smtpConfig.user}
+                    onChange={(e) => setSmtpConfig({ ...smtpConfig, user: e.target.value })}
+                    className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Mot de passe SMTP / Clé d'application</label>
+                  <input
+                    type="password"
+                    placeholder="••••••••"
+                    value={smtpConfig.pass}
+                    onChange={(e) => setSmtpConfig({ ...smtpConfig, pass: e.target.value })}
+                    className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-slate-100">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Nom d'expéditeur affiché</label>
+                  <input
+                    type="text"
+                    placeholder="ex: LIMS MaterioLab"
+                    value={smtpConfig.fromName}
+                    onChange={(e) => setSmtpConfig({ ...smtpConfig, fromName: e.target.value })}
+                    className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Adresse e-mail d'expéditeur (From)</label>
+                  <input
+                    type="email"
+                    placeholder="ex: noreply@materiolab.fr"
+                    value={smtpConfig.fromEmail}
+                    onChange={(e) => setSmtpConfig({ ...smtpConfig, fromEmail: e.target.value })}
+                    className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-3 pt-2">
+                <input
+                  type="checkbox"
+                  id="smtp-secure"
+                  checked={smtpConfig.secure}
+                  onChange={(e) => setSmtpConfig({ ...smtpConfig, secure: e.target.checked })}
+                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <label htmlFor="smtp-secure" className="text-sm text-slate-700 cursor-pointer">
+                  Utiliser une connexion SSL/TLS directe (cocher uniquement pour le port <strong>465</strong> ; laisser décoché pour STARTTLS sur le port <strong>587</strong> ou <strong>25</strong>)
+                </label>
+              </div>
+
+              <div className="flex justify-end pt-4 border-t border-slate-200">
+                <button
+                  type="submit"
+                  disabled={isSavingSmtp}
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-sm transition-colors flex items-center disabled:opacity-50"
+                >
+                  <Save className="w-4 h-4 mr-2" />
+                  {isSavingSmtp ? 'Enregistrement...' : 'Enregistrer la configuration SMTP'}
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Carte de test d'envoi d'e-mail */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="p-6 border-b border-slate-200">
+              <h3 className="text-lg font-semibold text-slate-800 flex items-center">
+                <Send className="w-5 h-5 mr-2 text-emerald-600" />
+                Tester l'envoi d'e-mail
+              </h3>
+              <p className="text-sm text-slate-500 mt-1">
+                Vérifiez immédiatement la connexion à votre serveur SMTP en envoyant un e-mail de test.
+              </p>
+            </div>
+            <div className="p-6 bg-slate-50 flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
+              <input
+                type="email"
+                placeholder="Adresse e-mail de réception du test..."
+                value={testEmailAddress}
+                onChange={(e) => setTestEmailAddress(e.target.value)}
+                className="flex-1 border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500 bg-white"
+              />
+              <button
+                type="button"
+                onClick={handleTestSmtp}
+                disabled={isTestingSmtp || !smtpConfig.host}
+                className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-medium rounded-lg shadow-sm transition-colors flex items-center justify-center disabled:opacity-50 shrink-0"
+              >
+                <Send className="w-4 h-4 mr-2" />
+                {isTestingSmtp ? 'Envoi en cours...' : 'Envoyer un mail de test'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Onglet 6 : Console de Logs Applicatifs (Uniquement visible pour les Admins) */}
       {activeTab === 'logs' && currentUser?.role === 'admin' && (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
           {/* Bandeau de synthèse des anomalies */}

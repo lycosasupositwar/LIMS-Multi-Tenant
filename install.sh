@@ -52,8 +52,10 @@ if ! command -v npm &> /dev/null; then
 fi
 
 echo ""
-echo "[2/5] Installation des dépendances NPM..."
+echo "[2/5] Installation des dépendances NPM (incluant Nodemailer pour les notifications mail)..."
 npm install
+npm install nodemailer
+npm install --save-dev @types/nodemailer
 
 echo ""
 echo "[3/5] Configuration des variables d'environnement..."

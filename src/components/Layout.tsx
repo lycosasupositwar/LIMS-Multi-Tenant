@@ -117,13 +117,13 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
         <div className="px-4 py-2.5 border-b border-slate-200 bg-slate-50">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 overflow-hidden">
-              <span className={`w-2 h-2 rounded-full shrink-0 ${activeLab.id === 'lab-metallurgie' ? 'bg-blue-600' : 'bg-emerald-600'}`} />
+              <span className={`w-2 h-2 rounded-full shrink-0 ${laboratories.findIndex(l => l.id === activeLab.id) % 2 === 0 ? 'bg-blue-600' : 'bg-emerald-600'}`} />
               <span className="text-xs font-bold text-slate-800 truncate" title={activeLab.name}>
                 {activeLab.shortName}
               </span>
             </div>
             <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${
-              activeLab.id === 'lab-metallurgie' ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'
+              laboratories.findIndex(l => l.id === activeLab.id) % 2 === 0 ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'
             }`}>
               {activeLab.code}
             </span>
@@ -208,7 +208,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
               type="button"
               onClick={() => setIsLabMenuOpen(!isLabMenuOpen)}
               className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold shadow-xs transition-all ${
-                activeLab.id === 'lab-metallurgie'
+                laboratories.findIndex(l => l.id === activeLab.id) % 2 === 0
                   ? 'bg-blue-50 border-blue-200 text-blue-800 hover:bg-blue-100'
                   : 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
               }`}
@@ -217,7 +217,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
               <span className="hidden sm:inline font-medium">{activeLab.name}</span>
               <span className="sm:hidden font-mono">[{activeLab.code}]</span>
               <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${
-                activeLab.id === 'lab-metallurgie' ? 'bg-blue-200/70 text-blue-900' : 'bg-emerald-200/70 text-emerald-900'
+                laboratories.findIndex(l => l.id === activeLab.id) % 2 === 0 ? 'bg-blue-200/70 text-blue-900' : 'bg-emerald-200/70 text-emerald-900'
               }`}>
                 {activeLab.code}
               </span>
@@ -240,7 +240,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
                         return !currentUser.labId || currentUser.labId === 'all' || currentUser.labId === lab.id;
                       }
                       return true;
-                    }).map(lab => {
+                    }).map((lab, index) => {
                       const isSelected = lab.id === activeLabId;
                       return (
                         <button
@@ -256,7 +256,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
                         >
                           <div>
                             <div className="flex items-center gap-1.5 font-bold text-slate-800">
-                              <span className={`w-2 h-2 rounded-full shrink-0 ${lab.id === 'lab-metallurgie' ? 'bg-blue-600' : 'bg-emerald-600'}`} />
+                              <span className={`w-2 h-2 rounded-full shrink-0 ${index % 2 === 0 ? 'bg-blue-600' : 'bg-emerald-600'}`} />
                               <span>{lab.name}</span>
                               <span className="text-[10px] text-slate-400 font-mono">[{lab.code}]</span>
                             </div>

@@ -223,7 +223,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const [rawRequests, setRequests] = useSyncedState<AnalysisRequest[]>('requests', initialRequests, isAuthenticated);
   const [rawConsumables, setConsumables] = useSyncedState<Consumable[]>('consumables', initialConsumables, isAuthenticated);
 
-  const [activeLabId, setActiveLabIdState] = useState<string>('lab-metallurgie');
+  const [activeLabId, setActiveLabIdState] = useState<string>(initialLaboratories[0]?.id || '');
 
   useEffect(() => {
     if (currentUser?.labId && currentUser.labId !== 'all') {

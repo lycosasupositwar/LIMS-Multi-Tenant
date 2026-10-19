@@ -81,15 +81,15 @@ export function RequestsInternal() {
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-slate-100 text-slate-800">Brouillon</span>;
       case 'soumise': 
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">Nouvelle Soumission</span>;
-      case 'en_revue': 
+      case 'En Revue': 
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-800">En Revue</span>;
       case 'validee': 
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-800">Validée</span>;
       case 'assignee': 
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-indigo-100 text-indigo-800">Assignée</span>;
-      case 'en_cours': 
+      case 'En Cours': 
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800">En Cours</span>;
-      case 'en_validation': 
+      case 'En Validation': 
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-orange-100 text-orange-800">En Validation finale</span>;
       case 'terminee': 
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-800">Terminée</span>;
@@ -240,7 +240,7 @@ export function RequestsInternal() {
     }
     
     // Bascule automatique de la demande au statut 'En Cours'
-    handleStatusChange('en_cours');
+    handleStatusChange('En Cours');
   };
 
   return (
@@ -366,13 +366,13 @@ export function RequestsInternal() {
                       <div className="flex gap-2 flex-wrap">
                         {selectedRequest.status === 'soumise' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
                           <button 
-                            onClick={() => handleStatusChange('en_revue')} 
+                            onClick={() => handleStatusChange('En Revue')} 
                             className="bg-purple-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-purple-700 transition-colors shadow-sm"
                           >
                             Passer en Revue
                           </button>
                         )}
-                        {selectedRequest.status === 'en_revue' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
+                        {selectedRequest.status === 'En Revue' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
                           <>
                             <button 
                               disabled={!statusComment} 
@@ -391,21 +391,21 @@ export function RequestsInternal() {
                         )}
                         {(selectedRequest.status === 'assignee' || selectedRequest.status === 'validee') && (
                           <button 
-                            onClick={() => handleStatusChange('en_cours')} 
+                            onClick={() => handleStatusChange('En Cours')} 
                             className="bg-amber-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-amber-700 transition-colors shadow-sm flex items-center"
                           >
                             <PlayCircle className="w-4 h-4 mr-1.5"/> Démarrer les essais sans échantillon
                           </button>
                         )}
-                        {selectedRequest.status === 'en_cours' && (
+                        {selectedRequest.status === 'En Cours' && (
                           <button 
-                            onClick={() => handleStatusChange('en_validation')} 
+                            onClick={() => handleStatusChange('En Validation')} 
                             className="bg-orange-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-orange-700 transition-colors shadow-sm flex items-center"
                           >
                             <CheckCircle className="w-4 h-4 mr-1.5"/> Soumettre pour validation
                           </button>
                         )}
-                        {selectedRequest.status === 'en_validation' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
+                        {selectedRequest.status === 'En Validation' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
                           <button 
                             onClick={() => handleStatusChange('terminee')} 
                             className="bg-emerald-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm flex items-center"
@@ -426,7 +426,7 @@ export function RequestsInternal() {
                       Actions de Gestion (Manager)
                     </h4>
                     <button 
-                      onClick={() => handleStatusChange('en_cours')} 
+                      onClick={() => handleStatusChange('En Cours')} 
                       className="bg-white border border-amber-300 text-amber-700 px-4 py-2 rounded-md text-sm font-medium hover:bg-amber-50 transition-colors shadow-sm flex items-center"
                     >
                       <PlayCircle className="w-4 h-4 mr-1.5"/> Réouvrir le dossier (Passer En Cours)
@@ -435,7 +435,7 @@ export function RequestsInternal() {
                 )}
 
                 {/* Module de génération rapide des échantillons physiques */}
-                {(selectedRequest.status === 'validee' || selectedRequest.status === 'assignee' || (selectedRequest.status === 'en_cours' && (currentUser?.role === 'manager' || currentUser?.role === 'admin'))) && (
+                {(selectedRequest.status === 'validee' || selectedRequest.status === 'assignee' || (selectedRequest.status === 'En Cours' && (currentUser?.role === 'manager' || currentUser?.role === 'admin'))) && (
                   <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-5">
                     <h4 className="text-sm font-bold text-indigo-900 uppercase tracking-wider mb-3 flex items-center">
                       <Box className="w-4 h-4 mr-2" />

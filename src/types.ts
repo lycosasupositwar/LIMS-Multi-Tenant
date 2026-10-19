@@ -26,13 +26,13 @@ export type SampleStatus = 'receptionne' | 'en_preparation' | 'en_essai' | 'term
 /**
  * Statut du flux technique d'une analyse unitaire
  * - planifie : Programmée sur l'échantillon, technicien non encore assigné ou en attente
- * - en_cours : Mesures en cours d'acquisition par l'analyste
+ * - En Cours : Mesures en cours d'acquisition par l'analyste
  * - a_valider : Données saisies, en attente de revue technique
  * - valide : Analyse validée techniquement par le responsable
  * - termine : Clôturée et intégrable dans le rapport
  * - rejete : Mesure non conforme ou essai à relancer
  */
-export type AnalysisStatus = 'planifie' | 'en_cours' | 'a_valider' | 'valide' | 'termine' | 'rejete';
+export type AnalysisStatus = 'planifie' | 'En Cours' | 'a_valider' | 'valide' | 'termine' | 'rejete';
 
 /**
  * Degré de priorité d'une demande ou d'un échantillon pour l'ordonnancement
@@ -60,7 +60,7 @@ export type Role = 'demandeur' | 'analyste' | 'manager' | 'admin';
 /**
  * Cycle de vie global d'une demande d'analyse déposée par un demandeur
  */
-export type RequestStatus = 'brouillon' | 'soumise' | 'en_revue' | 'validee' | 'assignee' | 'en_cours' | 'en_validation' | 'terminee' | 'rejetee';
+export type RequestStatus = 'brouillon' | 'soumise' | 'En Revue' | 'validee' | 'assignee' | 'En Cours' | 'En Validation' | 'terminee' | 'rejetee';
 
 /**
  * Catégories de consommables pour la gestion des stocks de métallographie

@@ -11,7 +11,7 @@
 
 import React, { useState } from 'react';
 import { useLims } from '../store';
-import { Plus, Clock, FileText, CheckCircle, Package, AlertCircle, Settings as SettingsIcon, Building2, Filter, Download } from 'lucide-react';
+import { Plus, Clock, FileText, CheckCircle, Package, AlertCircle, Settings as SettingsIcon, Building2, Filter, Download, Search, Copy } from 'lucide-react';
 import { RequestStatus, AnalysisRequest } from '../types';
 import { getLabColor } from '../utils/colors';
 import { NewRequestModal } from '../components/NewRequestModal';
@@ -21,15 +21,20 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
   const { currentUser, requests, allRequestTemplates, laboratories } = useLims();
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [editingRequest, setEditingRequest] = useState<AnalysisRequest | null>(null);
+  const [duplicateRequest, setDuplicateRequest] = useState<Partial<AnalysisRequest> | null>(null);
   const [selectedLabFilter, setSelectedLabFilter] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Filtrage strict des demandes rattachées au demandeur connecté
   const myRequests = requests.filter(r => r.requesterId === currentUser?.id);
 
   // Filtrage par laboratoire
   const filteredRequests = myRequests.filter(req => {
-    if (selectedLabFilter === 'all') return true;
-    return req.labId === selectedLabFilter;
+    const matchesLab = selectedLabFilter === 'all' || req.labId === selectedLabFilter;
+    const matchesSearch = searchQuery === '' || 
+      req.id.toLowerCase().includes(searchQuery.toLowerCase()) || 
+      req.title.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesLab && matchesSearch;
   });
 
   /**
@@ -50,7 +55,7 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
       case 'En Cours': 
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">Analyse en cours</span>;
       case 'En Validation': 
-        return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-orange-100 text-orange-800">Contrôle Qualité</span>;
+        return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-orange-100 text-orange-800">Revue technique</span>;
       case 'terminee': 
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">Rapport disponible</span>;
       case 'rejetee': 
@@ -193,24 +198,39 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
 
         {/* 3. Liste des demandes avec filtrage */}
         <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
-          <div className="px-6 py-4 border-b border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-slate-50/50">
-            <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-slate-400" />
-              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                Filtre Laboratoire :
-              </span>
-              <span className="text-xs font-medium text-slate-600">
-                {selectedLabFilter === 'all' ? 'Tous les laboratoires' : laboratories.find(l => l.id === selectedLabFilter)?.name}
-              </span>
+          <div className="px-6 py-4 border-b border-slate-200 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-slate-50/50">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 w-full lg:w-auto">
+              <div className="flex items-center gap-2">
+                <Filter className="w-4 h-4 text-slate-400" />
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Filtre Laboratoire :
+                </span>
+                <span className="text-xs font-medium text-slate-600">
+                  {selectedLabFilter === 'all' ? 'Tous les laboratoires' : laboratories.find(l => l.id === selectedLabFilter)?.name}
+                </span>
+              </div>
+              {selectedLabFilter !== 'all' && (
+                <button 
+                  onClick={() => setSelectedLabFilter('all')}
+                  className="text-xs text-blue-600 hover:text-blue-800 font-semibold"
+                >
+                  Effacer le filtre
+                </button>
+              )}
             </div>
-            {selectedLabFilter !== 'all' && (
-              <button 
-                onClick={() => setSelectedLabFilter('all')}
-                className="text-xs text-blue-600 hover:text-blue-800 font-semibold"
-              >
-                Effacer le filtre
-              </button>
-            )}
+            
+            <div className="relative w-full lg:w-64 shrink-0">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <Search className="h-4 w-4 text-slate-400" />
+              </div>
+              <input
+                type="text"
+                placeholder="Rechercher une demande..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="block w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
           </div>
 
           {filteredRequests.length === 0 ? (
@@ -269,20 +289,26 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
                         {getStatusBadge(req.status)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        {req.status === 'terminee' ? (
-                          <button className="inline-flex items-center gap-1.5 text-emerald-600 hover:text-emerald-800 font-semibold text-xs bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200 transition-colors">
-                            <Download className="w-3.5 h-3.5" /> Rapport
-                          </button>
-                        ) : req.status === 'rejetee' ? (
+                        <div className="flex items-center justify-end gap-3">
+                          {req.status === 'terminee' && (
+                            <button className="inline-flex items-center gap-1.5 text-emerald-600 hover:text-emerald-800 font-semibold text-xs bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200 transition-colors">
+                              <Download className="w-3.5 h-3.5" /> Rapport
+                            </button>
+                          )}
                           <button 
                             onClick={() => setEditingRequest(req)} 
-                            className="text-red-600 hover:text-red-800 font-semibold text-xs underline"
+                            className="text-blue-600 hover:text-blue-800 font-semibold text-xs underline"
                           >
-                            Corriger / Resoumettre
+                            {req.status === 'rejetee' || req.status === 'brouillon' ? 'Modifier' : 'Voir'}
                           </button>
-                        ) : (
-                          <span className="text-slate-400 text-xs italic">En traitement</span>
-                        )}
+                          <button
+                            onClick={() => { setDuplicateRequest(req); setIsNewModalOpen(true); }}
+                            className="text-slate-400 hover:text-slate-600 transition-colors"
+                            title="Dupliquer la demande"
+                          >
+                            <Copy className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -294,7 +320,7 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
       </main>
 
       {/* Modales de création et modification */}
-      <NewRequestModal isOpen={isNewModalOpen} onClose={() => setIsNewModalOpen(false)} />
+      <NewRequestModal isOpen={isNewModalOpen} onClose={() => { setIsNewModalOpen(false); setDuplicateRequest(null); }} initialRequest={duplicateRequest || undefined} />
       {editingRequest && (
         <EditRequestModal 
           request={editingRequest} 

@@ -19,9 +19,11 @@ interface Props {
   isOpen: boolean;
   /** Fonction de fermeture */
   onClose: () => void;
+  /** Demande initiale (pour duplication) */
+  initialRequest?: Partial<AnalysisRequest>;
 }
 
-export function NewRequestModal({ isOpen, onClose }: Props) {
+export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
   const { 
     currentUser, 
     laboratories, 
@@ -42,8 +44,34 @@ export function NewRequestModal({ isOpen, onClose }: Props) {
   const [title, setTitle] = useState('');
   const [customData, setCustomData] = useState<Record<string, any>>({});
 
-  // Synchronisation du modèle par défaut lors du changement de laboratoire
+  // Synchronisation des données initiales lors de l'ouverture ou du changement d'initialRequest
   useEffect(() => {
+    if (isOpen) {
+      if (initialRequest) {
+        if (initialRequest.labId) setSelectedLabId(initialRequest.labId);
+        if (initialRequest.templateId) setSelectedTemplateId(initialRequest.templateId);
+        if (initialRequest.title) setTitle("Copie de " + initialRequest.title);
+        if (initialRequest.customData) setCustomData(initialRequest.customData);
+      } else {
+        const defaultLabId = activeLabId || laboratories[0]?.id || '';
+        setSelectedLabId(defaultLabId);
+        const available = allRequestTemplates.filter(t => t.labId === defaultLabId && t.isActive !== false);
+        if (available.length > 0) {
+          setSelectedTemplateId(available[0].id);
+        } else {
+          setSelectedTemplateId('');
+        }
+        setTitle('');
+        setCustomData({});
+      }
+    }
+  }, [isOpen, initialRequest, activeLabId, laboratories, allRequestTemplates]);
+
+  // Synchronisation du modèle par défaut lors du changement de laboratoire (manuel)
+  useEffect(() => {
+    // Ne réinitialiser que s'il n'y a pas d'initialRequest en cours de chargement
+    if (!isOpen || initialRequest) return;
+    
     const available = allRequestTemplates.filter(t => t.labId === selectedLabId && t.isActive !== false);
     if (available.length > 0) {
       setSelectedTemplateId(available[0].id);
@@ -51,7 +79,7 @@ export function NewRequestModal({ isOpen, onClose }: Props) {
       setSelectedTemplateId('');
     }
     setCustomData({});
-  }, [selectedLabId, allRequestTemplates]);
+  }, [selectedLabId, allRequestTemplates, isOpen, initialRequest]);
 
   if (!isOpen) return null;
 

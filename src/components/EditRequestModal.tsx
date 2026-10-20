@@ -29,6 +29,8 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
   const { requestTemplates, resubmitRequest, analysisTemplates } = useLims();
   const [customData, setCustomData] = useState<Record<string, any>>({});
 
+  const isReadOnly = request.status !== 'rejetee' && request.status !== 'brouillon';
+
   // Synchronisation des données personnalisées à l'ouverture de la modale
   useEffect(() => {
     if (isOpen) {
@@ -66,11 +68,13 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
         <div className="p-5 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-xl shrink-0">
           <div>
             <h2 className="text-xl font-display font-bold text-slate-900">
-              Modifier la demande {request.id}
+              {isReadOnly ? `Détails de la demande ${request.id}` : `Modifier la demande ${request.id}`}
             </h2>
-            <p className="text-xs text-slate-500 mt-1">
-              Corrigez les informations suite au refus du laboratoire
-            </p>
+            {!isReadOnly && (
+              <p className="text-xs text-slate-500 mt-1">
+                Corrigez les informations suite au refus du laboratoire
+              </p>
+            )}
           </div>
           <button 
             onClick={onClose} 
@@ -124,7 +128,8 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                           required={field.required}
                           value={customData[field.id] || ''} 
                           onChange={e => handleCustomDataChange(field.id, e.target.value)}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500"
+                          disabled={isReadOnly}
+                          className={`w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500 ${isReadOnly ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : 'bg-white'}`}
                         >
                           <option value="">Sélectionner...</option>
                           {field.options?.map(opt => (
@@ -140,17 +145,18 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                               <button
                                 key={tpl.id}
                                 type="button"
+                                disabled={isReadOnly}
                                 onClick={() => {
                                   const newValues = isSelected
                                     ? currentValues.filter((v: string) => v !== tpl.id)
                                     : [...currentValues, tpl.id];
                                   handleCustomDataChange(field.id, newValues);
                                 }}
-                                className={`px-3 py-1.5 text-sm font-medium rounded-full border transition-colors ${
+                                className={`px-3 py-1.5 text-sm font-medium rounded-full border transition-colors ${!isReadOnly ? 'cursor-pointer' : 'cursor-not-allowed'} ${
                                   isSelected
                                      ? 'bg-blue-100 text-blue-800 border-blue-300'
                                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                                }`}
+                                } ${isReadOnly && !isSelected ? 'opacity-50' : ''}`}
                               >
                                 {tpl.name}
                               </button>
@@ -166,17 +172,18 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                               <button
                                 key={opt}
                                 type="button"
+                                disabled={isReadOnly}
                                 onClick={() => {
                                   const newValues = isSelected
                                     ? currentValues.filter((v: string) => v !== opt)
                                     : [...currentValues, opt];
                                   handleCustomDataChange(field.id, newValues);
                                 }}
-                                className={`px-3 py-1.5 text-sm font-medium rounded-full border transition-colors ${
+                                className={`px-3 py-1.5 text-sm font-medium rounded-full border transition-colors ${!isReadOnly ? 'cursor-pointer' : 'cursor-not-allowed'} ${
                                   isSelected 
                                     ? 'bg-blue-100 text-blue-800 border-blue-300' 
                                     : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                                }`}
+                                } ${isReadOnly && !isSelected ? 'opacity-50' : ''}`}
                               >
                                 {opt}
                               </button>
@@ -189,7 +196,8 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                             type="checkbox"
                             checked={customData[field.id] || false}
                             onChange={e => handleCustomDataChange(field.id, e.target.checked)}
-                            className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                            disabled={isReadOnly}
+                            className={`w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 ${isReadOnly ? 'cursor-not-allowed' : ''}`}
                            />
                            <span className="ml-2 text-sm text-slate-600">Oui</span>
                          </div>
@@ -199,7 +207,8 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                           required={field.required}
                           value={customData[field.id] || ''} 
                           onChange={e => handleCustomDataChange(field.id, e.target.value)}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500"
+                          disabled={isReadOnly}
+                          className={`w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500 ${isReadOnly ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''}`}
                         />
                       ) : (
                         <input 
@@ -207,7 +216,8 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                           required={field.required}
                           value={customData[field.id] || ''} 
                           onChange={e => handleCustomDataChange(field.id, field.type === 'number' ? Number(e.target.value) : e.target.value)}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500"
+                          disabled={isReadOnly}
+                          className={`w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500 ${isReadOnly ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''}`}
                         />
                       )}
                     </div>
@@ -225,15 +235,17 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
             onClick={onClose} 
             className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
           >
-            Annuler
+            {isReadOnly ? 'Fermer' : 'Annuler'}
           </button>
-          <button 
-            type="submit" 
-            form="edit-req-form" 
-            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm"
-          >
-            Mettre à jour et Resoumettre
-          </button>
+          {!isReadOnly && (
+            <button 
+              type="submit" 
+              form="edit-req-form" 
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm"
+            >
+              Mettre à jour et Resoumettre
+            </button>
+          )}
         </div>
       </div>
     </div>

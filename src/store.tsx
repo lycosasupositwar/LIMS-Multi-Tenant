@@ -497,15 +497,17 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     const newReq = { ...request, labId: targetLabId, auditTrail: [initialAudit] };
     setRequests(prev => [newReq, ...prev]);
 
-    const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === targetLabId || u.labId === 'all' || !u.labId));
+    const labManagers = users.filter(u => (u.role === 'manager') && (u.labId === targetLabId || u.labId === 'all' || !u.labId));
     labManagers.forEach(m => addNotification(m.id, 'Nouvelle demande d\'analyse', `La demande ${request.id} ("${request.title}") a été soumise par ${currentUser?.name || 'un client'}.`, 'email'));
   };
 
   const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comment?: string) => {
     const reqToUpdate = rawRequests.find(r => r.id === id);
     if (reqToUpdate) {
+      if (status === 'validee' || status === 'En Validation' || status === 'terminee') {
       addNotification(reqToUpdate.requesterId, `Mise à jour de votre demande ${reqToUpdate.id}`, `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) est passée au statut : ${status}.${comment ? `\nCommentaire : ${comment}` : ''}`, 'email');
     }
+  }
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
         const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}.${comment ? ` Raison : ${comment}` : ''}`);

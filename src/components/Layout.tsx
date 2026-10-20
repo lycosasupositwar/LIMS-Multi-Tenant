@@ -1,11 +1,5 @@
 /**
  * Gabarit Principal de l'Interface Laboratoire (Layout LIMS)
- * 
- * Fournit la structure globale de l'application pour le personnel interne :
- * - Barre latérale fixe (Sidebar) avec navigation contextuelle par onglet et badge d'alertes
- * - En-tête supérieur (Topbar) intégrant la recherche transversale et le centre de notifications
- * - Zone de contenu dynamique avec animations de transition fluides (motion)
- * - Gestion du polling automatique des demandes de comptes pour les managers
  */
 
 import React, { ReactNode, useState } from 'react';
@@ -13,16 +7,11 @@ import { LayoutDashboard, Box, Activity, FileText, Settings, Bell, Search, User,
 import * as motion from 'motion/react-client';
 import { useLims } from '../store';
 import { getLabColor } from '../utils/colors';
+import { Notification } from '../types';
 
-/**
- * Propriétés attendues par le composant Layout
- */
 interface LayoutProps {
-  /** Contenu de la vue active */
   children: ReactNode;
-  /** Identifiant de l'onglet actif */
   activeTab: string;
-  /** Fonction de changement d'onglet */
   setActiveTab: (tab: string) => void;
 }
 
@@ -38,13 +27,14 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
     laboratories,
     activeLabId,
     activeLab,
-    setActiveLabId
+    setActiveLabId,
+    allAnalyses,
+    allRequests,
+    allSamples,
+    allReports
   } = useLims();
 
-  // Menu déroulant de changement d'instance de laboratoire
   const [isLabMenuOpen, setIsLabMenuOpen] = useState(false);
-
-  // Nombre de demandes de création de comptes en attente d'approbation manager
   const [pendingRequestsCount, setPendingRequestsCount] = React.useState(0);
   const notifiedCountRef = React.useRef(0);
 
@@ -61,14 +51,14 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
           const data = await res.json();
           setPendingRequestsCount(data.length);
           
-          // Déclenchement d'une notification si de nouvelles demandes sont détectées
           if (data.length > notifiedCountRef.current) {
             const newCount = data.length - notifiedCountRef.current;
             addNotification(
               currentUser.id, 
               'Demande de compte', 
               `Vous avez ${newCount} nouvelle(s) demande(s) en attente.`, 
-              'system'
+              'system',
+              { targetTab: 'settings' }
             );
           }
           notifiedCountRef.current = data.length;
@@ -83,7 +73,99 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
     return () => clearInterval(interval);
   }, [currentUser]);
 
-  // Éléments du menu de navigation interne
+  /**
+   * Navigation intelligente au clic sur une notification :
+   * Bascule sur le bon laboratoire, ouvre l'onglet correspondant et filtre sur l'élément précis.
+   */
+  const handleNotificationClick = (notif: Notification) => {
+    markNotificationAsRead(notif.id);
+
+    // 1. Cas particulier : Demande de création de compte
+    if (notif.title === 'Demande de compte') {
+      setActiveTab('settings');
+      setTimeout(() => window.dispatchEvent(new CustomEvent('open-users-tab')), 50);
+      return;
+    }
+
+    // 2. Si la notification possède déjà les métadonnées explicites (targetTab / targetId / labId)
+    if (notif.labId) {
+      setActiveLabId(notif.labId);
+    }
+    if (notif.targetTab) {
+      setActiveTab(notif.targetTab);
+      if (notif.targetId) {
+        setGlobalSearchQuery(notif.targetId);
+      }
+      return;
+    }
+
+    // 3. Détection intelligente sur le texte (rétrocompatibilité avec les notifications déjà créées)
+    const combinedText = `${notif.title} ${notif.message}`;
+
+    // Détection d'un identifiant d'analyse (ex: ESS-26-0612, ESS-MET-101)
+    const analysisMatch = combinedText.match(/\b(ESS-[A-Za-z0-9-]+)\b/);
+    if (analysisMatch || notif.title.toLowerCase().includes('analyse')) {
+      const analysisId = analysisMatch ? analysisMatch[1] : '';
+      if (analysisId) {
+        const targetAnalysis = allAnalyses.find(a => a.id.toLowerCase() === analysisId.toLowerCase());
+        if (targetAnalysis?.labId) {
+          setActiveLabId(targetAnalysis.labId);
+        }
+        setGlobalSearchQuery(analysisId);
+      }
+      setActiveTab('analyses');
+      return;
+    }
+
+    // Détection d'un identifiant de rapport (ex: RAP-MET-001)
+    const reportMatch = combinedText.match(/\b(RAP-[A-Za-z0-9-]+)\b/);
+    if (reportMatch || notif.title.toLowerCase().includes('rapport')) {
+      const reportId = reportMatch ? reportMatch[1] : '';
+      if (reportId) {
+        const targetReport = allReports.find(r => r.id.toLowerCase() === reportId.toLowerCase());
+        if (targetReport?.labId) {
+          setActiveLabId(targetReport.labId);
+        }
+        setGlobalSearchQuery(reportId);
+      }
+      setActiveTab('reports');
+      return;
+    }
+
+    // Détection d'un identifiant de demande (ex: REQ-MET-26-001)
+    const reqMatch = combinedText.match(/\b(REQ-[A-Za-z0-9-]+)\b/);
+    if (reqMatch || notif.title.toLowerCase().includes('demande') || notif.title.toLowerCase().includes('assignation')) {
+      const reqId = reqMatch ? reqMatch[1] : '';
+      if (reqId) {
+        const targetReq = allRequests.find(r => r.id.toLowerCase() === reqId.toLowerCase());
+        if (targetReq?.labId) {
+          setActiveLabId(targetReq.labId);
+        }
+        setGlobalSearchQuery(reqId);
+      }
+      setActiveTab('requests');
+      return;
+    }
+
+    // Détection d'un échantillon (ex: ECH-26-301)
+    const sampleMatch = combinedText.match(/\b(ECH-[A-Za-z0-9-]+)\b/);
+    if (sampleMatch) {
+      const sampleId = sampleMatch[1];
+      const targetSample = allSamples.find(s => s.id.toLowerCase() === sampleId.toLowerCase());
+      if (targetSample?.labId) {
+        setActiveLabId(targetSample.labId);
+      }
+      setGlobalSearchQuery(sampleId);
+      setActiveTab('samples');
+      return;
+    }
+
+    // Détection d'une alerte stock
+    if (combinedText.toLowerCase().includes('stock')) {
+      setActiveTab('inventory');
+    }
+  };
+
   let navItems = [
     { id: 'dashboard', label: 'Tableau de bord', icon: LayoutDashboard },
     { id: 'requests', label: 'Demandes & Workflow', icon: FileText },
@@ -93,7 +175,6 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
     { id: 'inventory', label: 'Consommables', icon: Archive },
   ];
 
-  // Le constructeur CMS / modèles est restreint aux profils managers
   if (currentUser?.role === 'manager') {
     navItems.push({ id: 'builder', label: 'Config. CMS', icon: Blocks });
   }
@@ -104,7 +185,6 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
     <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
       {/* 1. Barre Latérale de Navigation (Sidebar) */}
       <aside className="w-64 bg-white border-r border-slate-200 flex flex-col hidden md:flex">
-        {/* En-tête et logo */}
         <div className="h-16 flex items-center px-6 border-b border-slate-200">
           <div className="w-8 h-8 bg-blue-700 rounded-lg flex items-center justify-center mr-3 shadow-sm">
             <Blocks className="text-white w-5 h-5" />
@@ -114,7 +194,6 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
           </h1>
         </div>
         
-        {/* Badge Instance Laboratoire Active */}
         <div className="px-4 py-2.5 border-b border-slate-200 bg-slate-50">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 overflow-hidden">
@@ -129,7 +208,6 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
           </div>
         </div>
         
-        {/* Liens de navigation */}
         <nav className="flex-1 py-6 px-4 space-y-1 overflow-y-auto">
           {navItems.map((item) => {
             const isActive = activeTab === item.id;
@@ -158,7 +236,6 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
           })}
         </nav>
         
-        {/* Profil utilisateur en pied de barre latérale */}
         <div className="p-4 border-t border-slate-200">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
@@ -183,9 +260,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
 
       {/* 2. Zone de Contenu Principal */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Barre Supérieure (Topbar) */}
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 lg:px-8">
-          {/* Champ de recherche globale */}
           <div className="flex-1 flex items-center">
             <div className="max-w-md w-full relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -196,8 +271,18 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
                 value={globalSearchQuery}
                 onChange={(e) => setGlobalSearchQuery(e.target.value)}
                 placeholder="Rechercher partout (demandes, échantillons, analyses)..."
-                className="block w-full pl-10 pr-3 py-2 border border-slate-200 rounded-lg leading-5 bg-slate-50 text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm transition-colors"
+                className="block w-full pl-10 pr-8 py-2 border border-slate-200 rounded-lg leading-5 bg-slate-50 text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm transition-colors"
               />
+              {globalSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setGlobalSearchQuery('')}
+                  className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-xs text-slate-400 hover:text-slate-600"
+                  title="Effacer la recherche"
+                >
+                  ✕
+                </button>
+              )}
             </div>
           </div>
 
@@ -208,11 +293,10 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
               onClick={() => setIsLabMenuOpen(!isLabMenuOpen)}
               className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold shadow-xs transition-all ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).hoverBgLight} ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).borderLight} ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).text}`}
             >
-            
               <Building2 className="w-3.5 h-3.5 flex-shrink-0" />
               <span className="hidden sm:inline font-medium">{activeLab.name}</span>
               <span className="sm:hidden font-mono">[{activeLab.code}]</span>
-             <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).activeBg} ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).activeText}`}>
+              <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).activeBg} ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).activeText}`}>
                 {activeLab.code}
               </span>
               <ChevronDown className="w-3.5 h-3.5 ml-0.5 opacity-60" />
@@ -275,7 +359,6 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
               )}
             </button>
             
-            {/* Volet déroulant des alertes */}
             <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-xl border border-slate-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 overflow-hidden flex flex-col max-h-96">
               <div className="p-3 border-b border-slate-100 bg-slate-50 font-semibold text-slate-700 text-sm">
                 Notifications
@@ -289,15 +372,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
                       <div 
                         key={notif.id} 
                         className={`p-3 text-sm transition-colors cursor-pointer hover:bg-slate-50 ${!notif.read ? 'bg-blue-50/50' : ''}`} 
-                        onClick={() => {
-                          markNotificationAsRead(notif.id);
-                          if (notif.title === 'Demande de compte') {
-                            setActiveTab('settings');
-                            setTimeout(() => window.dispatchEvent(new CustomEvent('open-users-tab')), 50);
-                          } else if (notif.title.includes('Demande') || notif.title.includes('demande') || notif.title.includes('assignation')) {
-                            setActiveTab('requests');
-                          }
-                        }}
+                        onClick={() => handleNotificationClick(notif)}
                       >
                         <div className="flex justify-between mb-1">
                           <span className="font-semibold text-slate-900">{notif.title}</span>
@@ -317,7 +392,6 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
           </div>
         </header>
 
-        {/* Corps de la page avec animation au changement d'onglet */}
         <main className="flex-1 overflow-y-auto p-6 lg:p-8">
           <motion.div
             key={activeTab}

@@ -1,34 +1,26 @@
 /**
  * Portail Demandeur Multi-Laboratoires (Espace Client Unifié)
- * 
- * Cette vue unique permet aux donneurs d'ordre et demandeurs externes :
- * 1. De visualiser en un seul endroit toutes leurs demandes d'analyses, tous laboratoires confondus
- * 2. De filtrer leurs dossiers par laboratoire destinataire (Métallographie vs Mécanique)
- * 3. De soumettre de nouvelles demandes directement vers le laboratoire de leur choix
- * 4. De suivre en direct l'avancement technique et les motifs d'éventuels refus
- * 5. De télécharger les procès-verbaux et rapports d'essais validés
  */
 
 import React, { useState } from 'react';
 import { useLims } from '../store';
-import { Plus, Clock, FileText, CheckCircle, Package, AlertCircle, Settings as SettingsIcon, Building2, Filter, Download, Search, Copy } from 'lucide-react';
+import { Plus, FileText, Package, AlertCircle, Settings as SettingsIcon, Building2, Filter, Download, Search, Copy } from 'lucide-react';
 import { RequestStatus, AnalysisRequest } from '../types';
 import { getLabColor } from '../utils/colors';
 import { NewRequestModal } from '../components/NewRequestModal';
 import { EditRequestModal } from '../components/EditRequestModal';
 
 export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => void }) {
-  const { currentUser, requests, allRequestTemplates, laboratories } = useLims();
+  const { currentUser, requests, reports, samples, allRequestTemplates, laboratories } = useLims();
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [editingRequest, setEditingRequest] = useState<AnalysisRequest | null>(null);
   const [duplicateRequest, setDuplicateRequest] = useState<Partial<AnalysisRequest> | null>(null);
   const [selectedLabFilter, setSelectedLabFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [downloadingRequestId, setDownloadingRequestId] = useState<string | null>(null);
 
-  // Filtrage strict des demandes rattachées au demandeur connecté
   const myRequests = requests.filter(r => r.requesterId === currentUser?.id);
 
-  // Filtrage par laboratoire
   const filteredRequests = myRequests.filter(req => {
     const matchesLab = selectedLabFilter === 'all' || req.labId === selectedLabFilter;
     const matchesSearch = searchQuery === '' || 
@@ -38,8 +30,49 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
   });
 
   /**
-   * Badges de statut visuels pour le demandeur
+   * Vérifie si un rapport généré existe pour une demande donnée
    */
+  const hasReportForRequest = (requestId: string) => {
+    const reqSampleIds = new Set(samples.filter(s => s.requestId === requestId).map(s => s.id));
+    return reports.some(
+      r =>
+        r.status === 'genere' &&
+        (r.requestId === requestId ||
+          (Array.isArray(r.sampleIds) && r.sampleIds.some(sId => reqSampleIds.has(sId))))
+    );
+  };
+
+  /**
+   * Génère un lien unique à usage unique pour la demande et déclenche le téléchargement direct
+   */
+  const handleDownloadRequestReport = async (requestId: string) => {
+    try {
+      setDownloadingRequestId(requestId);
+      const res = await fetch(`/api/reports/by-request/${encodeURIComponent(requestId)}/generate-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.downloadUrl) {
+        alert(data.error || 'Impossible de récupérer le rapport pour cette demande.');
+        return;
+      }
+
+      // Déclenche le téléchargement via le lien unique (qui est invalidé côté serveur dès cet appel)
+      const link = document.createElement('a');
+      link.href = data.downloadUrl;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      console.error('Erreur lors du téléchargement sécurisé du rapport :', error);
+      alert('Erreur réseau lors du téléchargement du rapport.');
+    } finally {
+      setDownloadingRequestId(null);
+    }
+  };
+
   const getStatusBadge = (status: RequestStatus) => {
     switch (status) {
       case 'brouillon': 
@@ -67,14 +100,11 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
     }
   };
 
-  /**
-   * Badge identifiant le laboratoire traitant
-   */
   const getLabBadge = (labId?: string) => {
     const labIndex = laboratories.findIndex(l => l.id === labId);
     const lab = laboratories[labIndex];
     if (!lab) return null;
-   const color = getLabColor(labIndex);
+    const color = getLabColor(labIndex);
     return (
       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border ${color.bgFade} ${color.text} ${color.borderLight}`}>
         <span className={`w-2 h-2 rounded-full ${color.mainBg}`} />
@@ -83,9 +113,6 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
     );
   };
 
-  /**
-   * Formatage lisible de la date
-   */
   const formatDate = (dateString: string) => {
     return new Intl.DateTimeFormat('fr-FR', { 
       day: '2-digit', 
@@ -134,7 +161,6 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
       {/* 2. Contenu principal */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
         
-        {/* Titre & Action de création */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
           <div>
             <h1 className="text-2xl font-display font-bold text-slate-900">Vos Demandes d'Analyses & d'Expertises</h1>
@@ -263,55 +289,64 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-slate-200">
-                  {filteredRequests.map((req) => (
-                    <tr key={req.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="text-sm font-semibold text-slate-900 font-mono">{req.id}</span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {getLabBadge(req.labId)}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm font-semibold text-slate-900">{req.title}</div>
-                        <div className="text-xs text-slate-500 mt-0.5">
-                          {allRequestTemplates.find(t => t.id === req.templateId)?.name || 'Formulaire personnalisé'}
-                        </div>
-                        {req.status === 'rejetee' && req.rejectionReason && (
-                          <div className="text-xs text-red-700 mt-1.5 p-2 bg-red-50 rounded-lg border border-red-200">
-                            <strong>Motif du rejet :</strong> {req.rejectionReason}
+                  {filteredRequests.map((req) => {
+                    const isReportAvailable = req.status === 'terminee' || hasReportForRequest(req.id);
+                    return (
+                      <tr key={req.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className="text-sm font-semibold text-slate-900 font-mono">{req.id}</span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {getLabBadge(req.labId)}
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm font-semibold text-slate-900">{req.title}</div>
+                          <div className="text-xs text-slate-500 mt-0.5">
+                            {allRequestTemplates.find(t => t.id === req.templateId)?.name || 'Formulaire personnalisé'}
                           </div>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
-                        {formatDate(req.createdAt)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {getStatusBadge(req.status)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <div className="flex items-center justify-end gap-3">
-                          {req.status === 'terminee' && (
-                            <button className="inline-flex items-center gap-1.5 text-emerald-600 hover:text-emerald-800 font-semibold text-xs bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200 transition-colors">
-                              <Download className="w-3.5 h-3.5" /> Rapport
-                            </button>
+                          {req.status === 'rejetee' && req.rejectionReason && (
+                            <div className="text-xs text-red-700 mt-1.5 p-2 bg-red-50 rounded-lg border border-red-200">
+                              <strong>Motif du rejet :</strong> {req.rejectionReason}
+                            </div>
                           )}
-                          <button 
-                            onClick={() => setEditingRequest(req)} 
-                            className="text-blue-600 hover:text-blue-800 font-semibold text-xs underline"
-                          >
-                            {req.status === 'rejetee' || req.status === 'brouillon' ? 'Modifier' : 'Voir'}
-                          </button>
-                          <button
-                            onClick={() => { setDuplicateRequest(req); setIsNewModalOpen(true); }}
-                            className="text-slate-400 hover:text-slate-600 transition-colors"
-                            title="Dupliquer la demande"
-                          >
-                            <Copy className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                          {formatDate(req.createdAt)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {getStatusBadge(isReportAvailable ? 'terminee' : req.status)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                          <div className="flex items-center justify-end gap-3">
+                            {isReportAvailable && (
+                              <button
+                                onClick={() => handleDownloadRequestReport(req.id)}
+                                disabled={downloadingRequestId === req.id}
+                                className="inline-flex items-center gap-1.5 text-emerald-700 hover:text-emerald-900 font-semibold text-xs bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg border border-emerald-200 transition-colors cursor-pointer disabled:opacity-50"
+                                title="Générer un lien sécurisé à usage unique et télécharger le rapport"
+                              >
+                                <Download className={`w-3.5 h-3.5 ${downloadingRequestId === req.id ? 'animate-bounce' : ''}`} />
+                                {downloadingRequestId === req.id ? 'Lien sécurisé...' : 'Rapport'}
+                              </button>
+                            )}
+                            <button 
+                              onClick={() => setEditingRequest(req)} 
+                              className="text-blue-600 hover:text-blue-800 font-semibold text-xs underline"
+                            >
+                              {req.status === 'rejetee' || req.status === 'brouillon' ? 'Modifier' : 'Voir'}
+                            </button>
+                            <button
+                              onClick={() => { setDuplicateRequest(req); setIsNewModalOpen(true); }}
+                              className="text-slate-400 hover:text-slate-600 transition-colors"
+                              title="Dupliquer la demande"
+                            >
+                              <Copy className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -319,7 +354,6 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
         </div>
       </main>
 
-      {/* Modales de création et modification */}
       <NewRequestModal isOpen={isNewModalOpen} onClose={() => { setIsNewModalOpen(false); setDuplicateRequest(null); }} initialRequest={duplicateRequest || undefined} />
       {editingRequest && (
         <EditRequestModal 

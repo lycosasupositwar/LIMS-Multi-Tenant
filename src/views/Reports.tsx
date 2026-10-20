@@ -12,7 +12,6 @@ import Docxtemplater from "docxtemplater";
 // @ts-ignore
 import PizZip from "pizzip";
 import { saveAs } from "file-saver";
-import { jsPDF } from "jspdf";
 
 export function Reports() {
   const { 
@@ -35,7 +34,6 @@ export function Reports() {
   const [autoDownloadPdf, setAutoDownloadPdf] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
-  const [isSavingReport, setIsSavingReport] = useState(false);
 
   const [isCertModalOpen, setIsCertModalOpen] = useState(false);
   const [certSelectedSample, setCertSelectedSample] = useState("");
@@ -43,7 +41,7 @@ export function Reports() {
   const [isGeneratingCert, setIsGeneratingCert] = useState(false);
 
   /**
-   * Envoie et stocke physiquement le rapport généré dans le dossier sécurisé du serveur (storage/reports/)
+   * Envoie et stocke physiquement un rapport Word/PDF dans le dossier sécurisé du serveur (storage/reports/)
    */
   const uploadReportToStorage = async (
     reportId: string,
@@ -65,102 +63,6 @@ export function Reports() {
       console.error('Erreur lors du dépôt du rapport dans le dossier serveur :', e);
     }
     return undefined;
-  };
-
-  /**
-   * Génère un PDF vectoriel standard (Base64) lorsqu'aucun modèle Word (.docx) n'est sélectionné
-   */
-  const buildGenericPdfBase64 = (reportId: string, req: any, client: any, linkedSamples: any[], reqAnalyses: any[]): string => {
-    const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
-    let y = 20;
-
-    // En-tête Laboratoire
-    pdf.setFillColor(15, 39, 71);
-    pdf.rect(0, 0, 210, 34, 'F');
-    pdf.setTextColor(255, 255, 255);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setFontSize(15);
-    pdf.text(labSettings?.labName || 'LIMS Laboratoire', 15, 15);
-    pdf.setFont('helvetica', 'normal');
-    pdf.setFontSize(9);
-    pdf.text(labSettings?.labAddress || '', 15, 22);
-    pdf.text(`${labSettings?.contactEmail || ''}  |  ${labSettings?.phone || ''}`, 15, 28);
-
-    y = 46;
-    pdf.setTextColor(15, 23, 42);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setFontSize(14);
-    pdf.text(`RAPPORT D'ESSAIS N° ${reportId}`, 15, y);
-    y += 8;
-
-    pdf.setFontSize(10);
-    pdf.setFont('helvetica', 'normal');
-    pdf.text(`Demande associée : ${req.id} - ${req.title}`, 15, y);
-    y += 6;
-    pdf.text(`Client / Demandeur : ${client?.name || 'N/A'} (${client?.company || 'Interne'})`, 15, y);
-    y += 6;
-    pdf.text(`Date d'émission : ${new Date().toLocaleDateString('fr-FR')}`, 15, y);
-    y += 10;
-
-    // Échantillons
-    pdf.setFont('helvetica', 'bold');
-    pdf.setFontSize(11);
-    pdf.text('1. Échantillons analysés', 15, y);
-    y += 6;
-    pdf.setFont('helvetica', 'normal');
-    pdf.setFontSize(9);
-
-    if (linkedSamples.length === 0) {
-      pdf.text('Aucun échantillon enregistré.', 18, y);
-      y += 6;
-    } else {
-      linkedSamples.forEach((s: any) => {
-        if (y > 270) { pdf.addPage(); y = 20; }
-        pdf.text(`• ${s.id} (Code: ${s.barcode || 'N/A'}) - État: ${s.materialState} - Projet: ${s.project || 'N/A'}`, 18, y);
-        y += 6;
-      });
-    }
-
-    y += 4;
-    pdf.setFont('helvetica', 'bold');
-    pdf.setFontSize(11);
-    pdf.text('2. Résultats des essais et analyses', 15, y);
-    y += 7;
-
-    if (reqAnalyses.length === 0) {
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(9);
-      pdf.text('Aucun résultat d\'analyse saisi pour ce dossier.', 18, y);
-    } else {
-      reqAnalyses.forEach((a: any) => {
-        if (y > 260) { pdf.addPage(); y = 20; }
-        const tpl = analysisTemplates.find((t: any) => t.id === a.templateId);
-        pdf.setFont('helvetica', 'bold');
-        pdf.setFontSize(10);
-        pdf.text(`${a.id} — ${tpl?.name || a.templateId} (Échantillon : ${a.sampleId})`, 16, y);
-        y += 5;
-        pdf.setFont('helvetica', 'normal');
-        pdf.setFontSize(9);
-        pdf.text(`Norme : ${tpl?.standardRef || 'Méthode interne'} | Opérateur : ${a.technician || 'N/A'}`, 18, y);
-        y += 5;
-
-        const entries = Object.entries(a.results || {});
-        entries.forEach(([k, v]) => {
-          const exp = tpl?.expectedResults?.find((er: any) => er.id === k);
-          if (exp?.type === 'image') return;
-          if (y > 275) { pdf.addPage(); y = 20; }
-          const label = exp?.name || k;
-          const unit = exp?.unit ? ` ${exp.unit}` : '';
-          const valStr = Array.isArray(v) ? v.join(', ') : String(v ?? '-');
-          pdf.text(`   - ${label} : ${valStr}${unit}`, 20, y);
-          y += 5;
-        });
-        y += 4;
-      });
-    }
-
-    const dataUri = pdf.output('datauristring');
-    return dataUri.split(',')[1];
   };
 
   const buildDocData = (req: any, cl: any, samps: any[], anals: any[], mgr: any) => {
@@ -402,27 +304,24 @@ export function Reports() {
   };
 
   /**
-   * Génération, téléchargement et sauvegarde automatique du rapport dans le dossier serveur storage/reports/
+   * Génération d'un rapport consolidé :
+   * - Si modèle Word (.docx) : fusionne, convertit en PDF et stocke dans storage/reports/
+   * - Si PDF standard : ouvre automatiquement ReportPreviewModal qui capture la mise en page A4
+   *   identique à l'aperçu et la stocke automatiquement dans storage/reports/
    */
   const handleGenerate = async () => {
     if (!selectedRequestId) return;
     const req = requests.find((r: any) => r.id === selectedRequestId);
     if (!req) return;
     
-    setIsSavingReport(true);
     const reportId = `RAP-${new Date().getFullYear()}-${Math.floor(Math.random() * 1000).toString().padStart(3, "0")}`;
     const linkedSamples = samples.filter((s: any) => s.requestId === selectedRequestId);
-    const client = users.find((u: any) => u.id === req.requesterId);
-    const reqAnalyses = analyses.filter((a: any) => linkedSamples.map((s: any) => s.id).includes(a.sampleId));
-    const manager = users.find((u: any) => u.role === "manager" || u.role === "admin");
-
     let storedFileName: string | undefined;
-    let finalFormat: 'PDF' | 'Word' = selectedTemplateId ? 'Word' : 'PDF';
 
-    try {
-      if (selectedTemplateId) {
-        const template = reportTemplates.find((t: any) => t.id === selectedTemplateId);
-        if (template && template.fileData) {
+    if (selectedTemplateId) {
+      const template = reportTemplates.find((t: any) => t.id === selectedTemplateId);
+      if (template && template.fileData) {
+        try {
           const base64Data = template.fileData.split(",")[1];
           const binaryString = atob(base64Data);
           const len = binaryString.length;
@@ -431,24 +330,26 @@ export function Reports() {
             bytes[i] = binaryString.charCodeAt(i);
           }
           const zip = new PizZip(bytes);
+
           const doc = new Docxtemplater(zip, {
             paragraphLoop: true,
             linebreaks: true,
             delimiters: { start: "{{", end: "}}" }, 
             nullGetter: () => "",
           });
-
+          const client = users.find((u: any) => u.id === req.requesterId);
+          const reqAnalyses = analyses.filter((a: any) => linkedSamples.map((s: any) => s.id).includes(a.sampleId));
+          const manager = users.find((u: any) => u.role === "manager" || u.role === "admin");
           const docData = buildDocData(req, client, linkedSamples, reqAnalyses, manager);
           doc.render(docData);
 
           const docxBase64 = doc.getZip().generate({ type: "base64" });
-          const outBlob = doc.getZip().generate({
+          const out = doc.getZip().generate({
             type: "blob",
             mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
           });
-          saveAs(outBlob, `Rapport_${req.id}.docx`);
+          saveAs(out, `Rapport_${req.id}.docx`);
 
-          // Tente de convertir en PDF pour le portail demandeur, sinon stocke le DOCX
           try {
             const convRes = await fetch('/api/convert-pdf', {
               method: 'POST',
@@ -458,50 +359,52 @@ export function Reports() {
             const convData = await convRes.json();
             if (convRes.ok && convData.pdfBase64) {
               storedFileName = await uploadReportToStorage(reportId, req.id, convData.pdfBase64, 'PDF');
-              finalFormat = 'PDF';
             } else {
               storedFileName = await uploadReportToStorage(reportId, req.id, docxBase64, 'Word');
             }
           } catch {
             storedFileName = await uploadReportToStorage(reportId, req.id, docxBase64, 'Word');
           }
+        } catch(e: any) {
+          console.warn(e);
+          if (e.properties && e.properties.errors instanceof Array) {
+            const errorMessages = e.properties.errors.map((err: any) => err.properties.explanation || err.message).join(", ");
+            alert("Erreur dans le modèle Word : " + errorMessages);
+          } else {
+            alert("Erreur lors de la génération du docx : " + e.message);
+          }
         }
-      } else {
-        // Génération PDF générique et stockage direct dans storage/reports/
-        const genericPdfBase64 = buildGenericPdfBase64(reportId, req, client, linkedSamples, reqAnalyses);
-        storedFileName = await uploadReportToStorage(reportId, req.id, genericPdfBase64, 'PDF');
-        finalFormat = 'PDF';
       }
-
-      const newReport: Report = {
-        id: reportId,
-        labId: req.labId,
-        title: `Rapport d'Expertise - ${req.title}`,
-        requestId: req.id,
-        sampleIds: linkedSamples.map((s: any) => s.id),
-        createdAt: new Date().toISOString(),
-        status: "genere",
-        format: finalFormat,
-        templateId: selectedTemplateId || undefined,
-        storedFileName
-      };
-
-      if (addReport) {
-        addReport(newReport);
-      }
-      setIsModalOpen(false);
-      setSelectedRequestId("");
-      setSelectedTemplateId("");
-    } catch (e: any) {
-      console.warn(e);
-      alert("Erreur lors de la génération du rapport : " + (e.message || 'Erreur inconnue'));
-    } finally {
-      setIsSavingReport(false);
     }
+    
+    const newReport: Report = {
+      id: reportId,
+      labId: req.labId,
+      title: `Rapport d'Expertise - ${req.title}`,
+      requestId: req.id,
+      sampleIds: linkedSamples.map((s: any) => s.id),
+      createdAt: new Date().toISOString(),
+      status: "genere",
+      format: selectedTemplateId ? "Word" : "PDF",
+      templateId: selectedTemplateId || undefined,
+      storedFileName
+    } as Report;
+
+    if (addReport) {
+      addReport(newReport);
+    }
+
+    setIsModalOpen(false);
+    setSelectedRequestId("");
+    setSelectedTemplateId("");
+
+    // Ouvre automatiquement l'aperçu A4 pour afficher le rapport et sauvegarder ce rendu exact sur le serveur
+    setAutoDownloadPdf(false);
+    setPreviewReport(newReport);
   };
 
   /**
-   * Pipeline de téléchargement PDF (et enregistrement dans storage/reports/ si non encore présent)
+   * Pipeline de conversion DOCX -> PDF ou déclenchement direct de l'export PDF depuis l'aperçu
    */
   const handleDownloadPDF = async (report: Report) => {
     const isDocx = !!report.templateId;
@@ -556,7 +459,6 @@ export function Reports() {
         const data = await res.json();
         
         if (data.pdfBase64) {
-          // Sauvegarde également dans le dossier serveur pour le demandeur
           await uploadReportToStorage(report.id, request?.id || '', data.pdfBase64, 'PDF');
 
           const byteCharacters = atob(data.pdfBase64);
@@ -584,20 +486,7 @@ export function Reports() {
         setDownloadingReportId(null);
       }
     } else {
-      // Sauvegarde dans storage/reports/ s'il n'était pas encore stocké sur disque
-      const linkedSamples = samples.filter((s: any) => report.sampleIds.includes(s.id));
-      const req = report.requestId
-        ? requests.find((r: any) => r.id === report.requestId)
-        : linkedSamples[0]?.requestId
-        ? requests.find((r: any) => r.id === linkedSamples[0].requestId)
-        : null;
-      if (req && !report.storedFileName) {
-        const client = users.find((u: any) => u.id === req.requesterId);
-        const reqAnalyses = analyses.filter((a: any) => report.sampleIds.includes(a.sampleId));
-        const pdfBase64 = buildGenericPdfBase64(report.id, req, client, linkedSamples, reqAnalyses);
-        void uploadReportToStorage(report.id, req.id, pdfBase64, 'PDF');
-      }
-
+      // Ouvre l'aperçu A4, sauvegarde sur le serveur et déclenche le téléchargement PDF exact
       setAutoDownloadPdf(true);
       setPreviewReport(report);
     }
@@ -979,7 +868,11 @@ export function Reports() {
 
               <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-100">
                 <p className="text-xs text-blue-800">
-                  Le rapport consolidé sera automatiquement enregistré dans le dossier sécurisé du serveur et mis à disposition du demandeur via un lien à usage unique.
+                  Le rapport consolidé inclura :<br/>
+                  - Les informations de la demande initiale<br/>
+                  - La matrice complète de tous les échantillons générés<br/>
+                  - Les résultats des analyses (Dureté, Granulométrie, BET...)<br/>
+                  - Les micrographies et images associées
                 </p>
               </div>
             </div>
@@ -990,17 +883,18 @@ export function Reports() {
               </button>
               <button 
                 onClick={handleGenerate}
-                disabled={!selectedRequestId || isSavingReport}
+                disabled={!selectedRequestId}
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 rounded-lg transition-colors shadow-sm flex items-center"
               >
                 <Settings2 className="w-4 h-4 mr-2" />
-                {isSavingReport ? "Enregistrement..." : "Générer le document"}
+                Générer le document
               </button>
             </div>
           </div>
         </div>
       )}
 
+      {/* Visualiseur de rapport complet */}
       <ReportPreviewModal 
         isOpen={!!previewReport}
         onClose={() => {

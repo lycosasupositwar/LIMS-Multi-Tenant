@@ -1,18 +1,10 @@
 /**
- * Serveur Backend Express & Passerelle API LIMS (Version Sécurisée + SMTP)
- * 
- * Ce fichier constitue le point d'entrée du serveur backend. Il expose :
- * - L'authentification par cookies de session sécurisés (JWT + HttpOnly + SameSite Lax)
- * - Une protection anti-bruteforce sur les routes sensibles
- * - Les endpoints CRUD pour les collections métier avec contrôle d'accès par rôle (RBAC)
- * - La gestion cloisonnée des habilitations utilisateurs et des demandes d'accès
- * - Le service de conversion documentaire Word -> PDF authentifié et limité en concurrence
- * - Le service de notifications par e-mail (SMTP via Nodemailer) administrable par les admins
- * - Le journal d'événements et d'erreurs système réservé aux administrateurs
+ * Serveur Backend Express & Passerelle API LIMS (Version Sécurisée + SMTP + Stockage Rapports Usage Unique)
  */
 
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
+import fs from 'fs';
 import crypto from 'crypto';
 import cookieParser from 'cookie-parser';
 import libre from 'libreoffice-convert';
@@ -147,9 +139,6 @@ async function getSmtpConfig(): Promise<SmtpConfig> {
   return DEFAULT_SMTP_CONFIG;
 }
 
-/**
- * Construit un gabarit HTML propre et professionnel pour les e-mails envoyés par le LIMS
- */
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -187,8 +176,6 @@ function buildHtmlEmailTemplate(
   color: #1e293b;
   -webkit-font-smoothing: antialiased;
 ">
-
-  <!-- Pré-en-tête affiché dans la boîte de réception -->
   <div style="
     display: none;
     max-height: 0;
@@ -203,7 +190,6 @@ function buildHtmlEmailTemplate(
     cellspacing="0" border="0" style="background-color: #f1f5f9;">
     <tr>
       <td align="center" style="padding: 36px 16px;">
-
         <table role="presentation" width="100%" cellpadding="0"
           cellspacing="0" border="0"
           style="
@@ -213,8 +199,6 @@ function buildHtmlEmailTemplate(
             border-radius: 16px;
             overflow: hidden;
           ">
-
-          <!-- En-tête -->
           <tr>
             <td style="
               padding: 28px 32px 30px;
@@ -260,7 +244,6 @@ function buildHtmlEmailTemplate(
                       letter-spacing: 1.2px;
                       text-transform: uppercase;
                     ">Notification système</div>
-
                     <h1 style="
                       margin: 14px 0 0;
                       color: #ffffff;
@@ -269,7 +252,6 @@ function buildHtmlEmailTemplate(
                       font-weight: 700;
                       letter-spacing: -0.4px;
                     ">${safeTitle}</h1>
-
                     <div style="
                       margin-top: 16px;
                       width: 44px;
@@ -284,11 +266,8 @@ function buildHtmlEmailTemplate(
               </table>
             </td>
           </tr>
-
-          <!-- Contenu principal -->
           <tr>
             <td style="padding: 32px;">
-
               ${safeRecipientName
       ? `
                     <p style="
@@ -304,7 +283,6 @@ function buildHtmlEmailTemplate(
                   `
       : ""
     }
-
               <p style="
                 margin: 0 0 14px;
                 color: #64748b;
@@ -365,11 +343,8 @@ function buildHtmlEmailTemplate(
                   </td>
                 </tr>
               </table>
-
             </td>
           </tr>
-
-          <!-- Pied de page -->
           <tr>
             <td style="
               padding: 22px 32px;
@@ -384,7 +359,6 @@ function buildHtmlEmailTemplate(
                 font-weight: 600;
                 line-height: 1.7;
               ">Notification automatique du système LIMS</p>
-
               <p style="
                 margin: 7px 0 0;
                 color: #94a3b8;
@@ -394,7 +368,6 @@ function buildHtmlEmailTemplate(
                 Cet e-mail a été généré automatiquement.
                 Merci de ne pas répondre directement à ce message.
               </p>
-
               <div style="
                 margin-top: 18px;
                 padding-top: 14px;
@@ -405,30 +378,14 @@ function buildHtmlEmailTemplate(
               ">© LIMS · Gestion de laboratoire</div>
             </td>
           </tr>
-
         </table>
-
-        <p style="
-          margin: 18px 0 0;
-          color: #94a3b8;
-          font-size: 10px;
-          line-height: 1.6;
-          text-align: center;
-        ">
-          Ce message contient des informations relatives à votre activité LIMS.
-        </p>
-
       </td>
     </tr>
   </table>
-
 </body>
 </html>`;
 }
 
-/**
- * Envoie un e-mail via le serveur SMTP configuré
- */
 async function sendMailViaSmtp(toEmail: string, subject: string, textMessage: string, recipientName?: string): Promise<boolean> {
   const config = await getSmtpConfig();
   if (!config.enabled) {
@@ -450,7 +407,7 @@ async function sendMailViaSmtp(toEmail: string, subject: string, textMessage: st
       pass: config.pass,
     } : undefined,
     tls: {
-      rejectUnauthorized: false // Permet le fonctionnement avec les relais SMTP internes d'entreprise
+      rejectUnauthorized: false
     }
   });
 
@@ -470,16 +427,12 @@ async function sendMailViaSmtp(toEmail: string, subject: string, textMessage: st
   return true;
 }
 
-/** 
- * Clé secrète pour la signature cryptographique des jetons JWT.
- */
 if (IS_PROD && !process.env.JWT_SECRET) {
   console.error('ERREUR CRITIQUE : La variable d\'environnement JWT_SECRET est obligatoire en production.');
   process.exit(1);
 }
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key-pour-le-developpement-local-uniquement';
 
-/** Options sécurisées pour le cookie de session (Protection XSS & CSRF) */
 const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: IS_PROD,
@@ -487,7 +440,6 @@ const COOKIE_OPTIONS = {
   maxAge: 24 * 60 * 60 * 1000 // 24 heures
 };
 
-/** Liste blanche des collections autorisées dans SQLite */
 const ALLOWED_COLLECTIONS = new Set([
   'laboratories',
   'notifications',
@@ -502,7 +454,6 @@ const ALLOWED_COLLECTIONS = new Set([
   'consumables'
 ]);
 
-/** Collections de configuration réservées aux managers et administrateurs en écriture */
 const MANAGER_ONLY_COLLECTIONS = new Set([
   'laboratories',
   'materialTemplates',
@@ -511,15 +462,11 @@ const MANAGER_ONLY_COLLECTIONS = new Set([
   'reportTemplates'
 ]);
 
-/** Collections accessibles en écriture par un demandeur externe */
 const REQUESTER_WRITABLE_COLLECTIONS = new Set([
   'requests',
   'notifications'
 ]);
 
-/**
- * Extension de la requête Express pour inclure les données de l'utilisateur authentifié
- */
 interface AuthRequest extends Request {
   user?: {
     id: string;
@@ -551,10 +498,6 @@ function checkRateLimit(key: string, maxAttempts: number, windowMs: number): boo
   return true;
 }
 
-/**
- * Middleware d'authentification vérifiant la validité du cookie JWT
- * ET l'existence / les droits actuels de l'utilisateur en base de données.
- */
 const authenticate = async (req: AuthRequest, res: Response, next: NextFunction) => {
   const token = req.cookies.token;
   if (!token) return res.status(401).json({ error: 'Non authentifié' });
@@ -579,14 +522,10 @@ const authenticate = async (req: AuthRequest, res: Response, next: NextFunction)
   }
 };
 
-/**
- * Démarre et configure l'application Express ainsi que les bases de données.
- */
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // En-têtes de sécurité HTTP de base
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
@@ -594,11 +533,9 @@ async function startServer() {
     next();
   });
 
-  // Configuration des analyseurs de corps de requête et des cookies
   app.use(express.json({ limit: '50mb' }));
   app.use(cookieParser());
 
-  // Journalisation automatique des erreurs d'API (4xx et 5xx)
   app.use((req, res, next) => {
     const start = Date.now();
     res.on('finish', () => {
@@ -613,7 +550,6 @@ async function startServer() {
     next();
   });
 
-  // Initialisation des schémas SQLite (utilisateurs et collections LIMS)
   await initDb();
   await initLimsDb();
 
@@ -637,9 +573,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  /**
-   * Récupère la configuration SMTP (Admin uniquement, mot de passe masqué)
-   */
   app.get('/api/admin/smtp', authenticate, async (req: AuthRequest, res) => {
     if (req.user?.role !== 'admin') {
       return res.status(403).json({ error: 'Accès réservé aux administrateurs.' });
@@ -652,9 +585,6 @@ async function startServer() {
     });
   });
 
-  /**
-   * Sauvegarde la configuration SMTP (Admin uniquement)
-   */
   app.post('/api/admin/smtp', authenticate, async (req: AuthRequest, res) => {
     if (req.user?.role !== 'admin') {
       return res.status(403).json({ error: 'Accès réservé aux administrateurs.' });
@@ -669,7 +599,6 @@ async function startServer() {
         port: Number(port) || 587,
         secure: Boolean(secure),
         user: typeof user === 'string' ? user.trim() : current.user,
-        // Conserve le mot de passe existant si l'admin n'a pas saisi un nouveau mot de passe
         pass: (typeof pass === 'string' && pass !== '••••••••' && pass !== '') ? pass : (pass === '' ? '' : current.pass),
         fromName: typeof fromName === 'string' ? fromName.trim() : current.fromName,
         fromEmail: typeof fromEmail === 'string' ? fromEmail.trim() : current.fromEmail,
@@ -684,9 +613,6 @@ async function startServer() {
     }
   });
 
-  /**
-   * Envoie un e-mail de test pour valider les paramètres SMTP (Admin uniquement)
-   */
   app.post('/api/admin/smtp/test', authenticate, async (req: AuthRequest, res) => {
     if (req.user?.role !== 'admin') {
       return res.status(403).json({ error: 'Accès réservé aux administrateurs.' });
@@ -741,10 +667,6 @@ async function startServer() {
     }
   });
 
-  /**
-   * Endpoint appelé automatiquement par le Frontend lors de chaque création de notification
-   * pour envoyer la notification par e-mail à l'utilisateur concerné.
-   */
   app.post('/api/notifications/send-email', authenticate, async (req: AuthRequest, res) => {
     try {
       const { userId, title, message } = req.body;
@@ -770,9 +692,6 @@ async function startServer() {
   // 1. Endpoints Sécurisés pour les Collections
   // ==========================================
 
-  /**
-   * Récupère le contenu d'une collection métier sérialisée avec filtrage selon le rôle
-   */
   app.get('/api/db/:collection', authenticate, async (req: AuthRequest, res) => {
     try {
       const { collection } = req.params;
@@ -785,16 +704,38 @@ async function startServer() {
         return res.json(data || null);
       }
 
-      // Filtrage de confidentialité pour les demandeurs externes
+      // Filtrage strict de confidentialité pour les demandeurs externes
       if (req.user?.role === 'demandeur') {
         if (collection === 'requests') {
           return res.json(data.filter((r: any) => r.requesterId === req.user?.id));
+        }
+        if (collection === 'samples') {
+          const allRequests = ((await getCollection('requests')) as any[]) || [];
+          const myReqIds = new Set(allRequests.filter(r => r.requesterId === req.user?.id).map(r => r.id));
+          return res.json(data.filter((s: any) => s.requestId && myReqIds.has(s.requestId)));
+        }
+        if (collection === 'reports') {
+          const allRequests = ((await getCollection('requests')) as any[]) || [];
+          const allSamples = ((await getCollection('samples')) as any[]) || [];
+          const myReqIds = new Set(allRequests.filter(r => r.requesterId === req.user?.id).map(r => r.id));
+          return res.json(
+            data.filter((rep: any) => {
+              if (rep.requestId && myReqIds.has(rep.requestId)) return true;
+              if (Array.isArray(rep.sampleIds)) {
+                return rep.sampleIds.some((sId: string) => {
+                  const s = allSamples.find((samp: any) => samp.id === sId);
+                  return s && s.requestId && myReqIds.has(s.requestId);
+                });
+              }
+              return false;
+            })
+          );
         }
         if (collection === 'notifications') {
           return res.json(data.filter((n: any) => n.userId === req.user?.id));
         }
         if (collection === 'consumables') {
-          return res.json([]); // Les clients externes n'ont pas à voir les stocks internes
+          return res.json([]);
         }
       }
 
@@ -805,9 +746,6 @@ async function startServer() {
     }
   });
 
-  /**
-   * Sauvegarde ou met à jour une collection métier avec contrôle d'accès (RBAC & Multi-Tenant)
-   */
   app.post('/api/db/:collection', authenticate, async (req: AuthRequest, res) => {
     try {
       const { collection } = req.params;
@@ -821,18 +759,15 @@ async function startServer() {
         return res.status(400).json({ error: 'Format de données invalide (tableau attendu)' });
       }
 
-      // 1. Protection des collections de configuration (CMS & Laboratoires)
       if (MANAGER_ONLY_COLLECTIONS.has(collection) && user.role !== 'manager' && user.role !== 'admin') {
         return res.status(403).json({ error: 'Seul un manager peut modifier la configuration CMS.' });
       }
 
-      // 2. Restriction stricte pour les demandeurs externes
       if (user.role === 'demandeur') {
         if (!REQUESTER_WRITABLE_COLLECTIONS.has(collection)) {
           return res.status(403).json({ error: 'Action non autorisée pour le profil demandeur.' });
         }
 
-        // Fusion sécurisée : un demandeur ne peut pas écraser ou supprimer les données des autres clients
         const existingData = (await getCollection(collection)) || [];
         if (collection === 'requests') {
           const otherUsersRequests = existingData.filter((r: any) => r.requesterId !== user.id);
@@ -840,7 +775,6 @@ async function startServer() {
             .filter((r: any) => r.requesterId === user.id)
             .map((r: any) => {
               const prev = existingData.find((ex: any) => ex.id === r.id);
-              // Empêche un demandeur de s'auto-valider une demande côté client
               if (prev && prev.status !== r.status && r.status !== 'soumise') {
                 return { ...r, status: prev.status };
               }
@@ -851,7 +785,6 @@ async function startServer() {
         }
       }
 
-      // 3. Protection Multi-Tenant pour le personnel rattaché à un laboratoire spécifique
       if ((user.role === 'analyste' || user.role === 'manager') && user.labId && user.labId !== 'all') {
         if (collection !== 'laboratories' && collection !== 'notifications') {
           const existingData = (await getCollection(collection)) || [];
@@ -874,9 +807,6 @@ async function startServer() {
   // 2. Authentification & Gestion des Sessions
   // ==========================================
 
-  /**
-   * Connexion utilisateur : vérifie les identifiants avec protection anti-bruteforce
-   */
   app.post('/api/auth/login', async (req, res) => {
     try {
       const ip = req.ip || 'unknown';
@@ -923,17 +853,11 @@ async function startServer() {
     }
   });
 
-  /**
-   * Déconnexion : suppression du cookie de session
-   */
   app.post('/api/auth/logout', (req, res) => {
     res.clearCookie('token', COOKIE_OPTIONS);
     res.json({ success: true });
   });
 
-  /**
-   * Vérification de la session active
-   */
   app.get('/api/auth/me', authenticate, async (req: AuthRequest, res) => {
     res.json({ user: req.user });
   });
@@ -942,20 +866,15 @@ async function startServer() {
   // 3. Administration des Utilisateurs
   // ==========================================
 
-  /**
-   * Liste les utilisateurs (filtrée selon le rôle de l'appelant)
-   */
   app.get('/api/users', authenticate, async (req: AuthRequest, res) => {
     try {
       const caller = req.user!;
       const users = await getUsers();
 
-      // Un demandeur externe n'a pas accès à l'annuaire des utilisateurs et clients
       if (caller.role === 'demandeur') {
         return res.json([caller]);
       }
 
-      // Un analyste ou manager rattaché à un labo voit uniquement son labo, la direction et les demandeurs
       if (caller.role !== 'admin' && caller.labId && caller.labId !== 'all') {
         const filtered = users.filter(u => !u.labId || u.labId === 'all' || u.labId === caller.labId);
         return res.json(filtered);
@@ -968,9 +887,6 @@ async function startServer() {
     }
   });
 
-  /**
-   * Création d'un nouvel utilisateur (avec prévention d'escalade de privilèges et notification e-mail)
-   */
   app.post('/api/users', authenticate, async (req: AuthRequest, res) => {
     try {
       const caller = req.user!;
@@ -983,7 +899,6 @@ async function startServer() {
         return res.status(400).json({ error: 'Données invalides (le mot de passe doit contenir au moins 8 caractères).' });
       }
 
-      // Seul un admin peut créer un autre admin
       const allowedRoles = caller.role === 'admin'
         ? ['demandeur', 'analyste', 'manager', 'admin']
         : ['demandeur', 'analyste', 'manager'];
@@ -992,7 +907,6 @@ async function startServer() {
         return res.status(403).json({ error: 'Vous n\'êtes pas autorisé à attribuer ce rôle.' });
       }
 
-      // Un manager lié à un laboratoire ne peut pas créer du personnel interne pour un autre laboratoire
       const enforcedLabId = (caller.role === 'manager' && caller.labId && caller.labId !== 'all' && role !== 'demandeur')
         ? caller.labId
         : labId;
@@ -1006,7 +920,6 @@ async function startServer() {
 
       console.info(`Nouvel utilisateur créé : ${email} (${role}) par ${caller.email}`);
 
-      // Envoi automatique des identifiants par e-mail si SMTP est activé
       sendMailViaSmtp(
         email.trim(),
         'Création de votre compte LIMS',
@@ -1025,9 +938,6 @@ async function startServer() {
   // 4. Gestion des Mots de Passe & Réinitialisation
   // ==========================================
 
-  /**
-   * Changement de mot de passe autonome par l'utilisateur connecté
-   */
   app.post('/api/auth/change-password', authenticate, async (req: AuthRequest, res) => {
     try {
       const { currentPassword, newPassword } = req.body;
@@ -1050,9 +960,6 @@ async function startServer() {
     }
   });
 
-  /**
-   * Demande de réinitialisation de mot de passe oublié (envoi via SMTP si actif)
-   */
   app.post('/api/auth/forgot-password', async (req, res) => {
     try {
       const ip = req.ip || 'unknown';
@@ -1070,14 +977,12 @@ async function startServer() {
         return res.json({ success: true, message: 'Si l\'email existe, un code a été envoyé.' });
       }
 
-      // Génération cryptographiquement sûre d'un code à 6 chiffres
       const code = crypto.randomInt(100000, 1000000).toString();
-      const expiry = Date.now() + 15 * 60 * 1000; // Valable 15 minutes
+      const expiry = Date.now() + 15 * 60 * 1000;
 
       await createResetToken(email.trim(), code, expiry);
       otpFailedAttempts.delete(email.trim());
 
-      // Envoi réel via SMTP si configuré
       sendMailViaSmtp(
         email.trim(),
         'Code de réinitialisation de votre mot de passe',
@@ -1096,9 +1001,6 @@ async function startServer() {
     }
   });
 
-  /**
-   * Validation du code reçu avec révocation automatique au bout de 3 échecs
-   */
   app.post('/api/auth/reset-password', async (req, res) => {
     try {
       const ip = req.ip || 'unknown';
@@ -1119,7 +1021,6 @@ async function startServer() {
         return res.status(400).json({ error: 'Code invalide ou expiré' });
       }
 
-      // Protection contre le bruteforce du code à 6 chiffres (max 3 essais)
       if (resetRecord.token !== code) {
         const attempts = (otpFailedAttempts.get(cleanEmail) || 0) + 1;
         otpFailedAttempts.set(cleanEmail, attempts);
@@ -1219,14 +1120,10 @@ async function startServer() {
   // 6. Service de Conversion Word vers PDF (Authentifié & Isolé)
   // ==========================================
 
-  /** Cache mémoire temporaire rattaché à l'utilisateur qui a généré le PDF */
   const tempPdfs = new Map<string, { buffer: Buffer; timestamp: number; ownerId: string; labId?: string | null }>();
   let activePdfConversions = 0;
   const MAX_CONCURRENT_CONVERSIONS = 2;
 
-  /**
-   * Visualisation d'un PDF temporaire (authentification et contrôle propriétaire requis)
-   */
   app.get('/api/temp-pdf/:id', authenticate, (req: AuthRequest, res) => {
     const pdf = tempPdfs.get(req.params.id);
     if (!pdf) return res.status(404).send('Document PDF introuvable ou expiré');
@@ -1244,9 +1141,6 @@ async function startServer() {
     res.send(pdf.buffer);
   });
 
-  /**
-   * Conversion Word (.docx) vers PDF (authentifiée et protégée contre la saturation CPU/RAM)
-   */
   app.post('/api/convert-pdf', authenticate, async (req: AuthRequest, res) => {
     if (activePdfConversions >= MAX_CONCURRENT_CONVERSIONS) {
       return res.status(503).json({ error: 'Service de conversion occupé, veuillez réessayer dans quelques secondes.' });
@@ -1259,7 +1153,6 @@ async function startServer() {
       }
 
       const docxBuf = Buffer.from(docxBase64, 'base64');
-      // Vérification minimale de la signature ZIP/DOCX (PK\x03\x04) et de la taille (max 15 Mo)
       if (docxBuf.length > 15 * 1024 * 1024 || docxBuf.length < 4 || docxBuf[0] !== 0x50 || docxBuf[1] !== 0x4b) {
         return res.status(400).json({ error: 'Fichier DOCX invalide ou trop volumineux (max 15 Mo).' });
       }
@@ -1275,7 +1168,6 @@ async function startServer() {
         labId: req.user!.labId
       });
 
-      // Purge des fichiers temporaires conservés depuis plus d'une heure
       for (const [key, value] of tempPdfs.entries()) {
         if (Date.now() - value.timestamp > 3600000) tempPdfs.delete(key);
       }
@@ -1290,6 +1182,244 @@ async function startServer() {
     } finally {
       activePdfConversions = Math.max(0, activePdfConversions - 1);
     }
+  });
+
+  // ==========================================
+  // 6bis. Dossier Spécifique des Rapports & Téléchargement Sécurisé à Usage Unique
+  // ==========================================
+
+  const REPORTS_STORAGE_DIR = path.join(process.cwd(), 'storage', 'reports');
+  if (!fs.existsSync(REPORTS_STORAGE_DIR)) {
+    fs.mkdirSync(REPORTS_STORAGE_DIR, { recursive: true });
+  }
+
+  interface DownloadTokenData {
+    reportId: string;
+    requestId?: string;
+    filePath: string;
+    fileName: string;
+    mimeType: string;
+    userId: string;
+    expiresAt: number;
+  }
+
+  /** Registre en mémoire des liens uniques générés au clic (expirant immédiatement après téléchargement) */
+  const oneTimeDownloadTokens = new Map<string, DownloadTokenData>();
+
+  /**
+   * Enregistre physiquement le rapport généré par le laborantin ou manager dans storage/reports/
+   */
+  app.post('/api/reports/upload', authenticate, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      if (user.role === 'demandeur') {
+        return res.status(403).json({ error: 'Seul un membre du laboratoire peut publier un rapport.' });
+      }
+
+      const { reportId, requestId, fileBase64, format } = req.body;
+      if (!reportId || !fileBase64 || typeof fileBase64 !== 'string') {
+        return res.status(400).json({ error: 'Paramètres du rapport incomplets.' });
+      }
+
+      const safeReportId = String(reportId).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const ext = format === 'Word' ? 'docx' : 'pdf';
+      const storedFileName = `${safeReportId}.${ext}`;
+      const filePath = path.join(REPORTS_STORAGE_DIR, storedFileName);
+
+      // Nettoyage d'un éventuel préfixe data:...;base64,
+      const cleanBase64 = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
+      const buffer = Buffer.from(cleanBase64, 'base64');
+      await fs.promises.writeFile(filePath, buffer);
+
+      // Mise à jour de la collection reports avec le nom du fichier enregistré
+      const reports = ((await getCollection('reports')) as any[]) || [];
+      const updatedReports = reports.map((r: any) =>
+        r.id === reportId
+          ? { ...r, storedFileName, requestId: requestId || r.requestId, status: 'genere' }
+          : r
+      );
+      await setCollection('reports', updatedReports);
+
+      console.info(`[RAPPORT STOCKÉ] Fichier ${storedFileName} enregistré dans storage/reports/ par ${user.email}`);
+      res.json({ success: true, storedFileName });
+    } catch (error) {
+      console.error('Erreur lors de la sauvegarde du fichier de rapport :', error);
+      res.status(500).json({ error: 'Impossible de sauvegarder le rapport dans le dossier serveur.' });
+    }
+  });
+
+  /**
+   * Fonction interne de vérification des droits et de création d'un jeton unique de téléchargement
+   */
+  async function createUniqueDownloadLinkForReport(report: any, user: NonNullable<AuthRequest['user']>) {
+    const requests = ((await getCollection('requests')) as any[]) || [];
+    const samples = ((await getCollection('samples')) as any[]) || [];
+
+    // Vérification stricte de confidentialité pour les demandeurs
+    if (user.role === 'demandeur') {
+      const myRequestIds = new Set(
+        requests.filter((r: any) => r.requesterId === user.id).map((r: any) => r.id)
+      );
+
+      const belongsByRequestId = report.requestId && myRequestIds.has(report.requestId);
+      const belongsBySample =
+        Array.isArray(report.sampleIds) &&
+        report.sampleIds.some((sId: string) => {
+          const s = samples.find((samp: any) => samp.id === sId);
+          return s && s.requestId && myRequestIds.has(s.requestId);
+        });
+
+      if (!belongsByRequestId && !belongsBySample) {
+        return { status: 403, error: 'Accès refusé : ce rapport est confidentiel et ne correspond pas à vos demandes.' };
+      }
+    } else if (user.role !== 'admin' && user.labId && user.labId !== 'all' && report.labId && report.labId !== user.labId) {
+      return { status: 403, error: 'Accès refusé : ce rapport appartient à un autre laboratoire.' };
+    }
+
+    const safeReportId = String(report.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+    let storedFileName = report.storedFileName;
+    let filePath = storedFileName ? path.join(REPORTS_STORAGE_DIR, storedFileName) : '';
+
+    if (!filePath || !fs.existsSync(filePath)) {
+      const pdfCandidate = path.join(REPORTS_STORAGE_DIR, `${safeReportId}.pdf`);
+      const docxCandidate = path.join(REPORTS_STORAGE_DIR, `${safeReportId}.docx`);
+      if (fs.existsSync(pdfCandidate)) {
+        filePath = pdfCandidate;
+        storedFileName = `${safeReportId}.pdf`;
+      } else if (fs.existsSync(docxCandidate)) {
+        filePath = docxCandidate;
+        storedFileName = `${safeReportId}.docx`;
+      } else {
+        return {
+          status: 404,
+          error: 'Le fichier du rapport n\'a pas encore été généré et déposé dans le dossier du serveur par le laboratoire.'
+        };
+      }
+    }
+
+    // Révoque tout ancien jeton non consommé pour ce rapport et cet utilisateur
+    for (const [oldToken, info] of oneTimeDownloadTokens.entries()) {
+      if ((info.reportId === report.id && info.userId === user.id) || Date.now() > info.expiresAt) {
+        oneTimeDownloadTokens.delete(oldToken);
+      }
+    }
+
+    const ext = storedFileName.endsWith('.docx') ? 'docx' : 'pdf';
+    const token = crypto.randomBytes(32).toString('hex');
+    const safeReqPart = report.requestId ? `_${String(report.requestId).replace(/[^a-zA-Z0-9_-]/g, '_')}` : '';
+
+    oneTimeDownloadTokens.set(token, {
+      reportId: report.id,
+      requestId: report.requestId,
+      filePath,
+      fileName: `Rapport_${safeReportId}${safeReqPart}.${ext}`,
+      mimeType:
+        ext === 'pdf'
+          ? 'application/pdf'
+          : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      userId: user.id,
+      expiresAt: Date.now() + 2 * 60 * 1000 // Expire au bout de 2 minutes ou dès le 1er téléchargement
+    });
+
+    return { status: 200, downloadUrl: `/api/reports/download/${token}` };
+  }
+
+  /**
+   * Génère un lien unique à partir de l'identifiant du rapport
+   */
+  app.post('/api/reports/:id/generate-link', authenticate, async (req: AuthRequest, res) => {
+    try {
+      const reports = ((await getCollection('reports')) as any[]) || [];
+      const report = reports.find((r: any) => r.id === req.params.id);
+      if (!report) {
+        return res.status(404).json({ error: 'Rapport introuvable.' });
+      }
+
+      const result = await createUniqueDownloadLinkForReport(report, req.user!);
+      if (result.error) {
+        return res.status(result.status).json({ error: result.error });
+      }
+      res.json({ downloadUrl: result.downloadUrl });
+    } catch (error) {
+      console.error('Erreur génération lien unique :', error);
+      res.status(500).json({ error: 'Erreur lors de la génération du lien unique.' });
+    }
+  });
+
+  /**
+   * Génère un lien unique directement à partir de l'identifiant de la demande (Portail Demandeur)
+   */
+  app.post('/api/reports/by-request/:requestId/generate-link', authenticate, async (req: AuthRequest, res) => {
+    try {
+      const { requestId } = req.params;
+      const reports = ((await getCollection('reports')) as any[]) || [];
+      const samples = ((await getCollection('samples')) as any[]) || [];
+
+      const requestSampleIds = new Set(
+        samples.filter((s: any) => s.requestId === requestId).map((s: any) => s.id)
+      );
+
+      // Recherche le rapport le plus récent associé à cette demande
+      const matchingReports = reports.filter(
+        (r: any) =>
+          r.requestId === requestId ||
+          (Array.isArray(r.sampleIds) && r.sampleIds.some((sId: string) => requestSampleIds.has(sId)))
+      );
+
+      if (matchingReports.length === 0) {
+        return res.status(404).json({ error: 'Aucun rapport n\'est encore associé à cette demande.' });
+      }
+
+      // Priorise un rapport ayant déjà son fichier stocké sur disque
+      const reportWithFile =
+        matchingReports.find((r: any) => r.storedFileName) || matchingReports[0];
+
+      const result = await createUniqueDownloadLinkForReport(reportWithFile, req.user!);
+      if (result.error) {
+        return res.status(result.status).json({ error: result.error });
+      }
+      res.json({ downloadUrl: result.downloadUrl, reportId: reportWithFile.id });
+    } catch (error) {
+      console.error('Erreur génération lien unique par demande :', error);
+      res.status(500).json({ error: 'Erreur lors de la génération du lien de téléchargement.' });
+    }
+  });
+
+  /**
+   * Route de téléchargement consommant et détruisant immédiatement le jeton unique
+   */
+  app.get('/api/reports/download/:token', authenticate, async (req: AuthRequest, res) => {
+    const { token } = req.params;
+    const tokenData = oneTimeDownloadTokens.get(token);
+
+    if (!tokenData) {
+      return res.status(410).send('Ce lien de téléchargement à usage unique a déjà été utilisé ou est invalide.');
+    }
+
+    // Destruction immédiate du jeton dès sa première utilisation
+    oneTimeDownloadTokens.delete(token);
+
+    if (Date.now() > tokenData.expiresAt) {
+      return res.status(410).send('Ce lien de téléchargement a expiré. Veuillez cliquer à nouveau sur le bouton Rapport.');
+    }
+
+    if (tokenData.userId !== req.user!.id) {
+      console.warn(`[SÉCURITÉ] Tentative d'utilisation d'un jeton de téléchargement tiers par ${req.user!.email}`);
+      return res.status(403).send('Accès interdit : ce lien unique est lié à un autre utilisateur.');
+    }
+
+    if (!fs.existsSync(tokenData.filePath)) {
+      return res.status(404).send('Le fichier physique du rapport est introuvable sur le serveur.');
+    }
+
+    console.info(`[TÉLÉCHARGEMENT SÉCURISÉ] Rapport ${tokenData.reportId} téléchargé par ${req.user!.email} (jeton consommé)`);
+
+    res.setHeader('Content-Type', tokenData.mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${tokenData.fileName}"`);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+
+    const stream = fs.createReadStream(tokenData.filePath);
+    stream.pipe(res);
   });
 
   // ==========================================

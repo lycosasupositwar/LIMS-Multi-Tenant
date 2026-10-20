@@ -1,22 +1,10 @@
 /**
  * Vue Suivi des Analyses & Essais Métallurgiques (Analyses)
- * 
- * Cette vue gère l'exécution technique, la saisie des mesures et la validation des essais :
- * 1. Double vue de travail : "En cours" (essais actifs) vs "Historique" (essais validés / terminés)
- * 2. Organisation flexible : vue unitaire ou regroupement hiérarchique par dossier de demande
- * 3. Formulaires dynamiques de saisie basés sur les modèles CMS :
- *    - Numérique simple avec unités (ex: Dureté HV10, Rm en MPa)
- *    - Séries de mesures répétées avec calcul en temps réel de la Moyenne et de l'Écart-type
- *    - Sélecteurs simples et multisélection (ex: Type d'inclusions, microstructure)
- *    - Booléens de conformité visuelle
- *    - Dépôt de micrographies optiques
- * 4. Cycle de validation 4-yeux (Planifié -> En cours -> À valider -> Validé / Rejeté)
- * 5. Piste d'audit intégrée pour chaque analyse (historique horodaté des valeurs)
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLims } from '../store';
-import { Search, Filter, Microscope, Check, UploadCloud, Image as ImageIcon, Plus, X, Lock } from 'lucide-react';
+import { Search, Microscope, Check, UploadCloud, Image as ImageIcon, Plus, X, Lock } from 'lucide-react';
 import { AnalysisStatus, ExpectedResult } from '../types';
 
 export function Analyses() {
@@ -29,10 +17,10 @@ export function Analyses() {
     addAnalysisImage, 
     samples, 
     requests, 
-    globalSearchQuery 
+    globalSearchQuery,
+    setGlobalSearchQuery
   } = useLims();
 
-  // États de recherche, d'affichage et de regroupement
   const [searchTerm, setSearchTerm] = useState('');
   const [showAuditFor, setShowAuditFor] = useState<string | null>(null);
   const [groupBy, setGroupBy] = useState<'none' | 'request'>('none');
@@ -41,10 +29,31 @@ export function Analyses() {
   const isManager = (currentUser?.role === 'manager' || currentUser?.role === 'admin');
 
   /**
-   * Filtrage des analyses selon l'état d'activité, la recherche textuelle et les liens dossiers
+   * Synchronise automatiquement l'onglet ('actives' vs 'historique') et fait défiler jusqu'à l'analyse
+   * lorsqu'un manager clique sur une notification ciblant un essai (ex: ESS-26-0612).
    */
+  useEffect(() => {
+    if (!globalSearchQuery) return;
+    const q = globalSearchQuery.trim().toLowerCase();
+    const targetAnalysis = analyses.find(
+      a => a.id.toLowerCase() === q || (a.sampleId && a.sampleId.toLowerCase() === q)
+    );
+    if (targetAnalysis) {
+      if (targetAnalysis.status === 'valide' || targetAnalysis.status === 'termine' || targetAnalysis.status === 'rejete') {
+        setFilterMode('historique');
+      } else {
+        setFilterMode('actives');
+      }
+      setTimeout(() => {
+        const el = document.getElementById(`analysis-card-${targetAnalysis.id}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
+    }
+  }, [globalSearchQuery, analyses]);
+
   const filteredAnalyses = analyses.filter(a => {
-    // Filtrage principal : en-cours vs historique
     if (filterMode === 'actives' && (a.status === 'valide' || a.status === 'termine' || a.status === 'rejete')) {
       return false;
     }
@@ -52,20 +61,19 @@ export function Analyses() {
       return false;
     }
 
-    // Masquage des essais rattachés à des dossiers déjà clôturés
     const sample = samples.find(s => s.id === a.sampleId);
     if (filterMode === 'actives' && sample && sample.requestId) {
       const request = requests.find(r => r.id === sample.requestId);
-      if (request && (request.status === 'terminee' || request.status === 'rejetee')) {
+      // Si l'utilisateur recherche spécifiquement cette analyse via notification, on ne la masque pas
+      const isDirectlyTargeted = globalSearchQuery && a.id.toLowerCase() === globalSearchQuery.trim().toLowerCase();
+      if (!isDirectlyTargeted && request && (request.status === 'terminee' || request.status === 'rejetee')) {
         return false;
       }
     }
 
-    // Recherche textuelle sur l'identifiant et l'échantillon
     const matchesSearch = a.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           (a.sampleId && a.sampleId.toLowerCase().includes(searchTerm.toLowerCase()));
     
-    // Recherche globale transversale
     if (globalSearchQuery) {
       const template = analysisTemplates.find(t => t.id === a.templateId);
       const q = globalSearchQuery.toLowerCase();
@@ -79,9 +87,6 @@ export function Analyses() {
     return matchesSearch;
   });
 
-  /**
-   * Rendu visuel du badge de statut d'analyse
-   */
   const getStatusBadge = (status: AnalysisStatus) => {
     switch (status) {
       case 'planifie': 
@@ -99,9 +104,6 @@ export function Analyses() {
     }
   };
 
-  /**
-   * Ajout simulé d'une micrographie optique pour documenter l'essai
-   */
   const handleMockImageUpload = (analysisId: string, resultId: string) => {
     const mockImages = [
       'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&q=80&w=400',
@@ -113,14 +115,9 @@ export function Analyses() {
     addAnalysisImage(analysisId, randomImg);
   };
 
-  /**
-   * Rendu dynamique du champ de saisie selon le type attendu dans le modèle CMS
-   */
   const renderInputForResult = (analysisId: string, resultTemplate: ExpectedResult, currentValue: any, status: AnalysisStatus) => {
-    // Verrouillage de la saisie selon le rôle et le statut
     const disabled = (!isManager && (status === 'a_valider' || status === 'valide' || status === 'termine')) || (isManager && status === 'termine');
     
-    // Type Image Micrographique
     if (resultTemplate.type === 'image') {
       return (
         <div className="flex items-center gap-2 mt-2">
@@ -142,7 +139,6 @@ export function Analyses() {
       );
     }
     
-    // Type Liste Déroulante Simple
     if (resultTemplate.type === 'select') {
       return (
         <div className="flex items-center gap-2 mt-1">
@@ -162,7 +158,6 @@ export function Analyses() {
       );
     }
 
-    // Type Sélection Multiple
     if (resultTemplate.type === 'multiselect') {
       const currentValues = Array.isArray(currentValue) ? currentValue : [];
       return (
@@ -194,7 +189,6 @@ export function Analyses() {
       );
     }
 
-    // Type Série de Mesures avec Calculs Statistiques (Moyenne, Écart-Type)
     if (resultTemplate.type === 'number_series') {
       const currentValues = Array.isArray(currentValue) ? currentValue : (currentValue ? [currentValue] : []);
       const numValues = currentValues.map(v => Number(v)).filter(v => !isNaN(v));
@@ -258,7 +252,6 @@ export function Analyses() {
       );
     }
 
-    // Type Booléen (Conforme / Non Conforme)
     if (resultTemplate.type === 'boolean') {
       return (
         <div className="flex items-center gap-2 mt-2">
@@ -276,7 +269,6 @@ export function Analyses() {
       );
     }
     
-    // Type Numérique ou Texte Simple
     return (
       <div className="flex items-center gap-2 mt-1">
         <input 
@@ -292,18 +284,22 @@ export function Analyses() {
     );
   };
 
-  /**
-   * Rendu de la liste des cartes d'essais individuelles
-   */
   const renderAnalysesList = (analysesList: typeof analyses) => {
     return analysesList.map((analysis) => {
       const template = analysisTemplates.find(t => t.id === analysis.templateId);
       if (!template) return null;
       
       const isAnalysisLocked = (!isManager && (analysis.status === 'a_valider' || analysis.status === 'valide' || analysis.status === 'termine')) || (isManager && analysis.status === 'termine');
+      const isHighlighted = globalSearchQuery && analysis.id.toLowerCase() === globalSearchQuery.trim().toLowerCase();
 
       return (
-        <li key={analysis.id} className="p-4 sm:p-6 hover:bg-slate-50/30 transition-colors">
+        <li
+          key={analysis.id}
+          id={`analysis-card-${analysis.id}`}
+          className={`p-4 sm:p-6 transition-colors ${
+            isHighlighted ? 'bg-amber-50/40 ring-2 ring-inset ring-amber-300' : 'hover:bg-slate-50/30'
+          }`}
+        >
           <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-6">
             {/* Colonne de gauche : Métadonnées de l'essai */}
             <div className="flex items-start flex-1">
@@ -311,7 +307,10 @@ export function Analyses() {
                 <Microscope className="h-5 w-5 text-indigo-600" />
               </div>
               <div className="ml-4">
-                <div className="flex items-center gap-3 mb-1">
+                <div className="flex flex-wrap items-center gap-2.5 mb-1">
+                  <span className="font-mono text-xs font-bold bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded">
+                    {analysis.id}
+                  </span>
                   <h3 className="text-base font-bold text-slate-900">{template.name}</h3>
                   {getStatusBadge(analysis.status)}
                 </div>
@@ -328,8 +327,6 @@ export function Analyses() {
             
             {/* Colonne de droite : Saisie des résultats et contrôle du workflow */}
             <div className="flex flex-col sm:flex-row gap-6 xl:justify-end xl:w-3/5">
-              
-              {/* Matrice de saisie des résultats */}
               <div className="flex-1 bg-slate-50 rounded-lg border border-slate-200 p-4 relative">
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Saisie des résultats</h4>
@@ -409,7 +406,6 @@ export function Analyses() {
               </div>
             </div>
 
-            {/* Volet déroulant d'audit trail individuel */}
             {showAuditFor === analysis.id && analysis.auditTrail && (
               <div className="mt-4 p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs text-slate-600 w-full xl:w-3/5 xl:ml-auto">
                 <h5 className="font-bold mb-2">Historique des modifications</h5>
@@ -435,7 +431,6 @@ export function Analyses() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h2 className="text-2xl font-display font-bold text-slate-900">Suivi des Analyses & Essais</h2>
         
-        {/* Sélecteur d'onglet d'état */}
         <div className="flex bg-white rounded-lg p-1 border border-slate-200 shrink-0">
           <button
             onClick={() => setFilterMode('actives')}
@@ -452,8 +447,21 @@ export function Analyses() {
         </div>
       </div>
 
+      {globalSearchQuery && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5 flex items-center justify-between text-xs text-blue-800">
+          <span>
+            Filtre actif sur : <strong className="font-mono">{globalSearchQuery}</strong>
+          </span>
+          <button
+            onClick={() => setGlobalSearchQuery('')}
+            className="font-semibold text-blue-700 hover:underline"
+          >
+            Afficher toutes les analyses
+          </button>
+        </div>
+      )}
+
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
-        {/* Barre d'outils et sélecteur de regroupement */}
         <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row gap-4 justify-between items-center bg-slate-50/50">
           <div className="relative w-full sm:max-w-md">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -480,7 +488,6 @@ export function Analyses() {
           </div>
         </div>
 
-        {/* Affichage des essais selon le mode de groupement sélectionné */}
         {groupBy === 'none' ? (
           <ul className="divide-y divide-slate-200">
             {filteredAnalyses.length === 0 ? (

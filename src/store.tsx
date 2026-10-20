@@ -32,6 +32,12 @@ import {
   initialReportTemplates
 } from './data';
 
+interface NotificationMeta {
+  targetTab?: string;
+  targetId?: string;
+  labId?: string;
+}
+
 interface LimsContextType {
   globalSearchQuery: string;
   setGlobalSearchQuery: (query: string) => void;
@@ -52,7 +58,7 @@ interface LimsContextType {
 
   notifications: Notification[];
   markNotificationAsRead: (id: string) => void;
-  addNotification: (userId: string, title: string, message: string, type?: 'system' | 'email') => void;
+  addNotification: (userId: string, title: string, message: string, type?: 'system' | 'email', meta?: NotificationMeta) => void;
 
   materialTemplates: MaterialTemplate[];
   analysisTemplates: AnalysisTemplate[];
@@ -302,10 +308,15 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const reports = useMemo(() => {
     if (isRequester) {
       const myRequestIds = new Set(requests.map(r => r.id));
-      return rawReports.filter(r => r.requestId && myRequestIds.has(r.requestId));
+      const mySampleIds = new Set(samples.map(s => s.id));
+      return rawReports.filter(
+        r =>
+          (r.requestId && myRequestIds.has(r.requestId)) ||
+          (Array.isArray(r.sampleIds) && r.sampleIds.some(sId => mySampleIds.has(sId)))
+      );
     }
     return rawReports.filter(r => r.labId === activeLabId);
-  }, [rawReports, isRequester, requests, activeLabId]);
+  }, [rawReports, isRequester, requests, samples, activeLabId]);
 
   const consumables = useMemo(() => {
     return rawConsumables.filter(c => c.labId === activeLabId);
@@ -349,28 +360,16 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   /**
-   * Ajoute une notification dans l'application ET déclenche systématiquement
-   * l'envoi d'un e-mail au destinataire via le serveur SMTP configuré.
+   * Ajoute une notification enrichie (targetTab, targetId, labId) dans l'application
+   * ET déclenche l'envoi d'un e-mail au destinataire via le serveur SMTP configuré.
    */
-
   const addNotification = (
     userId: string,
     title: string,
     message: string,
-    type: 'system' | 'email' = 'email'
+    type: 'system' | 'email' = 'email',
+    meta?: NotificationMeta
   ) => {
-
-    console.trace('[addNotification] Appel', {
-      userId,
-      title,
-      message,
-      type,
-      timestamp: new Date().toISOString()
-    });
-
-
-
-    // La notification est toujours enregistrée dans le système.
     const newNotif: Notification = {
       id: `NOTIF-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       userId,
@@ -378,13 +377,14 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       message,
       read: false,
       createdAt: new Date().toISOString(),
-      type
+      type,
+      targetTab: meta?.targetTab,
+      targetId: meta?.targetId,
+      labId: meta?.labId
     };
 
     setNotifications(prev => [newNotif, ...prev]);
 
-    // Le canal e-mail est indépendant de la notification interne.
-    // Les appels de type "system" ne déclenchent pas de mail.
     if (type === 'email') {
       void (async () => {
         try {
@@ -400,7 +400,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
             })
           });
 
-          // Lire la réponse même en cas d'erreur HTTP
           const data = await res.json().catch(() => ({}));
 
           if (!res.ok) {
@@ -415,25 +414,14 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
           }
 
           if (data.sent === true) {
-            console.info(
-              `[Notification Mail] E-mail envoyé avec succès pour ${userId}`
-            );
-          } else {
-            console.warn(
-              `[Notification Mail] Envoi non confirmé pour ${userId}`,
-              data
-            );
+            console.info(`[Notification Mail] E-mail envoyé avec succès pour ${userId}`);
           }
         } catch (error) {
-          console.error(
-            `[Notification Mail] Erreur réseau pour ${userId}`,
-            error
-          );
+          console.error(`[Notification Mail] Erreur réseau pour ${userId}`, error);
         }
       })();
     }
   };
-
 
   const markNotificationAsRead = (id: string) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
@@ -498,16 +486,30 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setRequests(prev => [newReq, ...prev]);
 
     const labManagers = users.filter(u => (u.role === 'manager') && (u.labId === targetLabId || u.labId === 'all' || !u.labId));
-    labManagers.forEach(m => addNotification(m.id, 'Nouvelle demande d\'analyse', `La demande ${request.id} ("${request.title}") a été soumise par ${currentUser?.name || 'un client'}.`, 'email'));
+    labManagers.forEach(m =>
+      addNotification(
+        m.id,
+        'Nouvelle demande d\'analyse',
+        `La demande ${request.id} ("${request.title}") a été soumise par ${currentUser?.name || 'un client'}.`,
+        'email',
+        { targetTab: 'requests', targetId: request.id, labId: targetLabId }
+      )
+    );
   };
 
   const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comment?: string) => {
     const reqToUpdate = rawRequests.find(r => r.id === id);
     if (reqToUpdate) {
       if (status === 'validee' || status === 'En Validation' || status === 'terminee') {
-      addNotification(reqToUpdate.requesterId, `Mise à jour de votre demande ${reqToUpdate.id}`, `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) est passée au statut : ${status}.${comment ? `\nCommentaire : ${comment}` : ''}`, 'email');
+        addNotification(
+          reqToUpdate.requesterId,
+          `Mise à jour de votre demande ${reqToUpdate.id}`,
+          `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) est passée au statut : ${status}.${comment ? `\nCommentaire : ${comment}` : ''}`,
+          'email',
+          { targetTab: 'requests', targetId: reqToUpdate.id, labId: reqToUpdate.labId }
+        );
+      }
     }
-  }
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
         const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}.${comment ? ` Raison : ${comment}` : ''}`);
@@ -520,7 +522,13 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const rejectRequest = (id: string, reason: string) => {
     const reqToUpdate = rawRequests.find(r => r.id === id);
     if (reqToUpdate) {
-      addNotification(reqToUpdate.requesterId, `Demande ${reqToUpdate.id} refusée`, `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a été refusée.\nMotif : ${reason}`, 'email');
+      addNotification(
+        reqToUpdate.requesterId,
+        `Demande ${reqToUpdate.id} refusée`,
+        `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a été refusée.\nMotif : ${reason}`,
+        'email',
+        { targetTab: 'requests', targetId: reqToUpdate.id, labId: reqToUpdate.labId }
+      );
     }
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
@@ -535,7 +543,15 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     const reqToUpdate = rawRequests.find(r => r.id === id);
     if (reqToUpdate) {
       const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === reqToUpdate.labId || u.labId === 'all' || !u.labId));
-      labManagers.forEach(m => addNotification(m.id, `Demande ${reqToUpdate.id} resoumise`, `La demande ${reqToUpdate.id} ("${reqToUpdate.title}") a été corrigée et resoumise par le client.`, 'email'));
+      labManagers.forEach(m =>
+        addNotification(
+          m.id,
+          `Demande ${reqToUpdate.id} resoumise`,
+          `La demande ${reqToUpdate.id} ("${reqToUpdate.title}") a été corrigée et resoumise par le client.`,
+          'email',
+          { targetTab: 'requests', targetId: reqToUpdate.id, labId: reqToUpdate.labId }
+        )
+      );
     }
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
@@ -551,8 +567,20 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     if (reqToUpdate) {
       const analyst = users.find(u => u.id === analystId);
       if (analystId) {
-        addNotification(analystId, `Nouvelle assignation (${reqToUpdate.id})`, `La demande ${reqToUpdate.id} ("${reqToUpdate.title}") vous a été assignée pour réalisation des essais.`, 'email');
-        addNotification(reqToUpdate.requesterId, `Demande ${reqToUpdate.id} prise en charge`, `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a été assignée à notre équipe technique (${analyst?.name || 'Analyste'}).`, 'email');
+        addNotification(
+          analystId,
+          `Nouvelle assignation (${reqToUpdate.id})`,
+          `La demande ${reqToUpdate.id} ("${reqToUpdate.title}") vous a été assignée pour réalisation des essais.`,
+          'email',
+          { targetTab: 'requests', targetId: reqToUpdate.id, labId: reqToUpdate.labId }
+        );
+        addNotification(
+          reqToUpdate.requesterId,
+          `Demande ${reqToUpdate.id} prise en charge`,
+          `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a été assignée à notre équipe technique (${analyst?.name || 'Analyste'}).`,
+          'email',
+          { targetTab: 'requests', targetId: reqToUpdate.id, labId: reqToUpdate.labId }
+        );
       }
     }
 
@@ -613,7 +641,15 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       const a = rawAnalyses.find(analysis => analysis.id === id);
       if (a) {
         const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === a.labId || u.labId === 'all' || !u.labId));
-        labManagers.forEach(m => addNotification(m.id, `Analyse ${a.id} à valider`, `L'analyse ${a.id} sur l'échantillon ${a.sampleId} est prête pour validation technique.`, 'email'));
+        labManagers.forEach(m =>
+          addNotification(
+            m.id,
+            `Analyse ${a.id} à valider`,
+            `L'analyse ${a.id} sur l'échantillon ${a.sampleId} est prête pour validation technique.`,
+            'email',
+            { targetTab: 'analyses', targetId: a.id, labId: a.labId }
+          )
+        );
       }
     }
 
@@ -663,18 +699,44 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const addReport = (report: Report) => {
-    const item = { ...report, labId: report.labId || activeLabId };
+    // Résolution automatique du requestId à partir des échantillons liés s'il n'est pas fourni
+    let resolvedRequestId = report.requestId;
+    if (!resolvedRequestId && Array.isArray(report.sampleIds) && report.sampleIds.length > 0) {
+      const sampleWithReq = rawSamples.find(s => report.sampleIds.includes(s.id) && s.requestId);
+      if (sampleWithReq?.requestId) {
+        resolvedRequestId = sampleWithReq.requestId;
+      }
+    }
+
+    const item: Report = {
+      ...report,
+      requestId: resolvedRequestId,
+      labId: report.labId || activeLabId
+    };
     setReports(prev => [item, ...prev]);
 
-    // Notifie automatiquement le client par e-mail lorsque son rapport est généré
-    if (item.requestId) {
-      const parentReq = rawRequests.find(r => r.id === item.requestId);
+    // Passe automatiquement la demande parente au statut 'terminee' et notifie le client
+    if (resolvedRequestId) {
+      const parentReq = rawRequests.find(r => r.id === resolvedRequestId);
       if (parentReq) {
+        if (parentReq.status !== 'terminee') {
+          setRequests(prev =>
+            prev.map(r => {
+              if (r.id === resolvedRequestId) {
+                const audit = createAuditLog('Rapport généré', `Rapport ${item.id} publié et mis à disposition du demandeur.`);
+                return { ...r, status: 'terminee', auditTrail: [audit, ...(r.auditTrail || [])] };
+              }
+              return r;
+            })
+          );
+        }
+
         addNotification(
           parentReq.requesterId,
           `Nouveau rapport disponible (${item.id})`,
-          `Le rapport d'analyse "${item.title}" (${item.id}) concernant votre demande ${parentReq.id} a été publié et est disponible sur votre espace client.`,
-          'email'
+          `Le rapport d'analyse "${item.title}" (${item.id}) concernant votre demande ${parentReq.id} a été publié et est disponible au téléchargement sur votre espace client.`,
+          'email',
+          { targetTab: 'reports', targetId: item.id, labId: item.labId }
         );
       }
     }
@@ -702,7 +764,8 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
           m.id,
           `Alerte Stock Bas : ${c.name}`,
           `Le niveau de stock pour "${c.name}" est passé sous le seuil minimal (${newLevel} ${c.unit} restants, seuil fixé à ${c.minThreshold} ${c.unit}).`,
-          'email'
+          'email',
+          { targetTab: 'inventory', targetId: c.id, labId: c.labId }
         ));
       }
     }

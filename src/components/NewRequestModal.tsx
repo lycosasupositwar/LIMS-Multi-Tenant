@@ -12,6 +12,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Building2, Layers, CheckCircle2 } from 'lucide-react';
 import { useLims } from '../store';
 import { AnalysisRequest } from '../types';
+import { getLabColor } from '../utils/colors';
 
 interface Props {
   /** État d'ouverture de la modale */

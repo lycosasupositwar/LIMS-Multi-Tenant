@@ -33,6 +33,7 @@ export function NewRequestModal({ isOpen, onClose }: Props) {
   // Laboratoire sélectionné pour la demande (par défaut le lab actif ou le premier disponible)
   const [selectedLabId, setSelectedLabId] = useState<string>(activeLabId || laboratories[0]?.id || '');
   
+  
   // Modèles de formulaires disponibles pour le laboratoire choisi
   const labTemplates = allRequestTemplates.filter(t => t.labId === selectedLabId && t.isActive !== false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
@@ -118,27 +119,23 @@ export function NewRequestModal({ isOpen, onClose }: Props) {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {laboratories.map((lab, index) => {
                   const isSelected = lab.id === selectedLabId;
-                  const isPrimary = index % 2 === 0;
+                  const color = getLabColor(index);
                   return (
                     <div
                       key={lab.id}
                       onClick={() => setSelectedLabId(lab.id)}
                       className={`p-3.5 rounded-xl border-2 transition-all cursor-pointer flex flex-col justify-between ${
                         isSelected 
-                          ? isPrimary 
-                            ? 'border-blue-600 bg-blue-50/50 ring-2 ring-blue-100' 
-                            : 'border-emerald-600 bg-emerald-50/50 ring-2 ring-emerald-100'
+                          ? `${color.borderDark} ${color.bgFade} ${color.ring}`
                           : 'border-slate-200 bg-white hover:border-slate-300'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-1.5">
                         <div className="flex items-center gap-2">
-                          <Building2 className={`w-4 h-4 ${isPrimary ? 'text-blue-600' : 'text-emerald-600'}`} />
+                          <Building2 className={`w-4 h-4 ${color.main}`} />
                           <span className="font-bold text-sm text-slate-900">{lab.shortName}</span>
                         </div>
-                        <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                          isPrimary ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'
-                        }`}>
+                        <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${color.light} ${color.text}`}>
                           {lab.code}
                         </span>
                       </div>

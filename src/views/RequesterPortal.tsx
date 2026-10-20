@@ -13,6 +13,7 @@ import React, { useState } from 'react';
 import { useLims } from '../store';
 import { Plus, Clock, FileText, CheckCircle, Package, AlertCircle, Settings as SettingsIcon, Building2, Filter, Download } from 'lucide-react';
 import { RequestStatus, AnalysisRequest } from '../types';
+import { getLabColor } from '../utils/colors';
 import { NewRequestModal } from '../components/NewRequestModal';
 import { EditRequestModal } from '../components/EditRequestModal';
 
@@ -68,12 +69,10 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
     const labIndex = laboratories.findIndex(l => l.id === labId);
     const lab = laboratories[labIndex];
     if (!lab) return null;
-    const isPrimary = labIndex % 2 === 0;
+   const color = getLabColor(labIndex);
     return (
-      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border ${
-        isPrimary ? 'bg-blue-50 text-blue-800 border-blue-200' : 'bg-emerald-50 text-emerald-800 border-emerald-200'
-      }`}>
-        <span className={`w-2 h-2 rounded-full ${isPrimary ? 'bg-blue-600' : 'bg-emerald-600'}`} />
+      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border ${color.bgFade} ${color.text} ${color.borderLight}`}>
+        <span className={`w-2 h-2 rounded-full ${color.mainBg}`} />
         {lab.shortName} <span className="font-mono opacity-70">[{lab.code}]</span>
       </span>
     );
@@ -102,10 +101,10 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
               </div>
               <div>
                 <span className="font-display font-bold text-lg text-slate-900 block leading-tight">
-                  Portail Client Unifié
+                  Portail Demandeur
                 </span>
                 <span className="text-xs text-slate-500">
-                  {currentUser?.company || 'Espace Donneur d\'Ordre'} &bull; Multi-Laboratoires
+                  {currentUser?.company || 'Espace Demandeur'} &bull; Multi-Laboratoires
                 </span>
               </div>
             </div>
@@ -135,7 +134,7 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
           <div>
             <h1 className="text-2xl font-display font-bold text-slate-900">Vos Demandes d'Analyses & d'Expertises</h1>
             <p className="text-sm text-slate-500 mt-1">
-              Guichet unique pour déposer et suivre vos dossiers auprès de nos deux laboratoires spécialisés.
+              Plateforme unique pour déposer et suivre vos dossiers auprès de nos laboratoires spécialisés.
             </p>
           </div>
           <button 
@@ -164,22 +163,22 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
           </div>
 
           {laboratories.map((lab, index) => {
-            const isPrimary = index % 2 === 0;
+            const color = getLabColor(index);
             return (
               <div 
                 key={lab.id}
                 onClick={() => setSelectedLabFilter(lab.id)}
                 className={`p-4 rounded-xl border transition-all cursor-pointer ${
                   selectedLabFilter === lab.id 
-                    ? (isPrimary ? 'bg-blue-50/50 border-blue-500 ring-2 ring-blue-100 shadow-sm' : 'bg-emerald-50/50 border-emerald-500 ring-2 ring-emerald-100 shadow-sm') 
+                    ? `${color.bgFade} ${color.borderDark} ${color.ring} shadow-sm`
                     : 'bg-white border-slate-200 hover:border-slate-300'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className={`text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 ${isPrimary ? 'text-blue-700' : 'text-emerald-700'}`}>
-                    <span className={`w-2 h-2 rounded-full ${isPrimary ? 'bg-blue-600' : 'bg-emerald-600'}`} /> {lab.name}
+                   <span className={`text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 ${color.main}`}>
+                    <span className={`w-2 h-2 rounded-full ${color.mainBg}`} /> {lab.name}
                   </span>
-                  <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${isPrimary ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                  <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${color.light} ${color.text}`}>
                     {lab.code}
                   </span>
                 </div>

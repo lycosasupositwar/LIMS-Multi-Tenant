@@ -12,6 +12,7 @@ import React, { ReactNode, useState } from 'react';
 import { LayoutDashboard, Box, Activity, FileText, Settings, Bell, Search, User, Blocks, LogOut, Archive, Building2, ChevronDown, Check } from 'lucide-react';
 import * as motion from 'motion/react-client';
 import { useLims } from '../store';
+import { getLabColor } from '../utils/colors';
 
 /**
  * Propriétés attendues par le composant Layout
@@ -117,14 +118,12 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
         <div className="px-4 py-2.5 border-b border-slate-200 bg-slate-50">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 overflow-hidden">
-              <span className={`w-2 h-2 rounded-full shrink-0 ${laboratories.findIndex(l => l.id === activeLab.id) % 2 === 0 ? 'bg-blue-600' : 'bg-emerald-600'}`} />
+               <span className={`w-2 h-2 rounded-full shrink-0 ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).mainBg}`} />
               <span className="text-xs font-bold text-slate-800 truncate" title={activeLab.name}>
                 {activeLab.shortName}
               </span>
             </div>
-            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${
-              laboratories.findIndex(l => l.id === activeLab.id) % 2 === 0 ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'
-            }`}>
+            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).light} ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).text}`}>
               {activeLab.code}
             </span>
           </div>
@@ -207,18 +206,13 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
             <button
               type="button"
               onClick={() => setIsLabMenuOpen(!isLabMenuOpen)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold shadow-xs transition-all ${
-                laboratories.findIndex(l => l.id === activeLab.id) % 2 === 0
-                  ? 'bg-blue-50 border-blue-200 text-blue-800 hover:bg-blue-100'
-                  : 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
-              }`}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold shadow-xs transition-all ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).hoverBgLight} ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).borderLight} ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).text}`}
             >
+            
               <Building2 className="w-3.5 h-3.5 flex-shrink-0" />
               <span className="hidden sm:inline font-medium">{activeLab.name}</span>
               <span className="sm:hidden font-mono">[{activeLab.code}]</span>
-              <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${
-                laboratories.findIndex(l => l.id === activeLab.id) % 2 === 0 ? 'bg-blue-200/70 text-blue-900' : 'bg-emerald-200/70 text-emerald-900'
-              }`}>
+             <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).activeBg} ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).activeText}`}>
                 {activeLab.code}
               </span>
               <ChevronDown className="w-3.5 h-3.5 ml-0.5 opacity-60" />
@@ -230,7 +224,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
                 <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-40">
                   <div className="px-3 py-2 border-b border-slate-100 mb-1">
                     <p className="text-xs font-bold text-slate-900 uppercase tracking-wider">Instances Laboratoires</p>
-                    <p className="text-[11px] text-slate-500">Chaque instance dispose de son CMS, ses essais, son personnel et ses consommables.</p>
+                    <p className="text-[11px] text-slate-500">Chaque laboratoire dispose de son espace dédié, ses essais, son personnel et ses consommables.</p>
                   </div>
                   <div className="space-y-1">
                     {laboratories.filter(lab => {
@@ -256,7 +250,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
                         >
                           <div>
                             <div className="flex items-center gap-1.5 font-bold text-slate-800">
-                              <span className={`w-2 h-2 rounded-full shrink-0 ${index % 2 === 0 ? 'bg-blue-600' : 'bg-emerald-600'}`} />
+                              <span className={`w-2 h-2 rounded-full shrink-0 ${getLabColor(index).mainBg}`} />
                               <span>{lab.name}</span>
                               <span className="text-[10px] text-slate-400 font-mono">[{lab.code}]</span>
                             </div>

@@ -1,16 +1,16 @@
 /**
  * Fenêtre Modale de Visualisation et d'Export de Rapport d'Essai
  * 
- * Ce composant prend en charge la génération et l'affichage des rapports finaux :
+ * Ce composant prend en charge la génération, l'affichage et l'archivage serveur des rapports finaux :
  * 1. Mode Modèle Word (.docx) :
  *    - Remplacement des variables contextuelles avec Docxtemplater
  *    - Conversion côté serveur en PDF haute fidélité via LibreOffice
- *    - Affichage dans le visualiseur PDF intégré (PdfViewer)
- *    - Téléchargement du DOCX fusionné ou du PDF converti
- * 2. Mode Modèle Standard HTML :
- *    - Rendu d'une mise en page A4 normée (En-tête laboratoire, informations projet,
+ *    - Enregistrement automatique dans le dossier sécurisé storage/reports/
+ * 2. Mode Modèle Standard HTML A4 :
+ *    - Rendu de la mise en page A4 normée (En-tête laboratoire, informations projet,
  *      matrice des échantillons, résultats détaillés, clichés microstructures, conclusion)
- *    - Export PDF via html2pdf et impression directe
+ *    - Capture haute définition (dom-to-image-more + jsPDF) et sauvegarde automatique
+ *      dans le dossier serveur storage/reports/ pour mise à disposition du demandeur.
  */
 
 import React, { useRef, useEffect, useState } from "react";
@@ -25,9 +25,6 @@ import Docxtemplater from "docxtemplater";
 import PizZip from "pizzip";
 import { PdfViewer } from "./PdfViewer";
 
-/**
- * Propriétés attendues par le composant de prévisualisation de rapport
- */
 interface ReportPreviewModalProps {
   /** État de visibilité de la modale */
   isOpen: boolean;
@@ -69,7 +66,9 @@ export function ReportPreviewModal({
   const [previewPdfBase64, setPreviewPdfBase64] = useState<string | null>(null);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [isSavedOnServer, setIsSavedOnServer] = useState(false);
   const pdfRef = useRef<HTMLDivElement>(null);
+  const autoSavedReportIdRef = useRef<string | null>(null);
 
   /**
    * Formatage français des dates
@@ -106,12 +105,84 @@ export function ReportPreviewModal({
   const isDocx = !!(template && template.fileData);
 
   /**
+   * Envoie le fichier PDF (en Base64) au serveur pour stockage dans le dossier sécurisé storage/reports/
+   */
+  const savePdfToServerStorage = async (pdfBase64: string) => {
+    if (!report) return;
+    try {
+      const res = await fetch('/api/reports/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reportId: report.id,
+          requestId: request?.id || report.requestId,
+          fileBase64: pdfBase64,
+          format: 'PDF',
+          title: report.title
+        })
+      });
+      if (res.ok) {
+        setIsSavedOnServer(true);
+      }
+    } catch (e) {
+      console.error('Erreur lors de la sauvegarde automatique du rapport sur le serveur :', e);
+    }
+  };
+
+  /**
+   * Génère l'objet jsPDF exactement à partir de l'aperçu HTML A4 (`pdfRef`)
+   */
+  const buildPdfFromHtmlPreview = async (): Promise<jsPDF | null> => {
+    const element = pdfRef.current;
+    if (!element) return null;
+
+    const scale = 2;
+    const imgData = await domtoimage.toJpeg(element, {
+      quality: 0.98,
+      bgcolor: '#ffffff',
+      width: element.clientWidth * scale,
+      height: element.clientHeight * scale,
+      style: {
+        transform: `scale(${scale})`,
+        transformOrigin: 'top left',
+        width: `${element.clientWidth}px`,
+        height: `${element.clientHeight}px`,
+      },
+    });
+
+    const pdf = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4'
+    });
+
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = (element.clientHeight * pdfWidth) / element.clientWidth;
+    const pageHeight = pdf.internal.pageSize.getHeight();
+
+    let heightLeft = pdfHeight;
+    let position = 0;
+    let isFirstPage = true;
+
+    while (heightLeft > 0) {
+      if (!isFirstPage) {
+        pdf.addPage();
+      }
+      pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pdfHeight);
+      heightLeft -= pageHeight;
+      position -= pageHeight;
+      isFirstPage = false;
+    }
+
+    return pdf;
+  };
+
+  /**
    * Construit la structure de données complète injectée dans le moteur de gabarit Word
    */
   const getDocData = () => {
     const todayFormatted = new Intl.DateTimeFormat("fr-FR").format(new Date());
 
-    // Construction des objets d'analyses avec statistiques
     const analysesData = reportAnalyses.map((a: any) => {
       const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
       
@@ -130,7 +201,6 @@ export function ReportPreviewModal({
         }))
       };
       
-      // Extraction dynamique des séries de mesures (ex: dureté vickers répétée)
       const sanitizeKey = (str: string) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
       const series_resultats: any[] = [];
       
@@ -194,7 +264,6 @@ export function ReportPreviewModal({
       return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
     };
 
-    // Regroupement des séries de mesures par paramètre
     reportAnalyses.forEach((a: any) => {
         const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
         if (!t) return;
@@ -215,7 +284,6 @@ export function ReportPreviewModal({
         });
     });
 
-    // Génération du XML Word OpenXML pour les tableaux de séries
     Object.values(seriesGroups).forEach(group => {
         let maxVals = 0;
         group.rows.forEach(r => { if (r.valeurs.length > maxVals) maxVals = r.valeurs.length; });
@@ -245,7 +313,6 @@ export function ReportPreviewModal({
     const tables_analyses: any[] = [];
     const analysesGroups: Record<string, { templateName: string, columns: any[], rows: any[] }> = {};
     
-    // Regroupement des analyses par modèle standard
     reportAnalyses.forEach((a: any) => {
         const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
         if (!t) return;
@@ -316,7 +383,6 @@ export function ReportPreviewModal({
       "echantillon.projet": reportSamples[0]?.project || "N/A",
       "manager.nom": manager?.name || "Responsable non défini",
       
-      // Variables textuelles simples
       "analyse.nom": analysesData[0]?.nom || "Aucune analyse",
       "analyse.norme": analysesData[0]?.norme || "N/A",
       "analyse.technicien": analysesData.find(a => a.technicien && a.technicien !== 'Non assigné')?.technicien || users.find(u => u.id === request?.assignedTo)?.name || analysesData[0]?.technicien || "Non défini",
@@ -328,7 +394,6 @@ export function ReportPreviewModal({
         }).join("\n");
       }).join("\n---\n") : "Aucun résultat",
       
-      // Variables hiérarchiques et sous-objets
       demande: { 
         id: request?.id || "N/A",
         custom: Object.fromEntries(
@@ -365,8 +430,10 @@ export function ReportPreviewModal({
 
   /**
    * Effet déclenchant la conversion du modèle DOCX en PDF lors de l'ouverture
+   * et sa sauvegarde automatique dans storage/reports/
    */
   useEffect(() => {
+    setIsSavedOnServer(false);
     if (isDocx && report?.templateId) {
       const currentTemplate = reportTemplates?.find((t: any) => t.id === report.templateId);
       if (currentTemplate && currentTemplate.fileData) {
@@ -392,7 +459,6 @@ export function ReportPreviewModal({
           doc.render(docData);
           const out = doc.getZip().generate({ type: "base64" });
           
-          // Appel de l'API de conversion LibreOffice
           fetch('/api/convert-pdf', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -403,6 +469,9 @@ export function ReportPreviewModal({
             if (data.pdfUrl) {
               setPreviewPdfUrl(data.pdfUrl);
               setPreviewPdfBase64(data.pdfBase64);
+              if (data.pdfBase64) {
+                void savePdfToServerStorage(data.pdfBase64);
+              }
             } else if (data.error) {
               setDocxError("Erreur API de conversion : " + data.error);
             }
@@ -428,17 +497,31 @@ export function ReportPreviewModal({
   }, [report, isDocx]);
 
   /**
-   * Déclenchement automatique du téléchargement PDF si demandé depuis le tableau des rapports
+   * Sauvegarde automatique en arrière-plan du rendu A4 HTML exact dans storage/reports/
+   * dès que la modale d'aperçu est affichée (pour que le demandeur ait exactement ce rapport).
    */
   useEffect(() => {
-    if (isOpen && report && autoDownload && !isDocx) {
-      const timer = setTimeout(() => {
-        generatePDF().finally(() => {
+    if (!isOpen || !report || isDocx) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        if (autoDownload) {
+          await generatePDF();
           if (onAutoDownloadComplete) onAutoDownloadComplete();
-        });
-      }, 350);
-      return () => clearTimeout(timer);
-    }
+        } else if (autoSavedReportIdRef.current !== report.id) {
+          const pdf = await buildPdfFromHtmlPreview();
+          if (pdf) {
+            const pdfBase64 = pdf.output('datauristring').split(',')[1];
+            await savePdfToServerStorage(pdfBase64);
+            autoSavedReportIdRef.current = report.id;
+          }
+        }
+      } catch (e) {
+        console.error('Erreur lors de la capture PDF automatique :', e);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
   }, [isOpen, report, autoDownload, isDocx]);
 
   /**
@@ -505,13 +588,15 @@ export function ReportPreviewModal({
   };
 
   /**
-   * Téléchargement du fichier PDF généré
+   * Téléchargement du fichier PDF généré ET enregistrement dans storage/reports/
    */
   const generatePDF = async () => {
     if (!report) return;
 
     if (isDocx && report.templateId) {
       if (previewPdfBase64) {
+        await savePdfToServerStorage(previewPdfBase64);
+
         const byteCharacters = atob(previewPdfBase64);
         const byteNumbers = new Array(byteCharacters.length);
         for (let i = 0; i < byteCharacters.length; i++) {
@@ -531,57 +616,26 @@ export function ReportPreviewModal({
         alert("Veuillez patienter pendant la génération de l'aperçu PDF.");
       }
     } else {
-      const element = pdfRef.current;
-      if (!element) {
+      if (!pdfRef.current) {
         alert("Aperçu non disponible pour la conversion PDF.");
         return;
       }
 
       setIsDownloadingPdf(true);
       try {
-        const scale = 2;
-        const imgData = await domtoimage.toJpeg(element, {
-          quality: 0.98,
-          bgcolor: '#ffffff',
-          width: element.clientWidth * scale,
-          height: element.clientHeight * scale,
-          style: {
-            transform: `scale(${scale})`,
-            transformOrigin: 'top left',
-            width: `${element.clientWidth}px`,
-            height: `${element.clientHeight}px`,
-          },
-        });
+        const pdf = await buildPdfFromHtmlPreview();
+        if (pdf) {
+          // 1. Enregistre exactement ce PDF dans storage/reports/ pour le portail demandeur
+          const pdfBase64 = pdf.output('datauristring').split(',')[1];
+          await savePdfToServerStorage(pdfBase64);
+          autoSavedReportIdRef.current = report.id;
 
-        const pdf = new jsPDF({
-          orientation: 'portrait',
-          unit: 'mm',
-          format: 'a4'
-        });
-
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (element.clientHeight * pdfWidth) / element.clientWidth;
-        
-        const pageHeight = pdf.internal.pageSize.getHeight();
-        let heightLeft = pdfHeight;
-        let position = 0;
-        let isFirstPage = true;
-
-        while (heightLeft > 0) {
-          if (!isFirstPage) {
-            pdf.addPage();
-          }
-          pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pdfHeight);
-          heightLeft -= pageHeight;
-          position -= pageHeight;
-          isFirstPage = false;
+          // 2. Télécharge le PDF sur le poste de l'utilisateur
+          pdf.save(`Rapport_${report.id}.pdf`);
         }
-
-        pdf.save(`Rapport_${report.id}.pdf`);
       } catch (err) {
         console.error("Erreur lors de la génération du PDF générique :", err);
         alert("La conversion directe a rencontré un problème. L'outil d'impression PDF va s'ouvrir en alternative.");
-        // Unblock UI before showing the blocking print dialog
         setTimeout(() => {
           window.print();
         }, 500);
@@ -603,7 +657,14 @@ export function ReportPreviewModal({
               <CheckCircle2 className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-slate-900">Aperçu du Rapport - {report.id}</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-bold text-slate-900">Aperçu du Rapport - {report.id}</h2>
+                {isSavedOnServer && (
+                  <span className="text-[11px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-semibold">
+                    Mis à disposition du demandeur
+                  </span>
+                )}
+              </div>
               <p className="text-sm text-slate-500">Document généré le {formatDate(report.createdAt)}</p>
             </div>
           </div>

@@ -485,20 +485,35 @@ const addRequest = async (request: AnalysisRequest) => {
   const newReq = { ...request, labId: targetLabId, auditTrail: [initialAudit] };
   setRequests(prev => [newReq, ...prev]);
 
-  // Si la liste des utilisateurs est vide, on tente de la recharger
   let currentUsers = users;
   if (currentUsers.length === 0) {
     try {
       const res = await fetch('/api/users');
-      if (res.ok) currentUsers = await res.json();
+      if (res.ok) {
+        currentUsers = await res.json();
+        setUsers(currentUsers);
+      } else {
+        console.error(`[Notification] Échec de récupération de /api/users (Statut HTTP ${res.status}) pour l'utilisateur ${currentUser?.email} [${currentUser?.role}]`);
+      }
     } catch (e) {
-      console.error('Impossible de récupérer les managers :', e);
+      console.error('[Notification] Erreur réseau sur /api/users :', e);
     }
   }
 
-  const labManagers = currentUsers.filter(
-    u => (u.role === 'manager') && (u.labId === targetLabId || u.labId === 'all' || !u.labId)
-  );
+  // Filtrage souple (insensible à la casse sur le rôle)
+  let labManagers = currentUsers.filter(u => {
+    const role = (u.role || '').toLowerCase();
+    const isManager = role === 'manager';
+    const matchesLab = !u.labId || u.labId === 'all' || u.labId === targetLabId;
+    return isManager && matchesLab;
+  });
+
+  // Fallback : si aucun manager n'a le labId exact, on prend tous les managers existants
+  if (labManagers.length === 0) {
+    labManagers = currentUsers.filter(u => (u.role || '').toLowerCase() === 'manager');
+  }
+
+  console.info(`[Notification] Création demande ${request.id} (Lab: ${targetLabId}) -> ${labManagers.length} manager(s) trouvé(s) sur ${currentUsers.length} utilisateur(s) chargé(s).`);
 
   labManagers.forEach(m =>
     addNotification(

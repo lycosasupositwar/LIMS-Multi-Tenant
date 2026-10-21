@@ -871,8 +871,12 @@ async function startServer() {
       const caller = req.user!;
       const users = await getUsers();
 
+      // MODIFICATION : Si c'est un demandeur, on lui renvoie son profil + tous les managers
       if (caller.role === 'demandeur') {
-        return res.json([caller]);
+        const allowedUsers = users.filter(u => u.id === caller.id || u.role === 'manager');
+        // On retire les mots de passe par mesure de sécurité
+        const safeUsers = allowedUsers.map(({ passwordHash, ...safe }) => safe);
+        return res.json(safeUsers);
       }
 
       if (caller.role !== 'admin' && caller.labId && caller.labId !== 'all') {
@@ -880,7 +884,8 @@ async function startServer() {
         return res.json(filtered);
       }
 
-      res.json(users);
+      const allSafeUsers = users.map(({ passwordHash, ...safe }) => safe);
+      res.json(allSafeUsers);
     } catch (error) {
       console.error('Erreur lors de la récupération des utilisateurs :', error);
       res.status(500).json({ error: 'Erreur lors de la récupération des utilisateurs' });

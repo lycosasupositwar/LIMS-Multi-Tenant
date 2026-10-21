@@ -479,45 +479,75 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setReportTemplates(prev => prev.filter(t => t.id !== id));
   };
 
-  const addRequest = (request: AnalysisRequest) => {
-    const targetLabId = request.labId || activeLabId;
-    const initialAudit = createAuditLog('Création', `Demande soumise au laboratoire [${targetLabId}]`);
-    const newReq = { ...request, labId: targetLabId, auditTrail: [initialAudit] };
-    setRequests(prev => [newReq, ...prev]);
+const addRequest = async (request: AnalysisRequest) => {
+  const targetLabId = request.labId || activeLabId;
+  const initialAudit = createAuditLog('Création', `Demande soumise au laboratoire [${targetLabId}]`);
+  const newReq = { ...request, labId: targetLabId, auditTrail: [initialAudit] };
+  setRequests(prev => [newReq, ...prev]);
 
-    const labManagers = users.filter(u => (u.role === 'manager') && (u.labId === targetLabId || u.labId === 'all' || !u.labId));
-    labManagers.forEach(m =>
-      addNotification(
-        m.id,
-        'Nouvelle demande d\'analyse',
-        `La demande ${request.id} ("${request.title}") a été soumise par ${currentUser?.name || 'un client'}.`,
-        'email',
-        { targetTab: 'requests', targetId: request.id, labId: targetLabId }
-      )
-    );
-  };
-
-  const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comment?: string) => {
-    const reqToUpdate = rawRequests.find(r => r.id === id);
-    if (reqToUpdate) {
-      if (status === 'validee' || status === 'En Validation' || status === 'terminee') {
-        addNotification(
-          reqToUpdate.requesterId,
-          `Mise à jour de votre demande ${reqToUpdate.id}`,
-          `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) est passée au statut : ${status}.${comment ? `\nCommentaire : ${comment}` : ''}`,
-          'email',
-          { targetTab: 'requests', targetId: reqToUpdate.id, labId: reqToUpdate.labId }
-        );
-      }
+  // Si la liste des utilisateurs est vide, on tente de la recharger
+  let currentUsers = users;
+  if (currentUsers.length === 0) {
+    try {
+      const res = await fetch('/api/users');
+      if (res.ok) currentUsers = await res.json();
+    } catch (e) {
+      console.error('Impossible de récupérer les managers :', e);
     }
-    setRequests(prev => prev.map(r => {
-      if (r.id === id) {
-        const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}.${comment ? ` Raison : ${comment}` : ''}`);
-        return { ...r, status, auditTrail: [audit, ...(r.auditTrail || [])] };
-      }
-      return r;
-    }));
-  };
+  }
+
+  const labManagers = currentUsers.filter(
+    u => (u.role === 'manager') && (u.labId === targetLabId || u.labId === 'all' || !u.labId)
+  );
+
+  labManagers.forEach(m =>
+    addNotification(
+      m.id,
+      'Nouvelle demande d\'analyse',
+      `La demande ${request.id} ("${request.title}") a été soumise par ${currentUser?.name || 'un client'}.`,
+      'email',
+      { targetTab: 'requests', targetId: request.id, labId: targetLabId }
+    )
+  );
+};
+
+const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comment?: string) => {
+  const reqToUpdate = rawRequests.find(r => r.id === id);
+  
+  if (reqToUpdate && reqToUpdate.status !== status) {
+    // Dictionnaire UNIQUEMENT des étapes clés qui doivent notifier le demandeur
+    // Adaptez les clés selon les valeurs exactes utilisées dans votre fichier types.ts
+    const keyStageLabels: Record<string, string> = {
+      'validee': 'Validée et prise en compte par le laboratoire',
+      'en_cours': 'Analyses en cours de réalisation',
+      'En Validation': 'Résultats en cours de validation finale',
+      'en_validation': 'Résultats en cours de validation finale',
+      'a_valider': 'Résultats en cours de validation finale',
+      'terminee': 'Terminée'
+    };
+
+    const stageLabel = keyStageLabels[status];
+
+    // On notifie uniquement si le nouveau statut fait partie des étapes clés
+    if (stageLabel) {
+      addNotification(
+        reqToUpdate.requesterId,
+        `Avancement de votre demande ${reqToUpdate.id}`,
+        `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a atteint une étape clé : ${stageLabel}.${comment ? `\nCommentaire : ${comment}` : ''}`,
+        'email',
+        { targetTab: 'requests', targetId: reqToUpdate.id, labId: reqToUpdate.labId }
+      );
+    }
+  }
+
+  setRequests(prev => prev.map(r => {
+    if (r.id === id) {
+      const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}.${comment ? ` Raison : ${comment}` : ''}`);
+      return { ...r, status, auditTrail: [audit, ...(r.auditTrail || [])] };
+    }
+    return r;
+  }));
+};
 
   const rejectRequest = (id: string, reason: string) => {
     const reqToUpdate = rawRequests.find(r => r.id === id);
@@ -542,7 +572,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const resubmitRequest = (id: string, customData: Record<string, any>) => {
     const reqToUpdate = rawRequests.find(r => r.id === id);
     if (reqToUpdate) {
-      const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === reqToUpdate.labId || u.labId === 'all' || !u.labId));
+      const labManagers = users.filter(u => (u.role === 'manager') && (u.labId === reqToUpdate.labId || u.labId === 'all' || !u.labId));
       labManagers.forEach(m =>
         addNotification(
           m.id,
@@ -636,31 +666,42 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setAnalyses(prev => [item, ...prev]);
   };
 
-  const updateAnalysisStatus = (id: string, status: Analysis['status']) => {
-    if (status === 'a_valider') {
-      const a = rawAnalyses.find(analysis => analysis.id === id);
-      if (a) {
-        const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === a.labId || u.labId === 'all' || !u.labId));
-        labManagers.forEach(m =>
-          addNotification(
-            m.id,
-            `Analyse ${a.id} à valider`,
-            `L'analyse ${a.id} sur l'échantillon ${a.sampleId} est prête pour validation technique.`,
-            'email',
-            { targetTab: 'analyses', targetId: a.id, labId: a.labId }
-          )
-        );
+const updateAnalysisStatus = (id: string, status: Analysis['status']) => {
+  const a = rawAnalyses.find(analysis => analysis.id === id);
+  if (a && status === 'a_valider') {
+    // 1. Notification aux managers (et admins)
+    const labManagers = users.filter(
+      u => (u.role === 'manager') && (u.labId === a.labId || u.labId === 'all' || !u.labId)
+    );
+    labManagers.forEach(m =>
+      addNotification(
+        m.id,
+        `Analyse ${a.id} à valider`,
+        `L'analyse ${a.id} sur l'échantillon ${a.sampleId} est prête pour validation technique.`,
+        'email',
+        { targetTab: 'analyses', targetId: a.id, labId: a.labId }
+      )
+    );
+
+    // 2. Étape clé pour le demandeur : si l'échantillon est lié à une demande
+    const sample = rawSamples.find(s => s.id === a.sampleId);
+    if (sample?.requestId) {
+      const parentReq = rawRequests.find(r => r.id === sample.requestId);
+      // On vérifie si la demande n'est pas déjà au statut "En Validation" pour ne pas spammer le demandeur
+      if (parentReq && parentReq.status !== 'En Validation') {
+        updateRequestStatus(parentReq.id, 'En Validation' as AnalysisRequest['status']);
       }
     }
+  }
 
-    setAnalyses(prev => prev.map(a => {
-      if (a.id === id) {
-        const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}`);
-        return { ...a, status, updatedAt: new Date().toISOString(), auditTrail: [audit, ...(a.auditTrail || [])] };
-      }
-      return a;
-    }));
-  };
+  setAnalyses(prev => prev.map(analysis => {
+    if (analysis.id === id) {
+      const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}`);
+      return { ...analysis, status, updatedAt: new Date().toISOString(), auditTrail: [audit, ...(analysis.auditTrail || [])] };
+    }
+    return analysis;
+  }));
+};
 
   const updateAnalysisResult = (id: string, resultId: string, value: any) => {
     setAnalyses(prev => prev.map(a => {
@@ -759,7 +800,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     const c = rawConsumables.find(cons => cons.id === id);
     if (c) {
       if (newLevel <= c.minThreshold && c.stockLevel > c.minThreshold) {
-        const labManagers = users.filter(u => (u.role === 'manager' || u.role === 'admin') && (u.labId === c.labId || u.labId === 'all' || !u.labId));
+        const labManagers = users.filter(u => (u.role === 'manager') && (u.labId === c.labId || u.labId === 'all' || !u.labId));
         labManagers.forEach(m => addNotification(
           m.id,
           `Alerte Stock Bas : ${c.name}`,

@@ -16,21 +16,21 @@ import { FileText, Clock, User, CheckCircle, Shield, AlertCircle, PlayCircle, Hi
 import { RequestStatus, AnalysisRequest, MaterialState, Sample } from '../types';
 
 export function RequestsInternal() {
-  const { 
-    currentUser, 
-    requests, 
-    users, 
-    requestTemplates, 
-    materialTemplates, 
-    analysisTemplates, 
-    assignRequest, 
-    updateRequestStatus, 
-    rejectRequest, 
-    addSample, 
-    addAnalysis, 
-    updateRequestData, 
-    samples, 
-    analyses, 
+  const {
+    currentUser,
+    requests,
+    users,
+    requestTemplates,
+    materialTemplates,
+    analysisTemplates,
+    assignRequest,
+    updateRequestStatus,
+    rejectRequest,
+    addSample,
+    addAnalysis,
+    updateRequestData,
+    samples,
+    analyses,
     globalSearchQuery,
     activeLabId
   } = useLims();
@@ -41,7 +41,7 @@ export function RequestsInternal() {
   const [isEditing, setIsEditing] = useState(false);
   const [editedData, setEditedData] = useState<Record<string, any>>({});
   const [filterMode, setFilterMode] = useState<'actives' | 'terminees'>('actives');
-  
+
   // Paramètres de génération d'échantillons en masse
   const [sampleQuantity, setSampleQuantity] = useState(1);
   const activeMaterialTemplates = materialTemplates.filter(t => t.isActive !== false);
@@ -50,8 +50,8 @@ export function RequestsInternal() {
   const [samplePriority, setSamplePriority] = useState<'basse' | 'normale' | 'haute'>('normale');
 
   // Liste des utilisateurs ayant le rôle analyste pour l'assignation
-  const analysts = users.filter(u => 
-    (u.role === 'analyste' || u.role === 'manager') && 
+  const analysts = users.filter(u =>
+    (u.role === 'analyste' || u.role === 'manager') &&
     (!u.labId || u.labId === 'all' || u.labId === (selectedRequest?.labId || activeLabId))
   );
 
@@ -67,8 +67,8 @@ export function RequestsInternal() {
       const template = requestTemplates.find(t => t.id === r.templateId);
       const requester = users.find(u => u.id === r.requesterId);
       const matchesSearch = r.id.toLowerCase().includes(q) ||
-                            (template && template.name.toLowerCase().includes(q)) ||
-                            (requester && requester.name.toLowerCase().includes(q));
+        (template && template.name.toLowerCase().includes(q)) ||
+        (requester && requester.name.toLowerCase().includes(q));
       if (!matchesSearch) return false;
     }
 
@@ -82,23 +82,23 @@ export function RequestsInternal() {
    */
   const getStatusBadge = (status: RequestStatus) => {
     switch (status) {
-      case 'brouillon': 
+      case 'brouillon':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-slate-100 text-slate-800">Brouillon</span>;
-      case 'soumise': 
+      case 'soumise':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">Nouvelle Soumission</span>;
-      case 'En Revue': 
+      case 'En Revue':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-800">En Revue</span>;
-      case 'validee': 
+      case 'validee':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-800">Validée</span>;
-      case 'assignee': 
+      case 'assignee':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-indigo-100 text-indigo-800">Assignée</span>;
-      case 'En Cours': 
+      case 'En Cours':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800">En Cours</span>;
-      case 'En Validation': 
+      case 'En Validation':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-orange-100 text-orange-800">En Validation finale</span>;
-      case 'terminee': 
+      case 'terminee':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-800">Terminée</span>;
-      case 'rejetee': 
+      case 'rejetee':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-red-100 text-red-800">Rejetée</span>;
     }
   };
@@ -107,12 +107,12 @@ export function RequestsInternal() {
    * Formatage des dates pour l'affichage de l'audit trail et des en-têtes
    */
   const formatDate = (dateString: string) => {
-    return new Intl.DateTimeFormat('fr-FR', { 
-      day: '2-digit', 
-      month: 'short', 
-      year: 'numeric', 
-      hour: '2-digit', 
-      minute: '2-digit' 
+    return new Intl.DateTimeFormat('fr-FR', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
     }).format(new Date(dateString));
   };
 
@@ -124,16 +124,16 @@ export function RequestsInternal() {
       updateRequestStatus(selectedRequest.id, newStatus, statusComment);
       setStatusComment('');
       setSelectedRequest(prev => prev ? {
-        ...prev, 
-        status: newStatus, 
+        ...prev,
+        status: newStatus,
         auditTrail: [
-          { 
-            id: `temp-${Date.now()}`, 
-            timestamp: new Date().toISOString(), 
-            userId: currentUser!.id, 
-            action: 'Changement', 
-            details: `Statut: ${newStatus}` 
-          }, 
+          {
+            id: `temp-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            userId: currentUser!.id,
+            action: 'Changement',
+            details: `Statut: ${newStatus}`
+          },
           ...prev.auditTrail
         ]
       } : null);
@@ -148,17 +148,17 @@ export function RequestsInternal() {
       rejectRequest(selectedRequest.id, statusComment);
       setStatusComment('');
       setSelectedRequest(prev => prev ? {
-        ...prev, 
-        status: 'rejetee', 
-        rejectionReason: statusComment, 
+        ...prev,
+        status: 'rejetee',
+        rejectionReason: statusComment,
         auditTrail: [
-          { 
-            id: `temp-${Date.now()}`, 
-            timestamp: new Date().toISOString(), 
-            userId: currentUser!.id, 
-            action: 'Rejetée', 
-            details: `Refus: ${statusComment}` 
-          }, 
+          {
+            id: `temp-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            userId: currentUser!.id,
+            action: 'Rejetée',
+            details: `Refus: ${statusComment}`
+          },
           ...prev.auditTrail
         ]
       } : null);
@@ -171,7 +171,7 @@ export function RequestsInternal() {
   const handleGenerateSamples = () => {
     if (!selectedRequest) return;
     const requester = users.find(u => u.id === selectedRequest.requesterId);
-    
+
     // Extraction des analyses spécifiées dans le formulaire dynamique
     const template = requestTemplates.find(t => t.id === selectedRequest.templateId);
     let requestedAnalyses: string[] = [];
@@ -179,11 +179,11 @@ export function RequestsInternal() {
       const analysesFields = template.fields.filter(f => f.type === 'analyses');
       analysesFields.forEach(f => {
         if (selectedRequest.customData[f.id] && Array.isArray(selectedRequest.customData[f.id])) {
-           requestedAnalyses.push(...selectedRequest.customData[f.id]);
+          requestedAnalyses.push(...selectedRequest.customData[f.id]);
         }
       });
     }
-    
+
     // Solutions de secours si le modèle est ancien ou non typé
     if (requestedAnalyses.length === 0) {
       requestedAnalyses = selectedRequest.customData['analyses_demandees'] || [];
@@ -197,12 +197,12 @@ export function RequestsInternal() {
           }
         } else if (typeof value === 'string') {
           if (analysisTemplates.some(t => t.id === value || t.name === value)) {
-             requestedAnalyses.push(value);
+            requestedAnalyses.push(value);
           }
         }
       });
     }
-    
+
     // Création de N échantillons avec leurs essais associés
     for (let i = 0; i < sampleQuantity; i++) {
       const sampleId = `ECH-${new Date().getFullYear().toString().slice(2)}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
@@ -223,7 +223,7 @@ export function RequestsInternal() {
         notes: `Échantillon généré depuis la demande ${selectedRequest.id}`
       };
       addSample(newSample);
-      
+
       // Instanciation des essais correspondants
       requestedAnalyses.forEach((analysisIdentifier: string) => {
         const matchedTemplate = analysisTemplates.find(t => t.id === analysisIdentifier || t.name === analysisIdentifier);
@@ -233,8 +233,8 @@ export function RequestsInternal() {
             sampleId: sampleId,
             templateId: matchedTemplate.id,
             status: 'planifie',
-            technician: selectedRequest.assignedTo 
-              ? (users.find(u => u.id === selectedRequest.assignedTo)?.name || 'Non assigné') 
+            technician: selectedRequest.assignedTo
+              ? (users.find(u => u.id === selectedRequest.assignedTo)?.name || 'Non assigné')
               : 'Non assigné',
             updatedAt: new Date().toISOString(),
             results: {},
@@ -243,7 +243,7 @@ export function RequestsInternal() {
         }
       });
     }
-    
+
     // Bascule automatique de la demande au statut 'En Cours'
     handleStatusChange('En Cours');
   };
@@ -263,19 +263,17 @@ export function RequestsInternal() {
         {/* Volet de gauche : Liste des Demandes */}
         <div className="lg:col-span-1 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden">
           <div className="flex border-b border-slate-200 bg-slate-50">
-            <button 
+            <button
               onClick={() => setFilterMode('actives')}
-              className={`flex-1 py-3 text-sm font-semibold transition-colors border-b-2 ${
-                filterMode === 'actives' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
-              }`}
+              className={`flex-1 py-3 text-sm font-semibold transition-colors border-b-2 ${filterMode === 'actives' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}
             >
               En cours / À traiter
             </button>
-            <button 
+            <button
               onClick={() => setFilterMode('terminees')}
-              className={`flex-1 py-3 text-sm font-semibold transition-colors border-b-2 ${
-                filterMode === 'terminees' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
-              }`}
+              className={`flex-1 py-3 text-sm font-semibold transition-colors border-b-2 ${filterMode === 'terminees' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}
             >
               Historique
             </button>
@@ -297,9 +295,8 @@ export function RequestsInternal() {
                       setEditedData(req.customData);
                       setSamplePriority((req as any).priority || 'normale');
                     }}
-                    className={`w-full text-left p-4 rounded-lg border transition-all ${
-                      isSelected ? 'bg-blue-50 border-blue-300 shadow-sm' : 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-sm'
-                    }`}
+                    className={`w-full text-left p-4 rounded-lg border transition-all ${isSelected ? 'bg-blue-50 border-blue-300 shadow-sm' : 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-sm'
+                      }`}
                   >
                     <div className="flex justify-between items-start mb-2">
                       <span className="text-xs font-mono font-bold text-slate-500">{req.id}</span>
@@ -338,12 +335,12 @@ export function RequestsInternal() {
                         Priorité
                       </label>
                       <select
-                        value={(selectedRequest as any).priority || samplePriority}
+                        value={selectedRequest.priority || samplePriority}
                         onChange={(e) => {
                           const newPrio = e.target.value as 'basse' | 'normale' | 'haute';
                           setSamplePriority(newPrio);
-                          updateRequestData(selectedRequest.id, { priority: newPrio } as any, `Priorité passée à : ${newPrio}`);
-                          setSelectedRequest({ ...selectedRequest, priority: newPrio } as any);
+                          updateRequestData(selectedRequest.id, { priority: newPrio }, `Priorité passée à : ${newPrio}`);
+                          setSelectedRequest({ ...selectedRequest, priority: newPrio });
                         }}
                         className="w-full text-sm border-slate-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
                       >
@@ -352,27 +349,29 @@ export function RequestsInternal() {
                         <option value="haute">Urgente (Haute)</option>
                       </select>
                     </div>
-                  <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
-                    <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
-                      Assignation Analyste
-                    </label>
-                    <select 
-                      value={selectedRequest.assignedTo || ''}
-                      onChange={(e) => {
-                        assignRequest(selectedRequest.id, e.target.value);
-                        setSelectedRequest({...selectedRequest, assignedTo: e.target.value});
-                      }}
-                      className="w-full text-sm border-slate-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
-                    >
-                      <option value="">-- Non assigné --</option>
-                      {analysts.map(a => (
-                        <option key={a.id} value={a.id}>{a.name}</option>
-                      ))}
-                    </select>
+
+                    <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
+                      <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
+                        Assignation Analyste
+                      </label>
+                      <select
+                        value={selectedRequest.assignedTo || ''}
+                        onChange={(e) => {
+                          assignRequest(selectedRequest.id, e.target.value);
+                          setSelectedRequest({ ...selectedRequest, assignedTo: e.target.value });
+                        }}
+                        className="w-full text-sm border-slate-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="">-- Non assigné --</option>
+                        {analysts.map(a => (
+                          <option key={a.id} value={a.id}>{a.name}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 )}
               </div>
-              
+
               <div className="flex-1 overflow-y-auto p-6 space-y-8">
                 {/* Actions de changement d'état du Workflow */}
                 {selectedRequest.status !== 'rejetee' && selectedRequest.status !== 'terminee' && (
@@ -382,17 +381,17 @@ export function RequestsInternal() {
                       Validation & Changement de Statut (Signature Électronique)
                     </h4>
                     <div className="flex gap-3 items-start flex-wrap">
-                      <input 
-                        type="text" 
-                        placeholder="Justification ou commentaire (obligatoire pour Refus ou Validation)..." 
+                      <input
+                        type="text"
+                        placeholder="Justification ou commentaire (obligatoire pour Refus ou Validation)..."
                         value={statusComment}
                         onChange={e => setStatusComment(e.target.value)}
                         className="flex-1 min-w-[250px] text-sm border-slate-300 rounded-md"
                       />
                       <div className="flex gap-2 flex-wrap">
                         {selectedRequest.status === 'soumise' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
-                          <button 
-                            onClick={() => handleStatusChange('En Revue')} 
+                          <button
+                            onClick={() => handleStatusChange('En Revue')}
                             className="bg-purple-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-purple-700 transition-colors shadow-sm"
                           >
                             Passer en Revue
@@ -400,43 +399,43 @@ export function RequestsInternal() {
                         )}
                         {selectedRequest.status === 'En Revue' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
                           <>
-                            <button 
-                              disabled={!statusComment} 
-                              onClick={handleReject} 
+                            <button
+                              disabled={!statusComment}
+                              onClick={handleReject}
                               className="bg-red-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors shadow-sm flex items-center"
                             >
-                              <XCircle className="w-4 h-4 mr-1.5"/> Refuser la demande
+                              <XCircle className="w-4 h-4 mr-1.5" /> Refuser la demande
                             </button>
-                            <button 
-                              onClick={() => handleStatusChange('validee')} 
+                            <button
+                              onClick={() => handleStatusChange('validee')}
                               className="bg-emerald-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm flex items-center"
                             >
-                              <CheckCircle className="w-4 h-4 mr-1.5"/> Valider la demande
+                              <CheckCircle className="w-4 h-4 mr-1.5" /> Valider la demande
                             </button>
                           </>
                         )}
                         {(selectedRequest.status === 'assignee' || selectedRequest.status === 'validee') && (
-                          <button 
-                            onClick={() => handleStatusChange('En Cours')} 
+                          <button
+                            onClick={() => handleStatusChange('En Cours')}
                             className="bg-amber-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-amber-700 transition-colors shadow-sm flex items-center"
                           >
-                            <PlayCircle className="w-4 h-4 mr-1.5"/> Démarrer les essais sans échantillon
+                            <PlayCircle className="w-4 h-4 mr-1.5" /> Démarrer les essais sans échantillon
                           </button>
                         )}
                         {selectedRequest.status === 'En Cours' && (
-                          <button 
-                            onClick={() => handleStatusChange('En Validation')} 
+                          <button
+                            onClick={() => handleStatusChange('En Validation')}
                             className="bg-orange-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-orange-700 transition-colors shadow-sm flex items-center"
                           >
-                            <CheckCircle className="w-4 h-4 mr-1.5"/> Soumettre pour validation
+                            <CheckCircle className="w-4 h-4 mr-1.5" /> Soumettre pour validation
                           </button>
                         )}
                         {selectedRequest.status === 'En Validation' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
-                          <button 
-                            onClick={() => handleStatusChange('terminee')} 
+                          <button
+                            onClick={() => handleStatusChange('terminee')}
                             className="bg-emerald-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm flex items-center"
                           >
-                            <Shield className="w-4 h-4 mr-1.5"/> Approuver (Libération)
+                            <Shield className="w-4 h-4 mr-1.5" /> Approuver (Libération)
                           </button>
                         )}
                       </div>
@@ -451,11 +450,11 @@ export function RequestsInternal() {
                       <History className="w-4 h-4 mr-2" />
                       Actions de Gestion (Manager)
                     </h4>
-                    <button 
-                      onClick={() => handleStatusChange('En Cours')} 
+                    <button
+                      onClick={() => handleStatusChange('En Cours')}
                       className="bg-white border border-amber-300 text-amber-700 px-4 py-2 rounded-md text-sm font-medium hover:bg-amber-50 transition-colors shadow-sm flex items-center"
                     >
-                      <PlayCircle className="w-4 h-4 mr-1.5"/> Réouvrir le dossier (Passer En Cours)
+                      <PlayCircle className="w-4 h-4 mr-1.5" /> Réouvrir le dossier (Passer En Cours)
                     </button>
                   </div>
                 )}
@@ -470,9 +469,9 @@ export function RequestsInternal() {
                     <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-4">
                       <div>
                         <label className="block text-xs font-medium text-indigo-800 mb-1">Modèle Matériau (CMS)</label>
-                        <select 
-                          value={sampleMaterialTemplateId} 
-                          onChange={e => setSampleMaterialTemplateId(e.target.value)} 
+                        <select
+                          value={sampleMaterialTemplateId}
+                          onChange={e => setSampleMaterialTemplateId(e.target.value)}
                           className="w-full text-sm border-indigo-200 rounded-md"
                         >
                           {activeMaterialTemplates.map(t => (
@@ -482,9 +481,9 @@ export function RequestsInternal() {
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-indigo-800 mb-1">État Physique</label>
-                        <select 
-                          value={sampleMaterialState} 
-                          onChange={e => setSampleMaterialState(e.target.value as any)} 
+                        <select
+                          value={sampleMaterialState}
+                          onChange={e => setSampleMaterialState(e.target.value as any)}
                           className="w-full text-sm border-indigo-200 rounded-md"
                         >
                           <option value="Massif">Massif</option>
@@ -495,9 +494,9 @@ export function RequestsInternal() {
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-indigo-800 mb-1">Priorité</label>
-                        <select 
-                          value={samplePriority} 
-                          onChange={e => setSamplePriority(e.target.value as 'basse' | 'normale' | 'haute')} 
+                        <select
+                          value={samplePriority}
+                          onChange={e => setSamplePriority(e.target.value as 'basse' | 'normale' | 'haute')}
                           className="w-full text-sm border-indigo-200 rounded-md"
                         >
                           <option value="basse">Basse</option>
@@ -507,18 +506,18 @@ export function RequestsInternal() {
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-indigo-800 mb-1">Nombre d'échantillons</label>
-                        <input 
-                          type="number" 
-                          min="1" 
-                          max="50" 
-                          value={sampleQuantity} 
-                          onChange={e => setSampleQuantity(Number(e.target.value))} 
-                          className="w-full text-sm border-indigo-200 rounded-md" 
+                        <input
+                          type="number"
+                          min="1"
+                          max="50"
+                          value={sampleQuantity}
+                          onChange={e => setSampleQuantity(Number(e.target.value))}
+                          className="w-full text-sm border-indigo-200 rounded-md"
                         />
                       </div>
                     </div>
-                    <button 
-                      onClick={handleGenerateSamples} 
+                    <button
+                      onClick={handleGenerateSamples}
                       className="bg-indigo-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm flex items-center"
                     >
                       <Plus className="w-4 h-4 mr-2" /> Générer {sampleQuantity} échantillon(s) LIMS
@@ -537,37 +536,37 @@ export function RequestsInternal() {
                       {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
                         isEditing ? (
                           <div className="flex gap-2">
-                            <button 
+                            <button
                               onClick={() => {
                                 setIsEditing(false);
                                 setEditedData(selectedRequest.customData);
-                              }} 
+                              }}
                               className="text-xs px-2 py-1 bg-slate-100 text-slate-600 rounded hover:bg-slate-200"
                             >
                               Annuler
                             </button>
-                            <button 
+                            <button
                               onClick={() => {
                                 updateRequestData(selectedRequest.id, { customData: editedData }, 'Modification des données de la demande.');
                                 setSelectedRequest(prev => prev ? { ...prev, customData: editedData } : null);
                                 setIsEditing(false);
-                              }} 
+                              }}
                               className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center"
                             >
-                              <Save className="w-3 h-3 mr-1"/> Enregistrer
+                              <Save className="w-3 h-3 mr-1" /> Enregistrer
                             </button>
                           </div>
                         ) : (
-                          <button 
-                            onClick={() => setIsEditing(true)} 
+                          <button
+                            onClick={() => setIsEditing(true)}
                             className="text-xs px-2 py-1 bg-slate-100 text-slate-600 rounded hover:bg-slate-200 flex items-center"
                           >
-                            <Edit2 className="w-3 h-3 mr-1"/> Modifier
+                            <Edit2 className="w-3 h-3 mr-1" /> Modifier
                           </button>
                         )
                       )}
                     </div>
-                    
+
                     <dl className="space-y-4">
                       {Object.entries(selectedRequest.customData).map(([key, value]) => {
                         const template = requestTemplates.find(t => t.id === selectedRequest.templateId);
@@ -580,34 +579,34 @@ export function RequestsInternal() {
                         } else if (Array.isArray(value)) {
                           displayValue = value.join(', ');
                         }
-                        
+
                         return (
                           <div key={key} className="bg-slate-50 p-3 rounded-lg border border-slate-100">
                             <dt className="text-xs font-medium text-slate-500 mb-1">{field?.name || key}</dt>
                             <dd className="text-sm text-slate-900 font-medium">
                               {isEditing ? (
                                 typeof value === 'boolean' ? (
-                                  <input 
-                                    type="checkbox" 
-                                    checked={editedData[key] || false} 
-                                    onChange={e => setEditedData({...editedData, [key]: e.target.checked})} 
-                                    className="rounded border-slate-300" 
+                                  <input
+                                    type="checkbox"
+                                    checked={editedData[key] || false}
+                                    onChange={e => setEditedData({ ...editedData, [key]: e.target.checked })}
+                                    className="rounded border-slate-300"
                                   />
                                 ) : Array.isArray(value) ? (
                                   <span className="text-xs text-slate-400 italic">Non modifiable (Tableau)</span>
                                 ) : field?.type === 'date' ? (
-                                  <input 
-                                    type="date" 
-                                    value={editedData[key] || ''} 
-                                    onChange={e => setEditedData({...editedData, [key]: e.target.value})} 
-                                    className="w-full text-sm border-slate-300 rounded px-2 py-1" 
+                                  <input
+                                    type="date"
+                                    value={editedData[key] || ''}
+                                    onChange={e => setEditedData({ ...editedData, [key]: e.target.value })}
+                                    className="w-full text-sm border-slate-300 rounded px-2 py-1"
                                   />
                                 ) : (
-                                  <input 
-                                    type="text" 
-                                    value={editedData[key] || ''} 
-                                    onChange={e => setEditedData({...editedData, [key]: e.target.value})} 
-                                    className="w-full text-sm border-slate-300 rounded px-2 py-1" 
+                                  <input
+                                    type="text"
+                                    value={editedData[key] || ''}
+                                    onChange={e => setEditedData({ ...editedData, [key]: e.target.value })}
+                                    className="w-full text-sm border-slate-300 rounded px-2 py-1"
                                   />
                                 )
                               ) : (

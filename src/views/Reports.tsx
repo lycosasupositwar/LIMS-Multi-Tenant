@@ -659,13 +659,13 @@ export function Reports() {
           </button>
         </div>
         <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-          <h3 className="text-lg font-semibold text-slate-900 mb-1">Certificat Conformité Poudres</h3>
-          <p className="text-slate-500 text-sm mb-4">Export rapide des résultats granulométriques (D10, D50, D90) avec courbe laser intégrée.</p>
+          <h3 className="text-lg font-semibold text-slate-900 mb-1">Certificat Conformité</h3>
+          <p className="text-slate-500 text-sm mb-4">Export rapide des résultats ex : granulométriques (D10, D50, D90) avec courbe laser intégrée.</p>
           <button onClick={() => setIsCertModalOpen(true)} className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-200">Configurer</button>
         </div>
         <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
           <h3 className="text-lg font-semibold text-slate-900 mb-1">Export Brut (Data)</h3>
-          <p className="text-slate-500 text-sm mb-4">Export Excel des valeurs brutes de porosité et dureté Vickers pour analyse statistique externe.</p>
+          <p className="text-slate-500 text-sm mb-4">Export Excel des valeurs brutes ex : porosité et dureté Vickers pour analyse statistique externe.</p>
           <button onClick={handleGenerateCSV} className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-200">Générer CSV</button>
         </div>
       </div>

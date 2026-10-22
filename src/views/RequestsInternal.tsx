@@ -254,7 +254,7 @@ export function RequestsInternal() {
         <div>
           <h2 className="text-2xl font-display font-bold text-slate-900">Workflow & Demandes Clients</h2>
           <p className="text-sm text-slate-500 mt-1">
-            Gestion des assignations, revue de contrat et conformité (Audit Trail 21 CFR Part 11).
+            Gestion des assignations, revue des mandats et conformité (Audit Trail 21 CFR Part 11).
           </p>
         </div>
       </div>
@@ -378,12 +378,12 @@ export function RequestsInternal() {
                   <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-5">
                     <h4 className="text-sm font-bold text-blue-900 uppercase tracking-wider mb-3 flex items-center">
                       <Shield className="w-4 h-4 mr-2" />
-                      Validation & Changement de Statut (Signature Électronique)
+                      Validation & Changement de Statut
                     </h4>
                     <div className="flex gap-3 items-start flex-wrap">
                       <input
                         type="text"
-                        placeholder="Justification ou commentaire (obligatoire pour Refus ou Validation)..."
+                        placeholder="Justification ou commentaire (obligatoire pour Refus)..."
                         value={statusComment}
                         onChange={e => setStatusComment(e.target.value)}
                         className="flex-1 min-w-[250px] text-sm border-slate-300 rounded-md"

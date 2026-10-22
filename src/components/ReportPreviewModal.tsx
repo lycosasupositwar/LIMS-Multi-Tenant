@@ -195,10 +195,24 @@ export function ReportPreviewModal({
         remarques: a.notes || "Aucune",
         echantillon: a.sampleId,
         date: a.date ? new Intl.DateTimeFormat("fr-FR").format(new Date(a.date)) : todayFormatted,
-        valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ 
-          cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, 
-          valeur: Array.isArray(v) ? v.join(', ') : v 
-        }))
+        valeurs: Object.entries(a.results || {}).map(([k, v]) => ({
+          cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k,
+          valeur: v && typeof v === 'object' && Array.isArray((v as any).images)
+            ? `${(v as any).images.length} image(s) de micrographie`
+            : Array.isArray(v) ? v.join(', ') : v
+        })),
+        micrographies: Object.entries(a.results || {}).flatMap(([k, v]) => {
+          const expected = t?.expectedResults?.find((er: any) => er.id === k);
+          const images = v && typeof v === 'object' && Array.isArray((v as any).images) ? (v as any).images : [];
+          return images.map((img: any, index: number) => ({
+            analyse: t?.name || 'Micrographie',
+            champ: expected?.name || k,
+            numero: index + 1,
+            nom: img.name || `Image ${index + 1}`,
+            commentaire: img.comment || '',
+            image: img.dataUrl || ''
+          }));
+        })
       };
       
       const sanitizeKey = (str: string) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
@@ -209,7 +223,7 @@ export function ReportPreviewModal({
          const fieldName = expected?.name || k;
          const safeName = sanitizeKey(fieldName);
          
-         baseObj[`res_${safeName}`] = Array.isArray(v) ? v.join(', ') : v;
+         baseObj[`res_${safeName}`] = v && typeof v === 'object' && Array.isArray((v as any).images) ? `${(v as any).images.length} image(s) de micrographie` : Array.isArray(v) ? v.join(', ') : v;
          
          if (Array.isArray(v)) {
             v.forEach((val, i) => {
@@ -390,7 +404,7 @@ export function ReportPreviewModal({
         const t = analysisTemplates.find(tpl => tpl.id === a.templateId);
         return Object.entries(a.results || {}).map(([k, v]) => {
           const fieldName = t?.expectedResults?.find(er => er.id === k)?.name || k;
-          return `${fieldName}: ${v}`;
+          return `${fieldName}: ${v && typeof v === 'object' && Array.isArray((v as any).images) ? `${(v as any).images.length} image(s) de micrographie` : Array.isArray(v) ? v.join(', ') : v}`;
         }).join("\n");
       }).join("\n---\n") : "Aucun résultat",
       
@@ -829,7 +843,20 @@ export function ReportPreviewModal({
                                     <td className="border border-slate-100 p-2 text-slate-600 bg-slate-50 w-1/2">{expected.name}</td>
                                     <td className="border border-slate-100 p-2 font-medium">
                                       {analysis.results[expected.id] !== undefined ? (
-                                        expected.type === 'number_series'
+                                        expected.type === 'micrography'
+                                          ? (() => {
+                                              const microValue = analysis.results[expected.id];
+                                              const microImages = Array.isArray(microValue?.images) ? microValue.images : [];
+                                              if (microImages.length === 0) return <span className="text-slate-400">Aucune image</span>;
+                                              return <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{microImages.map((img: any, idx: number) => (
+                                                <div key={img.id || idx} className="min-w-0 rounded border border-slate-200 p-2 break-inside-avoid">
+                                                  <img src={img.dataUrl} alt={img.name || `Micrographie ${idx + 1}`} className="w-full max-h-56 object-contain bg-slate-50" />
+                                                  <div className="mt-1 text-xs font-semibold text-slate-600">Image {idx + 1}{img.name ? ` — ${img.name}` : ''}</div>
+                                                  {img.comment?.trim() && <p className="mt-1 whitespace-pre-wrap text-xs font-normal text-slate-700">{img.comment}</p>}
+                                                </div>
+                                              ))}</div>;
+                                            })()
+                                          : expected.type === 'number_series'
                                           ? (() => {
                                               const vals = Array.isArray(analysis.results[expected.id]) ? analysis.results[expected.id] : [];
                                               const numVals = vals.map((v: any) => Number(v)).filter((v: number) => !isNaN(v));

@@ -751,7 +751,8 @@ export function BuilderCMS() {
                           <option value="text">Texte</option>
                           <option value="number">Nombre unique</option>
                           <option value="number_series">Série de nombres (Calcul Moyenne/Écart-type)</option>
-                          <option value="image">Image / Photo</option>
+                          <option value="image">Image unique</option>
+                          <option value="micrography">Micrographie (images multiples + commentaires)</option>
                           <option value="select">Liste déroulante</option>
                           <option value="multiselect">Sélection multiple</option>
                           <option value="boolean">Conforme / Non Conforme</option>

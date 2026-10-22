@@ -81,7 +81,7 @@ export function Reports() {
         remarques: a.notes || "Aucune",
         echantillon: a.sampleId,
         date: a.date ? new Intl.DateTimeFormat("fr-FR").format(new Date(a.date)) : formattedDate,
-        valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, valeur: Array.isArray(v) ? v.join(', ') : v })),
+        valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, valeur: v && typeof v === 'object' && Array.isArray((v as any).images) ? `${(v as any).images.length} image(s) de micrographie` : Array.isArray(v) ? v.join(', ') : v })),
         [`is_${safeAnalysisName}`]: true
       };
       

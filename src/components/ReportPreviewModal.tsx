@@ -24,6 +24,7 @@ import Docxtemplater from "docxtemplater";
 // @ts-ignore
 import PizZip from "pizzip";
 import { PdfViewer } from "./PdfViewer";
+import { createDocxImageModule } from "../utils/docxImageModule";
 
 interface ReportPreviewModalProps {
   /** État de visibilité de la modale */
@@ -438,7 +439,8 @@ export function ReportPreviewModal({
         nom: manager?.name || "Responsable non défini"
       },
       analyses: analysesData,
-      resultats: analysesData
+      resultats: analysesData,
+      micrographies: analysesData.flatMap((a: any) => a.micrographies || [])
     };
   };
 
@@ -463,6 +465,7 @@ export function ReportPreviewModal({
           }
           const zip = new PizZip(bytes);
           const doc = new Docxtemplater(zip, {
+            modules: [createDocxImageModule()],
             paragraphLoop: true,
             linebreaks: true,
             delimiters: { start: "{{", end: "}}" }, 
@@ -555,6 +558,7 @@ export function ReportPreviewModal({
           }
           const zip = new PizZip(bytes);
           const doc = new Docxtemplater(zip, {
+            modules: [createDocxImageModule()],
             paragraphLoop: true,
             linebreaks: true,
             delimiters: { start: "{{", end: "}}" }, 

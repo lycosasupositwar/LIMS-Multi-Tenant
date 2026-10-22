@@ -12,6 +12,7 @@ import Docxtemplater from "docxtemplater";
 // @ts-ignore
 import PizZip from "pizzip";
 import { saveAs } from "file-saver";
+import { createDocxImageModule } from "../utils/docxImageModule";
 
 export function Reports() {
   const { 
@@ -74,6 +75,19 @@ export function Reports() {
       const sanitizeKey = (str: string) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
       const safeAnalysisName = sanitizeKey(t?.name || "inconnu");
       
+      const analysisMicrographies = Object.entries(a.results || {}).flatMap(([k, v]) => {
+        const expected = t?.expectedResults?.find((er: any) => er.id === k);
+        const images = v && typeof v === 'object' && Array.isArray((v as any).images) ? (v as any).images : [];
+        return images.map((img: any, index: number) => ({
+          analyse: t?.name || 'Micrographie',
+          champ: expected?.name || k,
+          echantillon: a.sampleId || '',
+          numero: index + 1,
+          nom: img.name || `Image ${index + 1}`,
+          commentaire: img.comment || '',
+          image: img.dataUrl || ''
+        }));
+      });
       const baseObj: any = {
         nom: t?.name || "Non défini",
         norme: t?.standardRef || "Non défini",
@@ -82,7 +96,8 @@ export function Reports() {
         echantillon: a.sampleId,
         date: a.date ? new Intl.DateTimeFormat("fr-FR").format(new Date(a.date)) : formattedDate,
         valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, valeur: v && typeof v === 'object' && Array.isArray((v as any).images) ? `${(v as any).images.length} image(s) de micrographie` : Array.isArray(v) ? v.join(', ') : v })),
-        [`is_${safeAnalysisName}`]: true
+        [`is_${safeAnalysisName}`]: true,
+        micrographies: analysisMicrographies
       };
       
       const series_resultats: any[] = [];
@@ -274,7 +289,8 @@ export function Reports() {
           return `${fieldName}: ${v}`;
         }).join("\n");
       }).join("\n---\n") : "Aucun résultat",
-      "images.galerie": "Images attachées au rapport",
+      "images.galerie": `${analysesData.flatMap((a: any) => a.micrographies || []).length} image(s) de micrographie — utiliser la boucle micrographies pour les insérer`,
+      micrographies: analysesData.flatMap((a: any) => a.micrographies || []),
 
       demande: { id: req?.id || "N/A" },
       date: { jour: formattedDate },
@@ -332,6 +348,7 @@ export function Reports() {
           const zip = new PizZip(bytes);
 
           const doc = new Docxtemplater(zip, {
+            modules: [createDocxImageModule()],
             paragraphLoop: true,
             linebreaks: true,
             delimiters: { start: "{{", end: "}}" }, 
@@ -423,6 +440,7 @@ export function Reports() {
         }
         const zip = new PizZip(bytes);
         const doc = new Docxtemplater(zip, {
+          modules: [createDocxImageModule()],
           paragraphLoop: true,
           linebreaks: true,
           delimiters: { start: "{{", end: "}}" }, 
@@ -554,8 +572,16 @@ export function Reports() {
           return {
             analyse: t?.name,
             norme: t?.standardRef,
-            valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, valeur: v }))
+            valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, valeur: v && typeof v === 'object' && Array.isArray((v as any).images) ? `${(v as any).images.length} image(s) de micrographie` : Array.isArray(v) ? v.join(', ') : v }))
           };
+        }),
+        micrographies: sampleAnalyses.flatMap((a: any) => {
+          const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
+          return Object.entries(a.results || {}).flatMap(([k, v]) => {
+            const expected = t?.expectedResults?.find((er: any) => er.id === k);
+            const images = v && typeof v === 'object' && Array.isArray((v as any).images) ? (v as any).images : [];
+            return images.map((img: any, index: number) => ({ analyse: t?.name || 'Micrographie', champ: expected?.name || k, echantillon: a.sampleId || '', numero: index + 1, nom: img.name || `Image ${index + 1}`, commentaire: img.comment || '', image: img.dataUrl || '' }));
+          });
         }),
       };
       
@@ -568,6 +594,7 @@ export function Reports() {
       }
       const zip = new PizZip(bytes);
       const doc = new Docxtemplater(zip, {
+        modules: [createDocxImageModule()],
         paragraphLoop: true,
         linebreaks: true,
         delimiters: { start: "{{", end: "}}" }, 

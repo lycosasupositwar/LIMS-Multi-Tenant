@@ -1121,6 +1121,21 @@ export function BuilderCMS() {
                      </div>
                    </div>
 
+                   <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                     <h5 className="text-xs font-bold text-amber-900 mb-1">Galerie de micrographies avec images intégrées</h5>
+                     <p className="text-[10px] text-amber-800 mb-2 leading-relaxed">
+                       Cette boucle répète automatiquement une section pour chaque image enregistrée dans les résultats d’analyse. Le tag image est spécial : il insère le fichier dans Word, pas une URL ni du texte.
+                     </p>
+                     <div className="bg-white p-2 rounded border border-amber-200 mb-2">
+                       <code className="text-[10px] block font-mono text-slate-700">{"{{#micrographies}}"}</code>
+                       <code className="text-[10px] block font-mono text-slate-700 ml-2">Image {"{{numero}}"} — {"{{nom}}"}</code>
+                       <code className="text-[10px] block font-mono text-blue-700 font-bold ml-2">{"{%image}"} <span className="font-normal text-slate-500">← insère la vraie image</span></code>
+                       <code className="text-[10px] block font-mono text-slate-700 ml-2">Commentaire : {"{{commentaire}}"}</code>
+                       <code className="text-[10px] block font-mono text-slate-700">{"{{/micrographies}}"}</code>
+                     </div>
+                     <p className="text-[9px] text-amber-900 italic">Placez chaque balise dans un paragraphe Word distinct si possible. Les images sont ajustées à la largeur disponible sans déformation.</p>
+                   </div>
+
                    <div className="mb-4 bg-teal-50 border border-teal-100 rounded-lg p-3">
                      <h5 className="text-xs font-bold text-teal-800 mb-1">Liste des échantillons</h5>
                      <p className="text-[10px] text-teal-600 mb-2 leading-relaxed">
@@ -1150,7 +1165,7 @@ export function BuilderCMS() {
                         { label: "Analyse - Norme", tag: "{{analyse.norme}}" },
                         { label: "Analyse - Technicien", tag: "{{analyse.technicien}}" },
                         { label: "Résultats - Tableau", tag: "{{resultats.tableau}}" },
-                        { label: "Images - Galerie", tag: "{{images.galerie}}" },
+                        { label: "Images - Nombre / indication galerie (texte)", tag: "{{images.galerie}}" },
                         { label: "Remarques", tag: "{{analyse.remarques}}" },
                         // Custom fields for Request
                         ...requestTemplates.flatMap(tpl => tpl.fields.map(f => ({

@@ -91,6 +91,13 @@ export function Analyses() {
     }
     
     return matchesSearch;
+  }).sort((a, b) => {
+    const priorityWeight: Record<string, number> = { haute: 3, normale: 2, basse: 1 };
+    const sampleA = samples.find(s => s.id === a.sampleId);
+    const sampleB = samples.find(s => s.id === b.sampleId);
+    const prioA = priorityWeight[sampleA?.priority || 'normale'] || 2;
+    const prioB = priorityWeight[sampleB?.priority || 'normale'] || 2;
+    return prioB - prioA;
   });
 
   const getStatusBadge = (status: AnalysisStatus) => {
@@ -108,6 +115,23 @@ export function Analyses() {
       case 'rejete': 
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">Rejeté</span>;
     }
+  };
+  const getPriorityBadge = (priority?: string) => {
+    if (priority === 'haute') {
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700 border border-red-200">
+          Urgent
+        </span>
+      );
+    }
+    if (priority === 'basse') {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
+          Priorité basse
+        </span>
+      );
+    }
+    return null; // On n'affiche rien (ou un badge discret) si la priorité est normale
   };
 
   const handleMockImageUpload = (analysisId: string, resultId: string) => {
@@ -295,6 +319,10 @@ export function Analyses() {
       const template = analysisTemplates.find(t => t.id === analysis.templateId);
       if (!template) return null;
       
+      const sample = samples.find(s => s.id === analysis.sampleId);
+      const request = sample?.requestId ? requests.find(r => r.id === sample.requestId) : undefined;
+      const effectivePriority = sample?.priority || request?.priority || 'normale';
+
       const isAnalysisLocked = (!isManager && (analysis.status === 'a_valider' || analysis.status === 'valide' || analysis.status === 'termine')) || (isManager && analysis.status === 'termine');
       const isHighlighted = globalSearchQuery && analysis.id.toLowerCase() === globalSearchQuery.trim().toLowerCase();
 
@@ -303,7 +331,11 @@ export function Analyses() {
           key={analysis.id}
           id={`analysis-card-${analysis.id}`}
           className={`p-4 sm:p-6 transition-colors ${
-            isHighlighted ? 'bg-amber-50/40 ring-2 ring-inset ring-amber-300' : 'hover:bg-slate-50/30'
+            isHighlighted
+              ? 'bg-amber-50/40 ring-2 ring-inset ring-amber-300'
+              : effectivePriority === 'haute'
+              ? 'bg-red-50/20 hover:bg-red-50/40 border-l-4 border-l-red-500'
+              : 'hover:bg-slate-50/30'
           }`}
         >
           <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-6">
@@ -319,6 +351,7 @@ export function Analyses() {
                   </span>
                   <h3 className="text-base font-bold text-slate-900">{template.name}</h3>
                   {getStatusBadge(analysis.status)}
+                  {getPriorityBadge(effectivePriority)}
                 </div>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-500 mb-3">
                   <span>Échantillon: <strong className="text-blue-600">{analysis.sampleId}</strong></span>
@@ -527,6 +560,7 @@ export function Analyses() {
                           {reqId === 'unknown' ? 'SANS DEMANDE' : reqId}
                         </span>
                         <span>{req ? req.title : 'Demande inconnue / Création manuelle'}</span>
+                        {getPriorityBadge(req?.priority || samples.find(s => s.requestId === reqId)?.priority)}
                       </div>
                       <span className="text-xs text-slate-500 font-medium bg-slate-100 px-2 py-1 rounded">
                         {reqAnalyses.length} essai(s)

@@ -47,6 +47,7 @@ export function RequestsInternal() {
   const activeMaterialTemplates = materialTemplates.filter(t => t.isActive !== false);
   const [sampleMaterialTemplateId, setSampleMaterialTemplateId] = useState(activeMaterialTemplates[0]?.id || '');
   const [sampleMaterialState, setSampleMaterialState] = useState<MaterialState>('Massif');
+  const [samplePriority, setSamplePriority] = useState<'basse' | 'normale' | 'haute'>('normale');
 
   // Liste des utilisateurs ayant le rôle analyste pour l'assignation
   const analysts = users.filter(u => 
@@ -216,7 +217,7 @@ export function RequestsInternal() {
         receivedAt: new Date().toISOString(),
         client: requester?.company || requester?.name || 'Inconnu',
         project: selectedRequest.title,
-        priority: 'normale',
+        priority: samplePriority,
         customData: {},
         images: [],
         notes: `Échantillon généré depuis la demande ${selectedRequest.id}`
@@ -294,6 +295,7 @@ export function RequestsInternal() {
                       setSelectedRequest(req);
                       setIsEditing(false);
                       setEditedData(req.customData);
+                      setSamplePriority((req as any).priority || 'normale');
                     }}
                     className={`w-full text-left p-4 rounded-lg border transition-all ${
                       isSelected ? 'bg-blue-50 border-blue-300 shadow-sm' : 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-sm'
@@ -330,6 +332,26 @@ export function RequestsInternal() {
                   <p className="text-xs text-slate-500 mt-1">Soumis le {formatDate(selectedRequest.createdAt)}</p>
                 </div>
                 {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
+                  <div className="flex flex-wrap gap-3">
+                    <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
+                      <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
+                        Priorité
+                      </label>
+                      <select
+                        value={(selectedRequest as any).priority || samplePriority}
+                        onChange={(e) => {
+                          const newPrio = e.target.value as 'basse' | 'normale' | 'haute';
+                          setSamplePriority(newPrio);
+                          updateRequestData(selectedRequest.id, { priority: newPrio } as any, `Priorité passée à : ${newPrio}`);
+                          setSelectedRequest({ ...selectedRequest, priority: newPrio } as any);
+                        }}
+                        className="w-full text-sm border-slate-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="basse">Basse</option>
+                        <option value="normale">Normale</option>
+                        <option value="haute">Urgente (Haute)</option>
+                      </select>
+                    </div>
                   <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
                     <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
                       Assignation Analyste
@@ -445,7 +467,7 @@ export function RequestsInternal() {
                       <Box className="w-4 h-4 mr-2" />
                       Réception & Création d'Échantillons
                     </h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-4">
                       <div>
                         <label className="block text-xs font-medium text-indigo-800 mb-1">Modèle Matériau (CMS)</label>
                         <select 
@@ -472,7 +494,19 @@ export function RequestsInternal() {
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-indigo-800 mb-1">Nombre d'échantillons reçus</label>
+                        <label className="block text-xs font-medium text-indigo-800 mb-1">Priorité</label>
+                        <select 
+                          value={samplePriority} 
+                          onChange={e => setSamplePriority(e.target.value as 'basse' | 'normale' | 'haute')} 
+                          className="w-full text-sm border-indigo-200 rounded-md"
+                        >
+                          <option value="basse">Basse</option>
+                          <option value="normale">Normale</option>
+                          <option value="haute">Urgente (Haute)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-indigo-800 mb-1">Nombre d'échantillons</label>
                         <input 
                           type="number" 
                           min="1" 

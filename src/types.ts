@@ -171,6 +171,7 @@ export interface AnalysisRequest {
   assignedTo?: string;
   auditTrail?: AuditLog[];
   rejectionReason?: string;
+  priority?: 'basse' | 'normale' | 'haute';
 }
 
 export interface MountingInfo {

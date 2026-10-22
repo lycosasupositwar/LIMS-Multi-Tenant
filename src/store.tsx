@@ -657,6 +657,9 @@ const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comm
       }
       return r;
     }));
+    if (updates.priority) {
+    setSamples(prev => prev.map(s => s.requestId === id ? { ...s, priority: updates.priority as any } : s));
+  }
   };
 
   const addSample = (sample: Sample) => {

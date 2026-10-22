@@ -7,6 +7,34 @@ import { useLims } from '../store';
 import { Search, Microscope, Check, UploadCloud, Image as ImageIcon, Plus, X, Lock } from 'lucide-react';
 import { AnalysisStatus, ExpectedResult } from '../types';
 
+type MicrographyImage = { id: string; name: string; dataUrl: string; comment: string };
+
+const readMicrographyImage = (file: File): Promise<MicrographyImage> => new Promise((resolve, reject) => {
+  if (!file.type.startsWith('image/')) { reject(new Error('Le fichier sélectionné n’est pas une image.')); return; }
+  const reader = new FileReader();
+  reader.onerror = () => reject(new Error(`Impossible de lire ${file.name}`));
+  reader.onload = () => {
+    const source = String(reader.result || '');
+    const image = new Image();
+    image.onload = () => {
+      try {
+        const maxSide = 1800;
+        const ratio = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * ratio));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * ratio));
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Canvas indisponible');
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        resolve({ id: `micro_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, name: file.name, dataUrl: canvas.toDataURL('image/jpeg', 0.84), comment: '' });
+      } catch (error) { reject(error); }
+    };
+    image.onerror = () => reject(new Error(`Format d’image non pris en charge : ${file.name}`));
+    image.src = source;
+  };
+  reader.readAsDataURL(file);
+});
+
 export function Analyses() {
   const { 
     currentUser, 
@@ -134,37 +162,70 @@ export function Analyses() {
     return null; // On n'affiche rien (ou un badge discret) si la priorité est normale
   };
 
-  const handleMockImageUpload = (analysisId: string, resultId: string) => {
-    const mockImages = [
-      'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&q=80&w=400',
-      'https://images.unsplash.com/photo-1614935151651-0bea6508abb0?auto=format&fit=crop&q=80&w=400',
-      'https://images.unsplash.com/photo-1582719202047-76d3332be339?auto=format&fit=crop&q=80&w=400',
-    ];
-    const randomImg = mockImages[Math.floor(Math.random() * mockImages.length)];
-    updateAnalysisResult(analysisId, resultId, randomImg);
-    addAnalysisImage(analysisId, randomImg);
+  const handleMicrographyUpload = async (analysisId: string, resultId: string, files: FileList | null, currentValue: any) => {
+    if (!files?.length) return;
+    const existing: MicrographyImage[] = currentValue && Array.isArray(currentValue.images) ? currentValue.images : [];
+    try {
+      const additions = await Promise.all(Array.from(files).map(readMicrographyImage));
+      updateAnalysisResult(analysisId, resultId, { images: [...existing, ...additions] });
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Erreur pendant le chargement des images.');
+    }
+  };
+
+  const updateMicrographyImage = (analysisId: string, resultId: string, currentValue: any, imageId: string, updates: Partial<MicrographyImage>) => {
+    const images: MicrographyImage[] = Array.isArray(currentValue?.images) ? currentValue.images : [];
+    updateAnalysisResult(analysisId, resultId, { images: images.map(img => img.id === imageId ? { ...img, ...updates } : img) });
+  };
+
+  const renderMicrographyInput = (analysisId: string, resultId: string, currentValue: any, disabled: boolean) => {
+    const images: MicrographyImage[] = Array.isArray(currentValue?.images) ? currentValue.images : [];
+    return (
+      <div className="mt-2 space-y-3 sm:col-span-2">
+        <label className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed px-3 py-3 text-sm font-medium transition-colors ${disabled ? 'cursor-not-allowed bg-slate-100 text-slate-400' : 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100'}`}>
+          <UploadCloud className="h-4 w-4" /> Ajouter une ou plusieurs images
+          <input type="file" accept="image/*" multiple disabled={disabled} className="hidden" onChange={e => { void handleMicrographyUpload(analysisId, resultId, e.target.files, currentValue); e.currentTarget.value = ''; }} />
+        </label>
+        <p className="text-xs text-slate-500">Images redimensionnées automatiquement pour limiter la taille des données. Commentaire facultatif pour chaque image.</p>
+        {images.length > 0 && <div className="grid grid-cols-1 gap-3 md:grid-cols-2">{images.map((img, index) => (
+          <div key={img.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
+              <span className="truncate pr-2 text-xs font-semibold text-slate-700">Image {index + 1} · {img.name}</span>
+              {!disabled && <button type="button" title="Supprimer l’image" onClick={() => updateAnalysisResult(analysisId, resultId, { images: images.filter(item => item.id !== img.id) })} className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"><X className="h-4 w-4" /></button>}
+            </div>
+            <img src={img.dataUrl} alt={img.name || `Micrographie ${index + 1}`} className="max-h-64 w-full bg-slate-50 object-contain" />
+            <div className="p-3">
+              <label className="mb-1 block text-xs font-medium text-slate-600">Commentaire (facultatif)</label>
+              <textarea value={img.comment || ''} disabled={disabled} onChange={e => updateMicrographyImage(analysisId, resultId, currentValue, img.id, { comment: e.target.value })} rows={2} placeholder="Observation liée à cette image…" className="w-full resize-y rounded-md border border-slate-200 px-2 py-1.5 text-sm focus:border-indigo-400 focus:outline-none disabled:bg-slate-50" />
+            </div>
+          </div>
+        ))}</div>}
+      </div>
+    );
   };
 
   const renderInputForResult = (analysisId: string, resultTemplate: ExpectedResult, currentValue: any, status: AnalysisStatus) => {
     const disabled = (!isManager && (status === 'a_valider' || status === 'valide' || status === 'termine')) || (isManager && status === 'termine');
     
+    if (resultTemplate.type === 'micrography') {
+      return renderMicrographyInput(analysisId, resultTemplate.id, currentValue, disabled);
+    }
+
     if (resultTemplate.type === 'image') {
       return (
-        <div className="flex items-center gap-2 mt-2">
-          {currentValue || (status === 'valide' && analyses.find(a => a.id === analysisId)?.images.length) ? (
-            <div className="flex items-center text-emerald-600 text-xs font-medium bg-emerald-50 px-2 py-1 rounded border border-emerald-100">
-              <ImageIcon className="w-3 h-3 mr-1" />
-              Image attachée
-            </div>
-          ) : (
-            <button 
-              onClick={() => handleMockImageUpload(analysisId, resultTemplate.id)} 
-              disabled={disabled} 
-              className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded flex items-center border border-slate-200 transition-colors disabled:opacity-50"
-            >
-              <UploadCloud className="w-3 h-3 mr-1.5" /> Charger une image
-            </button>
-          )}
+        <div className="mt-2">
+          <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-indigo-700">
+            <UploadCloud className="h-4 w-4" /> {currentValue ? 'Remplacer l’image' : 'Charger une image'}
+            <input type="file" accept="image/*" disabled={disabled} className="hidden" onChange={async e => {
+              const input = e.currentTarget;
+              const file = input.files?.[0];
+              if (!file) return;
+              try { const image = await readMicrographyImage(file); updateAnalysisResult(analysisId, resultTemplate.id, image.dataUrl); addAnalysisImage(analysisId, image.dataUrl); }
+              catch (error) { alert(error instanceof Error ? error.message : 'Erreur pendant le chargement.'); }
+              input.value = '';
+            }} />
+          </label>
+          {typeof currentValue === 'string' && currentValue && <img src={currentValue} alt={resultTemplate.name} className="mt-2 max-h-40 rounded border border-slate-200 object-contain" />}
         </div>
       );
     }
@@ -378,7 +439,7 @@ export function Analyses() {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {template.expectedResults.map(expectedResult => (
-                    <div key={expectedResult.id}>
+                    <div key={expectedResult.id} className={expectedResult.type === 'micrography' ? 'sm:col-span-2' : ''}>
                       <label className="text-xs font-semibold text-slate-700">
                         {expectedResult.name} {expectedResult.required && <span className="text-red-500">*</span>}
                       </label>

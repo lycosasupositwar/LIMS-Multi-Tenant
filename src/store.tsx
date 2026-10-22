@@ -843,16 +843,16 @@ const updateAnalysisStatus = (id: string, status: Analysis['status']) => {
 
     // Vérification de la péremption des consommables au chargement
   useEffect(() => {
-    if (!currentUser || (currentUser.role !== 'manager')) return;
+    if (!currentUser || (currentUser.role !== 'manager') || (currentUser.role !== 'analyste')) return;
     
     const now = new Date();
-    const thirtyDaysLater = new Date();
-    thirtyDaysLater.setDate(now.getDate() + 30);
+    const sixtyDaysLater = new Date();
+    sixtyDaysLater.setDate(now.getDate() + 60);
 
     consumables.forEach(c => {
       if (c.expiryDate) {
         const expDate = new Date(c.expiryDate);
-        if (expDate <= thirtyDaysLater) {
+        if (expDate <= sixtyDaysLater) {
           const isExpired = expDate < now;
           const title = isExpired ? `Péremption Dépassée : ${c.name}` : `Alerte Péremption Proche : ${c.name}`;
           const message = isExpired 
@@ -861,7 +861,15 @@ const updateAnalysisStatus = (id: string, status: Analysis['status']) => {
           
           // Vérifie si une notification similaire n'existe pas déjà pour éviter le spam
           // (Optionnel selon votre gestion, ici déclenché en console/log ou notification)
-          console.warn(`[ALERTE STOCK] ${message}`);
+          const labManagers = users.filter(u => (u.role === 'manager') && (u.labId === c.labId || u.labId === 'all' || !u.labId));
+        labManagers.forEach(m => addNotification(
+          m.id,
+          `Alerte Péremption Proche : ${c.name}`,
+          `Le consommable "${c.name}" arrive à expiration le ${c.expiryDate}.`,
+          'email',
+          { targetTab: 'inventory', targetId: c.id, labId: c.labId }
+        ));
+          console.warn(`[ALERTE PÉREMPTION] ${message}`);
         }
       }
     });

@@ -25,6 +25,7 @@ export function Inventory() {
   // États de recherche et filtrage
   const [searchTerm, setSearchTerm] = useState('');
   const [showNewModal, setShowNewModal] = useState(false);
+
   
   // État du formulaire de création d'un article
   const [newConsumable, setNewConsumable] = useState({
@@ -33,6 +34,7 @@ export function Inventory() {
     stockLevel: 0,
     minThreshold: 0,
     unit: 'L',
+    expiryDate: '',
   });
 
   // Filtrage combiné (nom, référence, catégorie)
@@ -78,7 +80,8 @@ export function Inventory() {
       stockLevel: Number(newConsumable.stockLevel),
       minThreshold: Number(newConsumable.minThreshold),
       unit: newConsumable.unit,
-      lastRestocked: new Date().toISOString()
+      lastRestocked: new Date().toISOString(),
+      expiryDate: newConsumable.expiryDate || undefined
     });
     
     setShowNewModal(false);
@@ -88,6 +91,7 @@ export function Inventory() {
       stockLevel: 0,
       minThreshold: 0,
       unit: 'L',
+      expiryDate: '',
     });
   };
 
@@ -195,8 +199,24 @@ export function Inventory() {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
-                      {new Date(item.lastRestocked).toLocaleDateString('fr-FR')}
-                    </td>
+                      <div>Réassort : {new Date(item.lastRestocked).toLocaleDateString('fr-FR')}</div>
+                      {item.expiryDate && (
+                        (() => {
+                          const exp = new Date(item.expiryDate);
+                          const today = new Date();
+                          const diffDays = Math.ceil((exp.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                          const isExpired = diffDays < 0;
+                          const isSoon = diffDays <= 30 && !isExpired;
+
+                          return (
+                            <div className={`text-xs font-semibold mt-0.5 ${isExpired ? 'text-red-600' : isSoon ? 'text-amber-600' : 'text-slate-500'}`}>
+                              Péremption : {new Date(item.expiryDate).toLocaleDateString('fr-FR')} 
+                              {isExpired ? ' (Périmé)' : isSoon ? ` (Expire dans ${diffDays}j)` : ''}
+                            </div>
+                          );
+                        })()
+                      )}
+                    </td>                    
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center space-x-2">
                         {/* Boutons d'ajustement unitaire & rapide */}
@@ -326,6 +346,15 @@ export function Inventory() {
                   value={newConsumable.minThreshold}
                   onChange={e => setNewConsumable({...newConsumable, minThreshold: Number(e.target.value)})}
                   className="w-full rounded-lg border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Date de péremption (Optionnel)</label>
+                <input
+                  type="date"
+                  value={newConsumable.expiryDate}
+                  onChange={e => setNewConsumable({...newConsumable, expiryDate: e.target.value})}
+                  className="w-full rounded-lg border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
                 />
               </div>
 

@@ -840,6 +840,34 @@ const updateAnalysisStatus = (id: string, status: Analysis['status']) => {
       }
       return c;
     }));
+
+    // Vérification de la péremption des consommables au chargement
+  useEffect(() => {
+    if (!currentUser || (currentUser.role !== 'manager')) return;
+    
+    const now = new Date();
+    const thirtyDaysLater = new Date();
+    thirtyDaysLater.setDate(now.getDate() + 30);
+
+    consumables.forEach(c => {
+      if (c.expiryDate) {
+        const expDate = new Date(c.expiryDate);
+        if (expDate <= thirtyDaysLater) {
+          const isExpired = expDate < now;
+          const title = isExpired ? `Péremption Dépassée : ${c.name}` : `Alerte Péremption Proche : ${c.name}`;
+          const message = isExpired 
+            ? `Le consommable "${c.name}" a dépassé sa date de péremption (${c.expiryDate}).` 
+            : `Le consommable "${c.name}" arrive à expiration le ${c.expiryDate}.`;
+          
+          // Vérifie si une notification similaire n'existe pas déjà pour éviter le spam
+          // (Optionnel selon votre gestion, ici déclenché en console/log ou notification)
+          console.warn(`[ALERTE STOCK] ${message}`);
+        }
+      }
+    });
+  }, [consumables, currentUser]);
+
+
   };
 
   const applyPatch = (patch: any) => {

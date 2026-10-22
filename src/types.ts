@@ -54,6 +54,7 @@ export interface Consumable {
   minThreshold: number;
   unit: string;
   lastRestocked: string;
+  expiryDate?: string;
 }
 
 // ==========================================

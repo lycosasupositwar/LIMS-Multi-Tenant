@@ -54,6 +54,13 @@ export function Analyses() {
   }, [globalSearchQuery, analyses]);
 
   const filteredAnalyses = analyses.filter(a => {
+    const sample = samples.find(s => s.id === a.sampleId);
+
+    // Masquer l'analyse tant que l'échantillon n'est pas passé à l'étape "En essai" (ou "Terminé")
+    if (!sample || (sample.status !== 'en_essai' && sample.status !== 'termine')) {
+      return false;
+    }
+
     if (filterMode === 'actives' && (a.status === 'valide' || a.status === 'termine' || a.status === 'rejete')) {
       return false;
     }
@@ -61,8 +68,7 @@ export function Analyses() {
       return false;
     }
 
-    const sample = samples.find(s => s.id === a.sampleId);
-    if (filterMode === 'actives' && sample && sample.requestId) {
+    if (filterMode === 'actives' && sample.requestId) {
       const request = requests.find(r => r.id === sample.requestId);
       // Si l'utilisateur recherche spécifiquement cette analyse via notification, on ne la masque pas
       const isDirectlyTargeted = globalSearchQuery && a.id.toLowerCase() === globalSearchQuery.trim().toLowerCase();

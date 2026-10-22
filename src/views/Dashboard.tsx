@@ -15,7 +15,7 @@
 import React from 'react';
 import { useLims } from '../store';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { Box, Activity, CheckCircle, Factory, FileText, AlertCircle } from 'lucide-react';
+import { Box, Activity, CheckCircle, Factory, FileText, AlertCircle,ClipboardClock } from 'lucide-react';
 import { RequestStatus } from '../types';
 
 export function Dashboard() {
@@ -136,6 +136,7 @@ export function Dashboard() {
   const totalSamples = samples.length;
   const inProgressAnalyses = analyses.filter(a => a.status === 'En Cours' || a.status === 'a_valider').length;
   const pendingRequests = requests.filter(r => ['soumise', 'En Revue'].includes(r.status)).length;
+  const inProgressRequests = requests.filter(r => ['assignee', 'En Cours', 'En Validation'].includes(r.status)).length;
 
   // Répartition statistique par statut des demandes
   const requestStatusCount = requests.reduce((acc, req) => {
@@ -185,7 +186,7 @@ export function Dashboard() {
       </div>
 
       {/* Cartes d'indicateurs synthétiques */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <StatCard 
           title="Demandes à Revoir" 
           value={pendingRequests} 
@@ -198,6 +199,12 @@ export function Dashboard() {
           value={totalSamples} 
           icon={Box} 
           colorClass="bg-blue-100 text-blue-600" 
+        />
+        <StatCard 
+          title="Demandes en cours" 
+          value={inProgressRequests} 
+          icon={ClipboardClock} 
+          colorClass="bg-amber-100 text-amber-600" 
         />
         <StatCard 
           title="Analyses en cours" 

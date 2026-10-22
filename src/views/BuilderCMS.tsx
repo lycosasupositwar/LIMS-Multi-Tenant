@@ -18,21 +18,34 @@ export function BuilderCMS() {
   const [activeReportTpl, setActiveReportTpl] = useState<ReportTemplate | null>(reportTemplates?.[0] || null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Synchronisation des templates actifs lors d'un changement d'instance de laboratoire
+  // Synchronise les données du modèle sélectionné sans perdre la sélection
+  // lorsque le store est mis à jour pendant la saisie.
   useEffect(() => {
-    setActiveMaterialTpl(materialTemplates[0] || null);
+    setActiveMaterialTpl(current => {
+      const selected = current && materialTemplates.find(tpl => tpl.id === current.id);
+      return selected || materialTemplates[0] || null;
+    });
   }, [activeLabId, materialTemplates]);
 
   useEffect(() => {
-    setActiveAnalysisTpl(analysisTemplates[0] || null);
+    setActiveAnalysisTpl(current => {
+      const selected = current && analysisTemplates.find(tpl => tpl.id === current.id);
+      return selected || analysisTemplates[0] || null;
+    });
   }, [activeLabId, analysisTemplates]);
 
   useEffect(() => {
-    setActiveRequestTpl(requestTemplates[0] || null);
+    setActiveRequestTpl(current => {
+      const selected = current && requestTemplates.find(tpl => tpl.id === current.id);
+      return selected || requestTemplates[0] || null;
+    });
   }, [activeLabId, requestTemplates]);
 
   useEffect(() => {
-    setActiveReportTpl(reportTemplates?.[0] || null);
+    setActiveReportTpl(current => {
+      const selected = current && reportTemplates?.find(tpl => tpl.id === current.id);
+      return selected || reportTemplates?.[0] || null;
+    });
   }, [activeLabId, reportTemplates]);
   
   const [isAddingField, setIsAddingField] = useState(false);

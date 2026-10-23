@@ -464,43 +464,53 @@ export function Analyses() {
 
             {/* Colonne de droite : Saisie des résultats et contrôle du workflow */}
             <div className="flex flex-col sm:flex-row gap-6 xl:justify-end xl:w-3/5">
-              <div className="flex-1 bg-slate-50 rounded-lg border border-slate-200 p-4 relative">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Saisie des résultats</h4>
-                  {isAnalysisLocked && (
-                    <div className="flex items-center text-[10px] font-bold uppercase text-slate-500 bg-slate-200 px-2 py-1 rounded">
-                      <Lock className="w-3 h-3 mr-1" />
-                      Verrouillé
+              
+              {/* Affiché uniquement si l'essai est démarré (statut différent de 'planifie') */}
+              {analysis.status !== 'planifie' ? (
+                <div className="flex-1 bg-slate-50 rounded-lg border border-slate-200 p-4 relative">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Saisie des résultats</h4>
+                    {isAnalysisLocked && (
+                      <div className="flex items-center text-[10px] font-bold uppercase text-slate-500 bg-slate-200 px-2 py-1 rounded">
+                        <Lock className="w-3 h-3 mr-1" />
+                        Verrouillé
+                      </div>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {template.expectedResults.map(expectedResult => (
+                      <div key={expectedResult.id} className={expectedResult.type === 'micrography' ? 'sm:col-span-2' : ''}>
+                        <label className="text-xs font-semibold text-slate-700">
+                          {expectedResult.name} {expectedResult.required && <span className="text-red-500">*</span>}
+                        </label>
+                        {renderInputForResult(analysis.id, expectedResult, analysis.results[expectedResult.id], analysis.status)}
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {analysis.images.length > 0 && (
+                    <div className="mt-4 pt-3 border-t border-slate-200">
+                      <h4 className="text-xs font-semibold text-slate-500 mb-2">Micrographies jointes :</h4>
+                      <div className="flex gap-2 overflow-x-auto">
+                        {analysis.images.map((img, i) => (
+                          <img key={i} src={img} alt="micrographie" className="h-16 w-16 object-cover rounded border border-slate-300" />
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {template.expectedResults.map(expectedResult => (
-                    <div key={expectedResult.id} className={expectedResult.type === 'micrography' ? 'sm:col-span-2' : ''}>
-                      <label className="text-xs font-semibold text-slate-700">
-                        {expectedResult.name} {expectedResult.required && <span className="text-red-500">*</span>}
-                      </label>
-                      {renderInputForResult(analysis.id, expectedResult, analysis.results[expectedResult.id], analysis.status)}
-                    </div>
-                  ))}
+              ) : (
+                <div className="flex-1 bg-slate-50/50 rounded-lg border border-dashed border-slate-200 p-6 flex flex-col items-center justify-center text-center">
+                  <p className="text-xs text-slate-400 italic">
+                    La saisie des résultats sera disponible une fois que l'essai aura été démarré.
+                  </p>
                 </div>
-
-                {analysis.images.length > 0 && (
-                  <div className="mt-4 pt-3 border-t border-slate-200">
-                    <h4 className="text-xs font-semibold text-slate-500 mb-2">Micrographies jointes :</h4>
-                    <div className="flex gap-2 overflow-x-auto">
-                      {analysis.images.map((img, i) => (
-                        <img key={i} src={img} alt="micrographie" className="h-16 w-16 object-cover rounded border border-slate-300" />
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+              )}
 
               {/* Boutons d'avancement du cycle d'approbation */}
               <div className="flex flex-col items-end gap-2 sm:w-40 sm:border-l sm:border-slate-200 sm:pl-6 justify-center">
                 {analysis.status === 'planifie' && (
-                  <button
+                  <button 
                     onClick={() => updateAnalysisStatus(analysis.id, 'En Cours')}
                     className="w-full text-xs px-3 py-2 bg-blue-50 text-blue-700 rounded-md font-medium hover:bg-blue-100 transition-colors text-center"
                   >
@@ -508,7 +518,7 @@ export function Analyses() {
                   </button>
                 )}
                 {analysis.status === 'En Cours' && (
-                  <button
+                  <button 
                     onClick={() => updateAnalysisStatus(analysis.id, 'a_valider')}
                     className="w-full text-xs px-3 py-2 bg-amber-50 text-amber-700 rounded-md font-medium hover:bg-amber-100 transition-colors text-center"
                   >
@@ -517,14 +527,14 @@ export function Analyses() {
                 )}
                 {analysis.status === 'a_valider' && isManager && (
                   <>
-                    <button
+                    <button 
                       onClick={() => updateAnalysisStatus(analysis.id, 'valide')}
                       className="w-full text-xs px-3 py-2 bg-emerald-500 text-white rounded-md font-medium hover:bg-emerald-600 transition-colors flex justify-center items-center"
                     >
                       <Check className="w-4 h-4 mr-1" />
                       Valider
                     </button>
-                    <button
+                    <button 
                       onClick={() => updateAnalysisStatus(analysis.id, 'rejete')}
                       className="w-full text-xs px-3 py-2 bg-red-50 text-red-700 rounded-md font-medium hover:bg-red-100 transition-colors text-center mt-1"
                     >
@@ -533,7 +543,7 @@ export function Analyses() {
                   </>
                 )}
                 {analysis.auditTrail && analysis.auditTrail.length > 0 && (
-                  <button
+                  <button 
                     onClick={() => setShowAuditFor(showAuditFor === analysis.id ? null : analysis.id)}
                     className="text-xs text-slate-500 underline hover:text-slate-800 mt-2"
                   >

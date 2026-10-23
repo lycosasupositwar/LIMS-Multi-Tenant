@@ -106,11 +106,13 @@ interface LimsContextType {
   assignRequest: (requestId: string, analystId: string) => void;
 
   addSample: (sample: Sample) => void;
+  deleteSample: (id: string) => void;
   updateSampleStatus: (id: string, status: Sample['status']) => void;
   updateSampleMounting: (id: string, mountingInfo: Sample['mountingInfo']) => void;
   addSampleImage: (id: string, imageUrl: string) => void;
 
   addAnalysis: (analysis: Analysis) => void;
+  deleteAnalysis: (id: string) => void;
   updateAnalysisStatus: (id: string, status: Analysis['status']) => void;
   updateAnalysisResult: (id: string, resultId: string, value: any) => void;
   addAnalysisImage: (id: string, imageUrl: string) => void;
@@ -683,6 +685,11 @@ const addSample = (sample: Sample) => {
       return [item, ...prev];
     });
   };
+  const deleteSample = (id: string) => {
+    // Supprime l'échantillon (ainsi que ses sous-échantillons éventuels) et toutes les analyses qui lui sont rattachées
+    setSamples(prev => prev.filter(s => s.id !== id && s.parentSampleId !== id));
+    setAnalyses(prev => prev.filter(a => a.sampleId !== id));
+  };
 
   const updateSampleStatus = (id: string, status: Sample['status']) => {
     setSamples(prev => prev.map(s => s.id === id ? { ...s, status } : s));
@@ -708,82 +715,103 @@ const addAnalysis = (analysis: Analysis) => {
     });
   };
 
-const updateAnalysisStatus = (id: string, status: Analysis['status']) => {
-  // On met d'abord à jour la liste des analyses en utilisant l'état le plus récent (prevAnalyses)
-  setAnalyses(prevAnalyses => {
-    const updatedAnalyses = prevAnalyses.map(analysis => {
-      if (analysis.id === id) {
-        const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}`);
-        return {
-          ...analysis,
-          status,
-          updatedAt: new Date().toISOString(),
-          auditTrail: [audit, ...(analysis.auditTrail || [])]
-        };
-      }
-      return analysis;
-    });
+  const deleteAnalysis = (id: string) => {
+    setAnalyses(prev => prev.filter(a => a.id !== id));
+  };
 
-    const targetAnalysis = updatedAnalyses.find(an => an.id === id);
+const updateAnalysisStatus = (id: string, status: Analysis['status'], comment?: string) => {
+    setAnalyses(prevAnalyses => {
+      const updatedAnalyses = prevAnalyses.map(analysis => {
+        if (analysis.id === id) {
+          const audit = createAuditLog(
+            status === 'rejete' ? 'Essai refusé' : 'Changement de statut',
+            `Statut passé à : ${status}${comment ? ` — Motif : ${comment}` : ''}`
+          );
+          return {
+            ...analysis,
+            status,
+            rejectionReason: status === 'rejete' ? (comment || 'Résultats à reprendre') : (status === 'a_valider' ? undefined : analysis.rejectionReason),
+            updatedAt: new Date().toISOString(),
+            auditTrail: [audit, ...(analysis.auditTrail || [])]
+          };
+        }
+        return analysis;
+      });
 
-    // Si l'essai passe à "a_valider" ou "valide" ou "termine"
-    if (targetAnalysis && (status === 'a_valider' || status === 'valide' || status === 'termine')) {
-      if (status === 'a_valider') {
-        const labManagers = users.filter(
-          u => (u.role === 'manager') && (u.labId === targetAnalysis.labId || u.labId === 'all' || !u.labId)
-        );
-        labManagers.forEach(m =>
+      const targetAnalysis = updatedAnalyses.find(an => an.id === id);
+
+      // Si le manager rejette l'analyse : on notifie l'analyste et on remet la demande "En Cours" si elle était "En Validation"
+      if (targetAnalysis && status === 'rejete') {
+        const sample = rawSamples.find(s => s.id === targetAnalysis.sampleId);
+        const parentReq = sample?.requestId ? rawRequests.find(r => r.id === sample.requestId) : undefined;
+        if (parentReq?.assignedTo) {
           addNotification(
-            m.id,
-            `Analyse ${targetAnalysis.id} à valider`,
-            `L'analyse ${targetAnalysis.id} sur l'échantillon ${targetAnalysis.sampleId} est prête pour validation technique.`,
+            parentReq.assignedTo,
+            `Analyse ${targetAnalysis.id} refusée`,
+            `L'analyse ${targetAnalysis.id} (échantillon ${targetAnalysis.sampleId}) a été refusée par le manager.${comment ? `\nMotif : ${comment}` : ''}\nVeuillez corriger les résultats et la resoumettre.`,
             'email',
             { targetTab: 'analyses', targetId: targetAnalysis.id, labId: targetAnalysis.labId }
-          )
-        );
+          );
+        }
+        if (parentReq && parentReq.status === 'En Validation') {
+          setTimeout(() => {
+            updateRequestStatus(parentReq.id, 'En Cours', `Réouverture suite au refus de l'analyse ${targetAnalysis.id}`);
+          }, 0);
+        }
       }
 
-      // Recherche de l'échantillon et de la demande parente
-      const sample = rawSamples.find(s => s.id === targetAnalysis.sampleId);
-      const parentRequestId = sample?.requestId || (
-        sample?.parentSampleId ? rawSamples.find(p => p.id === sample.parentSampleId)?.requestId : undefined
-      );
-
-      if (parentRequestId) {
-        const parentReq = rawRequests.find(r => r.id === parentRequestId);
-
-        if (parentReq && parentReq.status !== 'En Validation' && parentReq.status !== 'terminee') {
-          // 1. Tous les échantillons (et sous-échantillons) liés à cette demande
-          const reqSamples = rawSamples.filter(
-            s => s.requestId === parentRequestId || (s.parentSampleId && rawSamples.some(p => p.id === s.parentSampleId && p.requestId === parentRequestId))
+      // Si l'essai passe à "a_valider" ou "valide" ou "termine"
+      if (targetAnalysis && (status === 'a_valider' || status === 'valide' || status === 'termine')) {
+        if (status === 'a_valider') {
+          const labManagers = users.filter(
+            u => (u.role === 'manager') && (u.labId === targetAnalysis.labId || u.labId === 'all' || !u.labId)
           );
-          const reqSampleIds = new Set(reqSamples.map(s => s.id));
-
-          // 2. Toutes les analyses liées à ces échantillons (dans la liste fraîchement mise à jour)
-          const reqAnalyses = updatedAnalyses.filter(an => reqSampleIds.has(an.sampleId));
-
-          // 3. Vérifie qu'aucun échantillon ayant des analyses (ou principal) n'est encore en attente de préparation
-          const allSamplesInTestingOrDone = reqSamples.every(
-            s => s.status === 'en_essai' || s.status === 'termine' || s.status === 'non_conforme'
+          labManagers.forEach(m =>
+            addNotification(
+              m.id,
+              `Analyse ${targetAnalysis.id} à valider`,
+              `L'analyse ${targetAnalysis.id} sur l'échantillon ${targetAnalysis.sampleId} est prête pour validation technique.`,
+              'email',
+              { targetTab: 'analyses', targetId: targetAnalysis.id, labId: targetAnalysis.labId }
+            )
           );
+        }
 
-          // 4. Vérifie que CHAQUE échantillon (sauf non_conforme ou parent découpé) qui a des analyses les a toutes terminées
-          const allAnalysesReady =
-            reqAnalyses.length > 0 &&
-            reqAnalyses.every(an => an.status === 'a_valider' || an.status === 'valide' || an.status === 'termine');
+        const sample = rawSamples.find(s => s.id === targetAnalysis.sampleId);
+        const parentRequestId = sample?.requestId || (
+          sample?.parentSampleId ? rawSamples.find(p => p.id === sample.parentSampleId)?.requestId : undefined
+        );
 
-          if (allSamplesInTestingOrDone && allAnalysesReady) {
-            setTimeout(() => {
-              updateRequestStatus(parentReq.id, 'En Validation' as AnalysisRequest['status']);
-            }, 0);
+        if (parentRequestId) {
+          const parentReq = rawRequests.find(r => r.id === parentRequestId);
+
+          if (parentReq && parentReq.status !== 'En Validation' && parentReq.status !== 'terminee') {
+            const reqSamples = rawSamples.filter(
+              s => s.requestId === parentRequestId || (s.parentSampleId && rawSamples.some(p => p.id === s.parentSampleId && p.requestId === parentRequestId))
+            );
+            const reqSampleIds = new Set(reqSamples.map(s => s.id));
+            const reqAnalyses = updatedAnalyses.filter(an => reqSampleIds.has(an.sampleId));
+
+            const allSamplesInTestingOrDone = reqSamples.every(
+              s => s.status === 'en_essai' || s.status === 'termine' || s.status === 'non_conforme'
+            );
+
+            const allAnalysesReady =
+              reqAnalyses.length > 0 &&
+              reqAnalyses.every(an => an.status === 'a_valider' || an.status === 'valide' || an.status === 'termine');
+
+            if (allSamplesInTestingOrDone && allAnalysesReady) {
+              setTimeout(() => {
+                updateRequestStatus(parentReq.id, 'En Validation' as AnalysisRequest['status']);
+              }, 0);
+            }
           }
         }
       }
-    }
 
-    return updatedAnalyses;
-  });
-};
+      return updatedAnalyses;
+    });
+  };
 
 
   const updateAnalysisResult = (id: string, resultId: string, value: any) => {
@@ -913,6 +941,7 @@ const updateAnalysisStatus = (id: string, status: Analysis['status']) => {
       }
       return c;
     }));
+     };
 
     // Vérification de la péremption des consommables au chargement
   useEffect(() => {
@@ -949,7 +978,7 @@ const updateAnalysisStatus = (id: string, status: Analysis['status']) => {
   }, [consumables, currentUser]);
 
 
-  };
+ 
 
   const applyPatch = (patch: any) => {
     if (patch.laboratories) setLaboratories(patch.laboratories);
@@ -998,9 +1027,9 @@ const updateAnalysisStatus = (id: string, status: Analysis['status']) => {
       addRequestTemplate, updateRequestTemplate, deleteRequestTemplate,
       addReportTemplate, updateReportTemplate, deleteReportTemplate,
       addRequest, updateRequestStatus, updateRequestData, rejectRequest, resubmitRequest, assignRequest,
-      addSample, updateSampleStatus,
+      addSample, deleteSample, updateSampleStatus,
       updateSampleMounting, addSampleImage,
-      addAnalysis, updateAnalysisStatus,
+      addAnalysis, deleteAnalysis, updateAnalysisStatus,
       updateAnalysisResult, addAnalysisImage,
       addReport, deleteReport,
       addConsumable, deleteConsumable, updateConsumableStock,

@@ -27,11 +27,11 @@ const readMicrographyImage = (file: File): Promise<MicrographyImage> => new Prom
         if (!ctx) throw new Error('Canvas indisponible');
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
         const defaultName = file.name.replace(/\.[^/.]+$/, '');
-        resolve({ 
-          id: `micro_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, 
-          name: defaultName, 
-          dataUrl: canvas.toDataURL('image/jpeg', 0.84), 
-          comment: '' 
+        resolve({
+          id: `micro_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          name: defaultName,
+          dataUrl: canvas.toDataURL('image/jpeg', 0.84),
+          comment: ''
         });
       } catch (error) { reject(error); }
     };
@@ -95,10 +95,11 @@ export function Analyses() {
       return false;
     }
 
-    if (filterMode === 'actives' && (a.status === 'valide' || a.status === 'termine' || a.status === 'rejete')) {
+    // Une analyse rejetée ('rejete') reste dans 'actives' pour que l'analyste puisse la corriger et la resoumettre !
+    if (filterMode === 'actives' && (a.status === 'valide' || a.status === 'termine')) {
       return false;
     }
-    if (filterMode === 'historique' && (a.status !== 'valide' && a.status !== 'termine' && a.status !== 'rejete')) {
+    if (filterMode === 'historique' && (a.status !== 'valide' && a.status !== 'termine')) {
       return false;
     }
 
@@ -306,8 +307,8 @@ export function Analyses() {
                   updateAnalysisResult(analysisId, resultTemplate.id, newValues);
                 }}
                 className={`px-3 py-1.5 text-sm font-medium rounded-full border transition-colors disabled:opacity-50 ${isSelected
-                    ? 'bg-blue-100 text-blue-800 border-blue-300'
-                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                  ? 'bg-blue-100 text-blue-800 border-blue-300'
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                   }`}
               >
                 {opt}
@@ -430,10 +431,10 @@ export function Analyses() {
           key={analysis.id}
           id={`analysis-card-${analysis.id}`}
           className={`p-4 sm:p-6 transition-colors ${isHighlighted
-              ? 'bg-amber-50/40 ring-2 ring-inset ring-amber-300'
-              : effectivePriority === 'haute'
-                ? 'bg-red-50/20 hover:bg-red-50/40 border-l-4 border-l-red-500'
-                : 'hover:bg-slate-50/30'
+            ? 'bg-amber-50/40 ring-2 ring-inset ring-amber-300'
+            : effectivePriority === 'haute'
+              ? 'bg-red-50/20 hover:bg-red-50/40 border-l-4 border-l-red-500'
+              : 'hover:bg-slate-50/30'
             }`}
         >
           <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-6">
@@ -459,12 +460,17 @@ export function Analyses() {
                   <span>Tech: <strong className="text-slate-700">{analysis.technician}</strong></span>
                 </div>
                 <p className="text-xs text-slate-500">{template.description}</p>
+                {analysis.status === 'rejete' && (
+                  <div className="mt-2 p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-800">
+                    <strong>Essai refusé par le manager :</strong> {analysis.rejectionReason || 'Veuillez vérifier et corriger les résultats saisis.'}
+                  </div>
+                )}
               </div>
             </div>
 
             {/* Colonne de droite : Saisie des résultats et contrôle du workflow */}
             <div className="flex flex-col sm:flex-row gap-6 xl:justify-end xl:w-3/5">
-              
+
               {/* Affiché uniquement si l'essai est démarré (statut différent de 'planifie') */}
               {analysis.status !== 'planifie' ? (
                 <div className="flex-1 bg-slate-50 rounded-lg border border-slate-200 p-4 relative">
@@ -487,7 +493,7 @@ export function Analyses() {
                       </div>
                     ))}
                   </div>
-                  
+
                   {analysis.images.length > 0 && (
                     <div className="mt-4 pt-3 border-t border-slate-200">
                       <h4 className="text-xs font-semibold text-slate-500 mb-2">Micrographies jointes :</h4>
@@ -508,42 +514,60 @@ export function Analyses() {
               )}
 
               {/* Boutons d'avancement du cycle d'approbation */}
-              <div className="flex flex-col items-end gap-2 sm:w-40 sm:border-l sm:border-slate-200 sm:pl-6 justify-center">
+              <div className="flex flex-col items-end gap-2 sm:w-44 sm:border-l sm:border-slate-200 sm:pl-6 justify-center">
                 {analysis.status === 'planifie' && (
-                  <button 
+                  <button
                     onClick={() => updateAnalysisStatus(analysis.id, 'En Cours')}
                     className="w-full text-xs px-3 py-2 bg-blue-50 text-blue-700 rounded-md font-medium hover:bg-blue-100 transition-colors text-center"
                   >
                     Démarrer l'essai
                   </button>
                 )}
-                {analysis.status === 'En Cours' && (
-                  <button 
+
+                {/* L'analyste peut soumettre ou resoumettre si l'essai est 'En Cours' OU 'rejete' */}
+                {(analysis.status === 'En Cours' || analysis.status === 'rejete') && (
+                  <button
                     onClick={() => updateAnalysisStatus(analysis.id, 'a_valider')}
-                    className="w-full text-xs px-3 py-2 bg-amber-50 text-amber-700 rounded-md font-medium hover:bg-amber-100 transition-colors text-center"
+                    className="w-full text-xs px-3 py-2 bg-amber-500 text-white rounded-md font-medium hover:bg-amber-600 transition-colors text-center shadow-xs"
                   >
-                    Soumettre résultats
+                    {analysis.status === 'rejete' ? 'Corriger & Resoumettre' : 'Soumettre résultats'}
                   </button>
                 )}
+
                 {analysis.status === 'a_valider' && isManager && (
                   <>
-                    <button 
+                    <button
                       onClick={() => updateAnalysisStatus(analysis.id, 'valide')}
                       className="w-full text-xs px-3 py-2 bg-emerald-500 text-white rounded-md font-medium hover:bg-emerald-600 transition-colors flex justify-center items-center"
                     >
                       <Check className="w-4 h-4 mr-1" />
                       Valider
                     </button>
-                    <button 
-                      onClick={() => updateAnalysisStatus(analysis.id, 'rejete')}
-                      className="w-full text-xs px-3 py-2 bg-red-50 text-red-700 rounded-md font-medium hover:bg-red-100 transition-colors text-center mt-1"
+                    <button
+                      onClick={() => {
+                        const reason = window.prompt('Motif du rejet de cet essai (sera visible par l’analyste) :', 'Valeurs aberrantes / Essai à reprendre');
+                        if (reason !== null) {
+                          updateAnalysisStatus(analysis.id, 'rejete', reason.trim() || 'Essai à reprendre');
+                        }
+                      }}
+                      className="w-full text-xs px-3 py-2 bg-red-50 text-red-700 border border-red-200 rounded-md font-medium hover:bg-red-100 transition-colors text-center mt-1"
                     >
-                      Rejeter
+                      Rejeter à l'analyste
                     </button>
                   </>
                 )}
+
+                {/* Permet au manager de déverrouiller un essai déjà validé si besoin */}
+                {(analysis.status === 'valide' || analysis.status === 'termine') && isManager && (
+                  <button
+                    onClick={() => updateAnalysisStatus(analysis.id, 'En Cours', 'Réouverture de l’essai par le manager')}
+                    className="w-full text-xs px-3 py-2 bg-slate-100 text-slate-700 rounded-md font-medium hover:bg-slate-200 transition-colors text-center"
+                  >
+                    Réouvrir l'essai
+                  </button>
+                )}
                 {analysis.auditTrail && analysis.auditTrail.length > 0 && (
-                  <button 
+                  <button
                     onClick={() => setShowAuditFor(showAuditFor === analysis.id ? null : analysis.id)}
                     className="text-xs text-slate-500 underline hover:text-slate-800 mt-2"
                   >

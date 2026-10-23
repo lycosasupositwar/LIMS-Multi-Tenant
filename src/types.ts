@@ -173,6 +173,7 @@ export interface AnalysisRequest {
   auditTrail?: AuditLog[];
   rejectionReason?: string;
   priority?: 'basse' | 'normale' | 'haute';
+  conclusion?: string;
 }
 
 export interface MountingInfo {
@@ -222,6 +223,7 @@ export interface Analysis {
   technician: string;
   updatedAt: string;
   notes?: string;
+  rejectionReason?: string;
   auditTrail?: AuditLog[];
 }
 

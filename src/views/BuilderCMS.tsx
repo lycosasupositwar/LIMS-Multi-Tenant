@@ -1129,7 +1129,7 @@ export function BuilderCMS() {
                      <div className="bg-white p-2 rounded border border-amber-200 mb-2">
                        <code className="text-[10px] block font-mono text-slate-700">{"{{#micrographies}}"}</code>
                        <code className="text-[10px] block font-mono text-slate-700 ml-2">Image {"{{numero}}"} — {"{{nom}}"}</code>
-                       <code className="text-[10px] block font-mono text-blue-700 font-bold ml-2">{"{%image}"} <span className="font-normal text-slate-500">← insère la vraie image</span></code>
+                       <code className="text-[10px] block font-mono text-blue-700 font-bold ml-2">{"{{%image}}"} <span className="font-normal text-slate-500">← insère la vraie image</span></code>
                        <code className="text-[10px] block font-mono text-slate-700 ml-2">Commentaire : {"{{commentaire}}"}</code>
                        <code className="text-[10px] block font-mono text-slate-700">{"{{/micrographies}}"}</code>
                      </div>
@@ -1153,6 +1153,7 @@ export function BuilderCMS() {
                    <ul className="space-y-2 text-sm">
                       {[
                         { label: "ID Demande", tag: "{{demande.id}}" },
+                        { label: "Conclusion de la demande", tag: "{{demande.conclusion}}" },
                         { label: "Date de création", tag: "{{date.jour}}" },
                         { label: "Demandeur - Nom", tag: "{{demandeur.nom}}" },
                         { label: "Demandeur - Email", tag: "{{demandeur.email}}" },

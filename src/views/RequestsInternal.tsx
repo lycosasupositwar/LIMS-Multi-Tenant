@@ -57,6 +57,7 @@ export function RequestsInternal() {
   const [conclusionText, setConclusionText] = useState('');
   const [addingAnalysisForSample, setAddingAnalysisForSample] = useState<string | null>(null);
   const [selectedNewAnalysisTplId, setSelectedNewAnalysisTplId] = useState<string>('');
+  const [showAudit, setShowAudit] = useState(false);
 
   // Liste des utilisateurs ayant le rôle analyste pour l'assignation
   const analysts = users.filter(u =>
@@ -320,6 +321,7 @@ export function RequestsInternal() {
                       setEditedData(req.customData);
                       setSamplePriority((req as any).priority || 'normale');
                       setConclusionText(req.conclusion || '');
+                      setShowAudit(false);
                     }}
                     className={`w-full text-left p-4 rounded-lg border transition-all ${isSelected ? 'bg-blue-50 border-blue-300 shadow-sm' : 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-sm'
                       }`}
@@ -677,65 +679,81 @@ export function RequestsInternal() {
                     </dl>
                   </div>
 
-                  {/* Audit Trail et Traçabilité Complète */}
+                  {/* Audit Trail et Traçabilité Complète (Masqué par défaut) */}
                   <div>
-                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center">
-                      <History className="w-4 h-4 mr-2" />
-                      Audit Trail (Traçabilité)
-                    </h4>
-                    <div className="relative border-l border-slate-200 ml-3 space-y-6">
-                      {selectedRequest.auditTrail.map((audit, i) => {
-                        const user = users.find(u => u.id === audit.userId);
-                        return (
-                          <div key={audit.id || i} className="relative pl-5">
-                            <div className="absolute w-2.5 h-2.5 bg-blue-500 rounded-full -left-[5px] top-1.5 ring-4 ring-white"></div>
-                            <div className="text-xs text-slate-400 mb-0.5">{formatDate(audit.timestamp)}</div>
-                            <div className="text-sm font-semibold text-slate-800">{audit.action}</div>
-                            <div className="text-sm text-slate-600 mt-1">{audit.details}</div>
-                            <div className="text-xs font-medium text-slate-500 mt-2 flex items-center">
-                              <User className="w-3 h-3 mr-1" />
-                              Par : {user?.name || audit.userId}
-                            </div>
-                          </div>
-                        );
-                      })}
+                    <div className="flex items-center justify-between mb-4">
+                      <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center m-0">
+                        <History className="w-4 h-4 mr-2" />
+                        Audit Trail (Traçabilité)
+                      </h4>
+                      <button
+                        type="button"
+                        onClick={() => setShowAudit(!showAudit)}
+                        className="text-xs font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 transition-colors cursor-pointer"
+                      >
+                        {showAudit ? 'Masquer l\'audit' : 'Afficher l\'audit'}
+                      </button>
                     </div>
+
+                    {showAudit && (
+                      <div className="relative border-l border-slate-200 ml-3 space-y-6 pt-2 animate-in fade-in duration-200">
+                        {selectedRequest.auditTrail && selectedRequest.auditTrail.length > 0 ? (
+                          selectedRequest.auditTrail.map((audit, i) => {
+                            const user = users.find(u => u.id === audit.userId);
+                            return (
+                              <div key={audit.id || i} className="relative pl-5">
+                                <div className="absolute w-2.5 h-2.5 bg-blue-500 rounded-full -left-[5px] top-1.5 ring-4 ring-white"></div>
+                                <div className="text-xs text-slate-400 mb-0.5">{formatDate(audit.timestamp)}</div>
+                                <div className="text-sm font-semibold text-slate-800">{audit.action}</div>
+                                <div className="text-sm text-slate-600 mt-1">{audit.details}</div>
+                                <div className="text-xs font-medium text-slate-500 mt-2 flex items-center">
+                                  <User className="w-3 h-3 mr-1" />
+                                  Par : {user?.name || audit.userId}
+                                </div>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div className="text-xs text-slate-400 italic pl-5">Aucun historique d'audit pour ce dossier.</div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
                 {/* Encart Conclusion Générale pour les Rapports */}
-                  <div className="mt-8 border-t border-slate-200 pt-6">
-                    <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-5">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-                        <div>
-                          <h4 className="text-sm font-bold text-emerald-950 uppercase tracking-wider flex items-center">
-                            <FileText className="w-4 h-4 mr-2 text-emerald-700" />
-                            Conclusion Générale & Avis Technique (Rapport)
-                          </h4>
-                          <p className="text-xs text-emerald-700 mt-0.5">
-                            Cette conclusion sera automatiquement injectable dans vos rapports Word/PDF via la balise <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-emerald-200">{"{{demande.conclusion}}"}</code>.
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            updateRequestData(selectedRequest.id, { conclusion: conclusionText }, 'Mise à jour de la conclusion du rapport');
-                            setSelectedRequest(prev => prev ? { ...prev, conclusion: conclusionText } : null);
-                          }}
-                          className="shrink-0 bg-emerald-600 text-white px-4 py-2 rounded-lg text-xs font-semibold hover:bg-emerald-700 transition-colors shadow-xs flex items-center"
-                        >
-                          <Save className="w-3.5 h-3.5 mr-1.5" />
-                          Enregistrer la conclusion
-                        </button>
+                <div className="mt-8 border-t border-slate-200 pt-6">
+                  <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                      <div>
+                        <h4 className="text-sm font-bold text-emerald-950 uppercase tracking-wider flex items-center">
+                          <FileText className="w-4 h-4 mr-2 text-emerald-700" />
+                          Conclusion Générale & Avis Technique (Rapport)
+                        </h4>
+                        <p className="text-xs text-emerald-700 mt-0.5">
+                          Cette conclusion sera automatiquement injectable dans vos rapports Word/PDF via la balise <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-emerald-200">{"{{demande.conclusion}}"}</code>.
+                        </p>
                       </div>
-                      <textarea
-                        rows={4}
-                        value={conclusionText}
-                        onChange={e => setConclusionText(e.target.value)}
-                        placeholder="Rédigez ici la conclusion générale de l'expertise, la conformité des échantillons ou les recommandations techniques..."
-                        className="w-full rounded-lg border border-emerald-300 bg-white p-3 text-sm text-slate-800 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 focus:outline-none"
-                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateRequestData(selectedRequest.id, { conclusion: conclusionText }, 'Mise à jour de la conclusion du rapport');
+                          setSelectedRequest(prev => prev ? { ...prev, conclusion: conclusionText } : null);
+                        }}
+                        className="shrink-0 bg-emerald-600 text-white px-4 py-2 rounded-lg text-xs font-semibold hover:bg-emerald-700 transition-colors shadow-xs flex items-center"
+                      >
+                        <Save className="w-3.5 h-3.5 mr-1.5" />
+                        Enregistrer la conclusion
+                      </button>
                     </div>
+                    <textarea
+                      rows={4}
+                      value={conclusionText}
+                      onChange={e => setConclusionText(e.target.value)}
+                      placeholder="Rédigez ici la conclusion générale de l'expertise, la conformité des échantillons ou les recommandations techniques..."
+                      className="w-full rounded-lg border border-emerald-300 bg-white p-3 text-sm text-slate-800 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 focus:outline-none"
+                    />
                   </div>
+                </div>
 
                 {/* Échantillons et Essais Rattachés (avec Ajout / Suppression par le Manager) */}
                 <div className="mt-8 border-t border-slate-200 pt-6">
@@ -857,11 +875,10 @@ export function RequestsInternal() {
                                           <span className="font-medium text-slate-700">{tpl?.name || analysis.id}</span>
                                           <span className="ml-1.5 text-[10px] font-mono text-slate-400">({analysis.id})</span>
                                         </div>
-                                        <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border ${
-                                          analysis.status === 'rejete'
+                                        <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border ${analysis.status === 'rejete'
                                             ? 'bg-red-50 border-red-200 text-red-700'
                                             : 'bg-white border-slate-200 text-slate-500'
-                                        }`}>
+                                          }`}>
                                           {analysis.status}
                                         </span>
                                         {isManager && (

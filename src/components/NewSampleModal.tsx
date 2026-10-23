@@ -12,6 +12,7 @@ import React, { useState } from 'react';
 import { X } from 'lucide-react';
 import { useLims } from '../store';
 import { Sample, Priority, MaterialState, SampleStatus } from '../types';
+import { generateUniqueLimsId, generateUniqueBarcode } from '../utils/idGenerator';
 
 /**
  * Propriétés attendues par la modale
@@ -24,7 +25,7 @@ interface Props {
 }
 
 export function NewSampleModal({ isOpen, onClose }: Props) {
-  const { materialTemplates, addSample, labSettings, activeLabId } = useLims();
+  const { materialTemplates, addSample, labSettings, activeLabId, allSamples } = useLims();
   const activeTemplates = materialTemplates.filter(t => t.isActive !== false);
   
   // États locaux du formulaire
@@ -40,7 +41,7 @@ export function NewSampleModal({ isOpen, onClose }: Props) {
 
   const activeTemplate = activeTemplates.find(t => t.id === selectedTemplateId);
 
-  /**
+/**
    * Création et insertion de l'échantillon dans le catalogue
    */
   const handleSubmit = (e: React.FormEvent) => {
@@ -48,12 +49,21 @@ export function NewSampleModal({ isOpen, onClose }: Props) {
     if (!activeTemplate) return;
 
     const prefix = labSettings?.idPrefixes?.sample || 'ECH';
+    const barcodePrefix = activeTemplate.category.substring(0, 3).toUpperCase();
+
+    const uniqueSampleId = generateUniqueLimsId(
+      prefix,
+      allSamples.map(s => s.id)
+    );
+    const uniqueBarcode = generateUniqueBarcode(
+      allSamples.map(s => s.barcode),
+      barcodePrefix
+    );
+
     const newSample: Sample = {
-      // Génération de l'ID séquentiel
-      id: `${prefix}-${new Date().getFullYear().toString().slice(2)}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`,
+      id: uniqueSampleId,
       labId: activeLabId,
-      // Génération du code-barres basé sur la catégorie matière
-      barcode: `${activeTemplate.category.substring(0, 3).toUpperCase()}-${Math.floor(Math.random() * 100000).toString().padStart(6, '0')}`,
+      barcode: uniqueBarcode,
       templateId: activeTemplate.id,
       materialState,
       status: 'receptionne',

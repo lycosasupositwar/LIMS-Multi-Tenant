@@ -26,7 +26,13 @@ const readMicrographyImage = (file: File): Promise<MicrographyImage> => new Prom
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('Canvas indisponible');
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-        resolve({ id: `micro_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, name: file.name, dataUrl: canvas.toDataURL('image/jpeg', 0.84), comment: '' });
+        const defaultName = file.name.replace(/\.[^/.]+$/, '');
+        resolve({ 
+          id: `micro_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, 
+          name: defaultName, 
+          dataUrl: canvas.toDataURL('image/jpeg', 0.84), 
+          comment: '' 
+        });
       } catch (error) { reject(error); }
     };
     image.onerror = () => reject(new Error(`Format d’image non pris en charge : ${file.name}`));
@@ -36,15 +42,15 @@ const readMicrographyImage = (file: File): Promise<MicrographyImage> => new Prom
 });
 
 export function Analyses() {
-  const { 
-    currentUser, 
-    analyses, 
-    analysisTemplates, 
-    updateAnalysisStatus, 
-    updateAnalysisResult, 
-    addAnalysisImage, 
-    samples, 
-    requests, 
+  const {
+    currentUser,
+    analyses,
+    analysisTemplates,
+    updateAnalysisStatus,
+    updateAnalysisResult,
+    addAnalysisImage,
+    samples,
+    requests,
     globalSearchQuery,
     setGlobalSearchQuery
   } = useLims();
@@ -105,19 +111,19 @@ export function Analyses() {
       }
     }
 
-    const matchesSearch = a.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          (a.sampleId && a.sampleId.toLowerCase().includes(searchTerm.toLowerCase()));
-    
+    const matchesSearch = a.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (a.sampleId && a.sampleId.toLowerCase().includes(searchTerm.toLowerCase()));
+
     if (globalSearchQuery) {
       const template = analysisTemplates.find(t => t.id === a.templateId);
       const q = globalSearchQuery.toLowerCase();
       if (!a.id.toLowerCase().includes(q) &&
-          !a.sampleId?.toLowerCase().includes(q) &&
-          !template?.name.toLowerCase().includes(q)) {
+        !a.sampleId?.toLowerCase().includes(q) &&
+        !template?.name.toLowerCase().includes(q)) {
         return false;
       }
     }
-    
+
     return matchesSearch;
   }).sort((a, b) => {
     const priorityWeight: Record<string, number> = { haute: 3, normale: 2, basse: 1 };
@@ -130,17 +136,17 @@ export function Analyses() {
 
   const getStatusBadge = (status: AnalysisStatus) => {
     switch (status) {
-      case 'planifie': 
+      case 'planifie':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-800">Planifié</span>;
-      case 'En Cours': 
+      case 'En Cours':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">En cours</span>;
-      case 'a_valider': 
+      case 'a_valider':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">À valider</span>;
-      case 'valide': 
+      case 'valide':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">Validé</span>;
-      case 'termine': 
+      case 'termine':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">Terminé</span>;
-      case 'rejete': 
+      case 'rejete':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">Rejeté</span>;
     }
   };
@@ -186,27 +192,60 @@ export function Analyses() {
           <UploadCloud className="h-4 w-4" /> Ajouter une ou plusieurs images
           <input type="file" accept="image/*" multiple disabled={disabled} className="hidden" onChange={e => { void handleMicrographyUpload(analysisId, resultId, e.target.files, currentValue); e.currentTarget.value = ''; }} />
         </label>
-        <p className="text-xs text-slate-500">Images redimensionnées automatiquement pour limiter la taille des données. Commentaire facultatif pour chaque image.</p>
-        {images.length > 0 && <div className="grid grid-cols-1 gap-3 md:grid-cols-2">{images.map((img, index) => (
-          <div key={img.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-            <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
-              <span className="truncate pr-2 text-xs font-semibold text-slate-700">Image {index + 1} · {img.name}</span>
-              {!disabled && <button type="button" title="Supprimer l’image" onClick={() => updateAnalysisResult(analysisId, resultId, { images: images.filter(item => item.id !== img.id) })} className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"><X className="h-4 w-4" /></button>}
-            </div>
-            <img src={img.dataUrl} alt={img.name || `Micrographie ${index + 1}`} className="max-h-64 w-full bg-slate-50 object-contain" />
-            <div className="p-3">
-              <label className="mb-1 block text-xs font-medium text-slate-600">Commentaire (facultatif)</label>
-              <textarea value={img.comment || ''} disabled={disabled} onChange={e => updateMicrographyImage(analysisId, resultId, currentValue, img.id, { comment: e.target.value })} rows={2} placeholder="Observation liée à cette image…" className="w-full resize-y rounded-md border border-slate-200 px-2 py-1.5 text-sm focus:border-indigo-400 focus:outline-none disabled:bg-slate-50" />
-            </div>
+        <p className="text-xs text-slate-500">Images redimensionnées automatiquement pour limiter la taille des données. Le nom et le commentaire de chaque image sont modifiables.</p>
+        {images.length > 0 && (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {images.map((img, index) => (
+              <div key={img.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2 bg-slate-50/50">
+                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                    <span className="shrink-0 text-xs font-semibold text-slate-500">
+                      Image {index + 1} ·
+                    </span>
+                    <input
+                      type="text"
+                      value={img.name || ''}
+                      disabled={disabled}
+                      onChange={e => updateMicrographyImage(analysisId, resultId, currentValue, img.id, { name: e.target.value })}
+                      placeholder="Nom de l'image..."
+                      title="Modifier le nom de l'image"
+                      className="w-full min-w-0 rounded border border-transparent bg-transparent px-1.5 py-0.5 text-xs font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:bg-white focus:border-indigo-400 focus:bg-white focus:outline-none disabled:hover:border-transparent disabled:hover:bg-transparent"
+                    />
+                  </div>
+                  {!disabled && (
+                    <button
+                      type="button"
+                      title="Supprimer l’image"
+                      onClick={() => updateAnalysisResult(analysisId, resultId, { images: images.filter(item => item.id !== img.id) })}
+                      className="shrink-0 rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                <img src={img.dataUrl} alt={img.name || `Micrographie ${index + 1}`} className="max-h-64 w-full bg-slate-50 object-contain" />
+                <div className="p-3">
+                  <label className="mb-1 block text-xs font-medium text-slate-600">Commentaire (facultatif)</label>
+                  <textarea
+                    value={img.comment || ''}
+                    disabled={disabled}
+                    onChange={e => updateMicrographyImage(analysisId, resultId, currentValue, img.id, { comment: e.target.value })}
+                    rows={2}
+                    placeholder="Observation liée à cette image…"
+                    className="w-full resize-y rounded-md border border-slate-200 px-2 py-1.5 text-sm focus:border-indigo-400 focus:outline-none disabled:bg-slate-50"
+                  />
+                </div>
+              </div>
+            ))}
           </div>
-        ))}</div>}
+        )}
       </div>
     );
   };
 
   const renderInputForResult = (analysisId: string, resultTemplate: ExpectedResult, currentValue: any, status: AnalysisStatus) => {
     const disabled = (!isManager && (status === 'a_valider' || status === 'valide' || status === 'termine')) || (isManager && status === 'termine');
-    
+
     if (resultTemplate.type === 'micrography') {
       return renderMicrographyInput(analysisId, resultTemplate.id, currentValue, disabled);
     }
@@ -229,7 +268,7 @@ export function Analyses() {
         </div>
       );
     }
-    
+
     if (resultTemplate.type === 'select') {
       return (
         <div className="flex items-center gap-2 mt-1">
@@ -266,11 +305,10 @@ export function Analyses() {
                     : [...currentValues, opt];
                   updateAnalysisResult(analysisId, resultTemplate.id, newValues);
                 }}
-                className={`px-3 py-1.5 text-sm font-medium rounded-full border transition-colors disabled:opacity-50 ${
-                  isSelected 
-                    ? 'bg-blue-100 text-blue-800 border-blue-300' 
+                className={`px-3 py-1.5 text-sm font-medium rounded-full border transition-colors disabled:opacity-50 ${isSelected
+                    ? 'bg-blue-100 text-blue-800 border-blue-300'
                     : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                }`}
+                  }`}
               >
                 {opt}
               </button>
@@ -284,8 +322,8 @@ export function Analyses() {
       const currentValues = Array.isArray(currentValue) ? currentValue : (currentValue ? [currentValue] : []);
       const numValues = currentValues.map(v => Number(v)).filter(v => !isNaN(v));
       const mean = numValues.length > 0 ? numValues.reduce((a, b) => a + b, 0) / numValues.length : null;
-      const variance = numValues.length > 1 
-        ? numValues.reduce((a, b) => a + Math.pow(b - mean!, 2), 0) / (numValues.length - 1) 
+      const variance = numValues.length > 1
+        ? numValues.reduce((a, b) => a + Math.pow(b - mean!, 2), 0) / (numValues.length - 1)
         : null;
       const stdDev = variance !== null ? Math.sqrt(variance) : null;
 
@@ -306,12 +344,12 @@ export function Analyses() {
                   disabled={disabled}
                 />
                 {!disabled && (
-                  <button 
+                  <button
                     onClick={() => {
                       const newValues = [...currentValues];
                       newValues.splice(idx, 1);
                       updateAnalysisResult(analysisId, resultTemplate.id, newValues);
-                    }} 
+                    }}
                     className="text-red-400 hover:text-red-600"
                   >
                     <X className="w-3 h-3" />
@@ -359,10 +397,10 @@ export function Analyses() {
         </div>
       );
     }
-    
+
     return (
       <div className="flex items-center gap-2 mt-1">
-        <input 
+        <input
           type={resultTemplate.type === 'number' ? 'number' : 'text'}
           value={currentValue !== undefined ? currentValue : ''}
           onChange={(e) => updateAnalysisResult(analysisId, resultTemplate.id, e.target.value)}
@@ -379,7 +417,7 @@ export function Analyses() {
     return analysesList.map((analysis) => {
       const template = analysisTemplates.find(t => t.id === analysis.templateId);
       if (!template) return null;
-      
+
       const sample = samples.find(s => s.id === analysis.sampleId);
       const request = sample?.requestId ? requests.find(r => r.id === sample.requestId) : undefined;
       const effectivePriority = sample?.priority || request?.priority || 'normale';
@@ -391,13 +429,12 @@ export function Analyses() {
         <li
           key={analysis.id}
           id={`analysis-card-${analysis.id}`}
-          className={`p-4 sm:p-6 transition-colors ${
-            isHighlighted
+          className={`p-4 sm:p-6 transition-colors ${isHighlighted
               ? 'bg-amber-50/40 ring-2 ring-inset ring-amber-300'
               : effectivePriority === 'haute'
-              ? 'bg-red-50/20 hover:bg-red-50/40 border-l-4 border-l-red-500'
-              : 'hover:bg-slate-50/30'
-          }`}
+                ? 'bg-red-50/20 hover:bg-red-50/40 border-l-4 border-l-red-500'
+                : 'hover:bg-slate-50/30'
+            }`}
         >
           <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-6">
             {/* Colonne de gauche : Métadonnées de l'essai */}
@@ -424,7 +461,7 @@ export function Analyses() {
                 <p className="text-xs text-slate-500">{template.description}</p>
               </div>
             </div>
-            
+
             {/* Colonne de droite : Saisie des résultats et contrôle du workflow */}
             <div className="flex flex-col sm:flex-row gap-6 xl:justify-end xl:w-3/5">
               <div className="flex-1 bg-slate-50 rounded-lg border border-slate-200 p-4 relative">
@@ -447,7 +484,7 @@ export function Analyses() {
                     </div>
                   ))}
                 </div>
-                
+
                 {analysis.images.length > 0 && (
                   <div className="mt-4 pt-3 border-t border-slate-200">
                     <h4 className="text-xs font-semibold text-slate-500 mb-2">Micrographies jointes :</h4>
@@ -463,7 +500,7 @@ export function Analyses() {
               {/* Boutons d'avancement du cycle d'approbation */}
               <div className="flex flex-col items-end gap-2 sm:w-40 sm:border-l sm:border-slate-200 sm:pl-6 justify-center">
                 {analysis.status === 'planifie' && (
-                  <button 
+                  <button
                     onClick={() => updateAnalysisStatus(analysis.id, 'En Cours')}
                     className="w-full text-xs px-3 py-2 bg-blue-50 text-blue-700 rounded-md font-medium hover:bg-blue-100 transition-colors text-center"
                   >
@@ -471,7 +508,7 @@ export function Analyses() {
                   </button>
                 )}
                 {analysis.status === 'En Cours' && (
-                  <button 
+                  <button
                     onClick={() => updateAnalysisStatus(analysis.id, 'a_valider')}
                     className="w-full text-xs px-3 py-2 bg-amber-50 text-amber-700 rounded-md font-medium hover:bg-amber-100 transition-colors text-center"
                   >
@@ -480,14 +517,14 @@ export function Analyses() {
                 )}
                 {analysis.status === 'a_valider' && isManager && (
                   <>
-                    <button 
+                    <button
                       onClick={() => updateAnalysisStatus(analysis.id, 'valide')}
                       className="w-full text-xs px-3 py-2 bg-emerald-500 text-white rounded-md font-medium hover:bg-emerald-600 transition-colors flex justify-center items-center"
                     >
                       <Check className="w-4 h-4 mr-1" />
                       Valider
                     </button>
-                    <button 
+                    <button
                       onClick={() => updateAnalysisStatus(analysis.id, 'rejete')}
                       className="w-full text-xs px-3 py-2 bg-red-50 text-red-700 rounded-md font-medium hover:bg-red-100 transition-colors text-center mt-1"
                     >
@@ -496,7 +533,7 @@ export function Analyses() {
                   </>
                 )}
                 {analysis.auditTrail && analysis.auditTrail.length > 0 && (
-                  <button 
+                  <button
                     onClick={() => setShowAuditFor(showAuditFor === analysis.id ? null : analysis.id)}
                     className="text-xs text-slate-500 underline hover:text-slate-800 mt-2"
                   >
@@ -530,7 +567,7 @@ export function Analyses() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h2 className="text-2xl font-display font-bold text-slate-900">Suivi des Analyses & Essais</h2>
-        
+
         <div className="flex bg-white rounded-lg p-1 border border-slate-200 shrink-0">
           <button
             onClick={() => setFilterMode('actives')}
@@ -606,11 +643,11 @@ export function Analyses() {
                 acc[reqId].push(analysis);
                 return acc;
               }, {} as Record<string, typeof analyses>);
-              
+
               if (Object.keys(grouped).length === 0) {
-                 return <div className="text-center py-10 text-sm text-slate-500">Aucun essai trouvé.</div>;
+                return <div className="text-center py-10 text-sm text-slate-500">Aucun essai trouvé.</div>;
               }
-              
+
               return (Object.entries(grouped) as [string, typeof analyses][]).map(([reqId, reqAnalyses]) => {
                 const req = requests.find(r => r.id === reqId);
                 return (

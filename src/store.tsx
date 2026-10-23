@@ -31,7 +31,7 @@ import {
   initialConsumables,
   initialReportTemplates
 } from './data';
-
+import { generateUniqueLimsId } from './utils/idGenerator';
 interface NotificationMeta {
   targetTab?: string;
   targetId?: string;
@@ -481,8 +481,17 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
 
 const addRequest = async (request: AnalysisRequest) => {
   const targetLabId = request.labId || activeLabId;
+  const targetLab = laboratories.find(l => l.id === targetLabId);
+  const reqPrefix = targetLab?.settings?.idPrefixes?.request || `REQ-${targetLab?.code || 'LAB'}`;
+
+  // Garantit un ID unique non-séquentiel (ou remplace l'ID s'il existe déjà)
+  const existingReqIds = new Set(rawRequests.map(r => r.id));
+  const uniqueReqId = (!request.id || existingReqIds.has(request.id))
+    ? generateUniqueLimsId(reqPrefix, existingReqIds)
+    : request.id;
+
   const initialAudit = createAuditLog('Création', `Demande soumise au laboratoire [${targetLabId}]`);
-  const newReq = { ...request, labId: targetLabId, auditTrail: [initialAudit] };
+  const newReq = { ...request, id: uniqueReqId, labId: targetLabId, auditTrail: [initialAudit] };
   setRequests(prev => [newReq, ...prev]);
 
   let currentUsers = users;
@@ -513,15 +522,15 @@ const addRequest = async (request: AnalysisRequest) => {
     labManagers = currentUsers.filter(u => (u.role || '').toLowerCase() === 'manager');
   }
 
-  console.info(`[Notification] Création demande ${request.id} (Lab: ${targetLabId}) -> ${labManagers.length} manager(s) trouvé(s) sur ${currentUsers.length} utilisateur(s) chargé(s).`);
+  console.info(`[Notification] Création demande ${uniqueReqId} (Lab: ${targetLabId}) -> ${labManagers.length} manager(s) trouvé(s) sur ${currentUsers.length} utilisateur(s) chargé(s).`);
 
   labManagers.forEach(m =>
     addNotification(
       m.id,
       'Nouvelle demande d\'analyse',
-      `La demande ${request.id} ("${request.title}") a été soumise par ${currentUser?.name || 'un client'}.`,
+      `La demande ${uniqueReqId} ("${request.title}") a été soumise par ${currentUser?.name || 'un client'}.`,
       'email',
-      { targetTab: 'requests', targetId: request.id, labId: targetLabId }
+      { targetTab: 'requests', targetId: uniqueReqId, labId: targetLabId }
     )
   );
 };
@@ -662,8 +671,14 @@ const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comm
   }
   };
 
-  const addSample = (sample: Sample) => {
-    const item = { ...sample, labId: sample.labId || activeLabId };
+const addSample = (sample: Sample) => {
+    const existingIds = new Set(rawSamples.map(s => s.id));
+    const prefix = labSettings?.idPrefixes?.sample || 'ECH';
+    const uniqueId = (!sample.id || existingIds.has(sample.id))
+      ? generateUniqueLimsId(prefix, existingIds)
+      : sample.id;
+
+    const item = { ...sample, id: uniqueId, labId: sample.labId || activeLabId };
     setSamples(prev => [item, ...prev]);
   };
 
@@ -679,8 +694,13 @@ const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comm
     setSamples(prev => prev.map(s => s.id === id ? { ...s, images: [...s.images, imageUrl] } : s));
   };
 
-  const addAnalysis = (analysis: Analysis) => {
-    const item = { ...analysis, labId: analysis.labId || activeLabId };
+const addAnalysis = (analysis: Analysis) => {
+    const existingIds = new Set(rawAnalyses.map(a => a.id));
+    const uniqueId = (!analysis.id || existingIds.has(analysis.id))
+      ? generateUniqueLimsId('ESS', existingIds)
+      : analysis.id;
+
+    const item = { ...analysis, id: uniqueId, labId: analysis.labId || activeLabId };
     setAnalyses(prev => [item, ...prev]);
   };
 
@@ -731,8 +751,16 @@ const updateAnalysisStatus = (id: string, status: Analysis['status']) => {
           return a;
         }
 
-        const previous = a.results[resultId] ?? 'N/A';
-        const audit = createAuditLog('Modification de résultat', `${resultId}: ${previous} -> ${value}`);
+        const formatAuditVal = (v: any) => {
+          if (v && typeof v === 'object' && Array.isArray(v.images)) {
+            return `${v.images.length} micrographie(s) (${v.images.map((i: any) => i.name).join(', ')})`;
+          }
+          return typeof v === 'object' ? JSON.stringify(v) : (v ?? 'N/A');
+        };
+
+        const previous = formatAuditVal(a.results[resultId]);
+        const nextVal = formatAuditVal(value);
+        const audit = createAuditLog('Modification de résultat', `${resultId}: ${previous} -> ${nextVal}`);
         return {
           ...a,
           results: { ...a.results, [resultId]: value },

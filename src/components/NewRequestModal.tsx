@@ -13,6 +13,7 @@ import { X, Building2, Layers, CheckCircle2 } from 'lucide-react';
 import { useLims } from '../store';
 import { AnalysisRequest } from '../types';
 import { getLabColor } from '../utils/colors';
+import { generateUniqueLimsId } from '../utils/idGenerator';
 
 interface Props {
   /** État d'ouverture de la modale */
@@ -30,6 +31,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
     activeLabId, 
     allRequestTemplates, 
     allAnalysisTemplates, 
+    allRequests,
     addRequest 
   } = useLims();
   
@@ -86,7 +88,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
   const targetLab = laboratories.find(l => l.id === selectedLabId) || laboratories[0];
   const activeTemplate = labTemplates.find(t => t.id === selectedTemplateId) || labTemplates[0];
   
-  // Analyses disponibles configurées dans le CMS pour ce laboratoire spécifique
+// Analyses disponibles configurées dans le CMS pour ce laboratoire spécifique
   const availableAnalyses = allAnalysisTemplates.filter(a => a.labId === selectedLabId && a.isActive !== false);
 
   /**
@@ -96,9 +98,14 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
     e.preventDefault();
     if (!currentUser || !activeTemplate) return;
 
-    const prefix = targetLab.settings?.idPrefixes?.request || 'REQ';
+    const prefix = targetLab?.settings?.idPrefixes?.request || `REQ-${targetLab?.code || 'LAB'}`;
+    const uniqueRequestId = generateUniqueLimsId(
+      prefix,
+      allRequests.map(r => r.id)
+    );
+
     const newRequest: AnalysisRequest = {
-      id: `${prefix}-${new Date().getFullYear().toString().slice(2)}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`,
+      id: uniqueRequestId,
       labId: selectedLabId,
       requesterId: currentUser.id,
       templateId: activeTemplate.id,
@@ -112,6 +119,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
     addRequest(newRequest);
     onClose();
   };
+  
 
   const handleCustomDataChange = (fieldId: string, value: any) => {
     setCustomData(prev => ({ ...prev, [fieldId]: value }));

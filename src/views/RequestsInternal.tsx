@@ -14,6 +14,7 @@ import React, { useState } from 'react';
 import { useLims } from '../store';
 import { FileText, Clock, User, CheckCircle, Shield, AlertCircle, PlayCircle, History, Mail, XCircle, Plus, Box, Edit2, Save, Database, Layers, TestTube2 } from 'lucide-react';
 import { RequestStatus, AnalysisRequest, MaterialState, Sample } from '../types';
+import { generateUniqueLimsId, generateUniqueBarcode } from '../utils/idGenerator';
 
 export function RequestsInternal() {
   const {
@@ -31,6 +32,9 @@ export function RequestsInternal() {
     updateRequestData,
     samples,
     analyses,
+    allSamples,     // <-- Ajouté pour vérifier l'unicité sur tous les labos
+    allAnalyses,    // <-- Ajouté pour vérifier l'unicité sur tous les labos
+    labSettings,    // <-- Ajouté pour respecter les préfixes configurés
     globalSearchQuery,
     activeLabId
   } = useLims();
@@ -203,13 +207,25 @@ export function RequestsInternal() {
       });
     }
 
+// Ensembles locaux pour suivre les IDs déjà existants + ceux créés dans la boucle en cours
+    const usedSampleIds = new Set(allSamples.map(s => s.id));
+    const usedBarcodes = new Set(allSamples.map(s => s.barcode));
+    const usedAnalysisIds = new Set(allAnalyses.map(a => a.id));
+
+    const samplePrefix = labSettings?.idPrefixes?.sample || 'ECH';
+
     // Création de N échantillons avec leurs essais associés
     for (let i = 0; i < sampleQuantity; i++) {
-      const sampleId = `ECH-${new Date().getFullYear().toString().slice(2)}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+      const sampleId = generateUniqueLimsId(samplePrefix, usedSampleIds);
+      usedSampleIds.add(sampleId); // Empêche tout doublon même lors d'une création en lot (ex: 50 échantillons d'un coup)
+
+      const barcode = generateUniqueBarcode(usedBarcodes, 'BC');
+      usedBarcodes.add(barcode);
+
       const newSample: Sample = {
         id: sampleId,
         labId: selectedRequest.labId || activeLabId,
-        barcode: `REQ-${Math.floor(Math.random() * 100000).toString().padStart(6, '0')}`,
+        barcode: barcode,
         templateId: sampleMaterialTemplateId,
         requestId: selectedRequest.id,
         materialState: sampleMaterialState,
@@ -228,8 +244,12 @@ export function RequestsInternal() {
       requestedAnalyses.forEach((analysisIdentifier: string) => {
         const matchedTemplate = analysisTemplates.find(t => t.id === analysisIdentifier || t.name === analysisIdentifier);
         if (matchedTemplate) {
+          const analysisId = generateUniqueLimsId('ESS', usedAnalysisIds);
+          usedAnalysisIds.add(analysisId);
+
           addAnalysis({
-            id: `ESS-${new Date().getFullYear().toString().slice(2)}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`,
+            id: analysisId,
+            labId: selectedRequest.labId || activeLabId,
             sampleId: sampleId,
             templateId: matchedTemplate.id,
             status: 'planifie',

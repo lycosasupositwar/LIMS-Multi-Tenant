@@ -672,14 +672,16 @@ const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comm
   };
 
 const addSample = (sample: Sample) => {
-    const existingIds = new Set(rawSamples.map(s => s.id));
-    const prefix = labSettings?.idPrefixes?.sample || 'ECH';
-    const uniqueId = (!sample.id || existingIds.has(sample.id))
-      ? generateUniqueLimsId(prefix, existingIds)
-      : sample.id;
+    setSamples(prev => {
+      const existingIds = new Set(prev.map(s => s.id));
+      const prefix = labSettings?.idPrefixes?.sample || 'ECH';
+      const uniqueId = (!sample.id || existingIds.has(sample.id))
+        ? generateUniqueLimsId(prefix, existingIds)
+        : sample.id;
 
-    const item = { ...sample, id: uniqueId, labId: sample.labId || activeLabId };
-    setSamples(prev => [item, ...prev]);
+      const item = { ...sample, id: uniqueId, labId: sample.labId || activeLabId };
+      return [item, ...prev];
+    });
   };
 
   const updateSampleStatus = (id: string, status: Sample['status']) => {
@@ -695,67 +697,92 @@ const addSample = (sample: Sample) => {
   };
 
 const addAnalysis = (analysis: Analysis) => {
-    const existingIds = new Set(rawAnalyses.map(a => a.id));
-    const uniqueId = (!analysis.id || existingIds.has(analysis.id))
-      ? generateUniqueLimsId('ESS', existingIds)
-      : analysis.id;
+    setAnalyses(prev => {
+      const existingIds = new Set(prev.map(a => a.id));
+      const uniqueId = (!analysis.id || existingIds.has(analysis.id))
+        ? generateUniqueLimsId('ESS', existingIds)
+        : analysis.id;
 
-    const item = { ...analysis, id: uniqueId, labId: analysis.labId || activeLabId };
-    setAnalyses(prev => [item, ...prev]);
+      const item = { ...analysis, id: uniqueId, labId: analysis.labId || activeLabId };
+      return [item, ...prev];
+    });
   };
 
 const updateAnalysisStatus = (id: string, status: Analysis['status']) => {
-  const a = rawAnalyses.find(analysis => analysis.id === id);
-  
-  if (a && status === 'a_valider') {
-    // 1. Notification aux managers pour cette analyse spécifique
-    const labManagers = users.filter(
-      u => (u.role === 'manager') && (u.labId === a.labId || u.labId === 'all' || !u.labId)
-    );
-    labManagers.forEach(m =>
-      addNotification(
-        m.id,
-        `Analyse ${a.id} à valider`,
-        `L'analyse ${a.id} sur l'échantillon ${a.sampleId} est prête pour validation technique.`,
-        'email',
-        { targetTab: 'analyses', targetId: a.id, labId: a.labId }
-      )
-    );
+  // On met d'abord à jour la liste des analyses en utilisant l'état le plus récent (prevAnalyses)
+  setAnalyses(prevAnalyses => {
+    const updatedAnalyses = prevAnalyses.map(analysis => {
+      if (analysis.id === id) {
+        const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}`);
+        return {
+          ...analysis,
+          status,
+          updatedAt: new Date().toISOString(),
+          auditTrail: [audit, ...(analysis.auditTrail || [])]
+        };
+      }
+      return analysis;
+    });
 
-    // 2. Vérification rigoureuse multi-échantillons et multi-analyses
-    const sample = rawSamples.find(s => s.id === a.sampleId);
-    if (sample?.requestId) {
-      const parentReq = rawRequests.find(r => r.id === sample.requestId);
-      
-      if (parentReq) {
-        // Récupérer tous les échantillons liés à cette demande
-        const requestSamples = rawSamples.filter(s => s.requestId === parentReq.id);
-        const requestSampleIds = new Set(requestSamples.map(s => s.id));
-        
-        // Récupérer toutes les analyses de TOUS les échantillons de cette demande
-        const requestAnalyses = rawAnalyses.filter(an => requestSampleIds.has(an.sampleId));
+    const targetAnalysis = updatedAnalyses.find(an => an.id === id);
 
-        // Vérifier si TOUTES les analyses de TOUS les échantillons de la demande sont prêtes
-        const allAnalysesReady = requestAnalyses.every(an => {
-          if (an.id === id) return true; // L'analyse actuelle en cours de soumission
-          return an.status === 'a_valider' || an.status === 'valide' || an.status === 'termine';
-        });
+    // Si l'essai passe à "a_valider" ou "valide" ou "termine"
+    if (targetAnalysis && (status === 'a_valider' || status === 'valide' || status === 'termine')) {
+      if (status === 'a_valider') {
+        const labManagers = users.filter(
+          u => (u.role === 'manager') && (u.labId === targetAnalysis.labId || u.labId === 'all' || !u.labId)
+        );
+        labManagers.forEach(m =>
+          addNotification(
+            m.id,
+            `Analyse ${targetAnalysis.id} à valider`,
+            `L'analyse ${targetAnalysis.id} sur l'échantillon ${targetAnalysis.sampleId} est prête pour validation technique.`,
+            'email',
+            { targetTab: 'analyses', targetId: targetAnalysis.id, labId: targetAnalysis.labId }
+          )
+        );
+      }
 
-        // Si chaque échantillon a fini tous ses essais, on passe la demande en validation
-        if (allAnalysesReady && parentReq.status !== 'En Validation') {
-          updateRequestStatus(parentReq.id, 'En Validation' as AnalysisRequest['status']);
+      // Recherche de l'échantillon et de la demande parente
+      const sample = rawSamples.find(s => s.id === targetAnalysis.sampleId);
+      const parentRequestId = sample?.requestId || (
+        sample?.parentSampleId ? rawSamples.find(p => p.id === sample.parentSampleId)?.requestId : undefined
+      );
+
+      if (parentRequestId) {
+        const parentReq = rawRequests.find(r => r.id === parentRequestId);
+
+        if (parentReq && parentReq.status !== 'En Validation' && parentReq.status !== 'terminee') {
+          // 1. Tous les échantillons (et sous-échantillons) liés à cette demande
+          const reqSamples = rawSamples.filter(
+            s => s.requestId === parentRequestId || (s.parentSampleId && rawSamples.some(p => p.id === s.parentSampleId && p.requestId === parentRequestId))
+          );
+          const reqSampleIds = new Set(reqSamples.map(s => s.id));
+
+          // 2. Toutes les analyses liées à ces échantillons (dans la liste fraîchement mise à jour)
+          const reqAnalyses = updatedAnalyses.filter(an => reqSampleIds.has(an.sampleId));
+
+          // 3. Vérifie qu'aucun échantillon ayant des analyses (ou principal) n'est encore en attente de préparation
+          const allSamplesInTestingOrDone = reqSamples.every(
+            s => s.status === 'en_essai' || s.status === 'termine' || s.status === 'non_conforme'
+          );
+
+          // 4. Vérifie que CHAQUE échantillon (sauf non_conforme ou parent découpé) qui a des analyses les a toutes terminées
+          const allAnalysesReady =
+            reqAnalyses.length > 0 &&
+            reqAnalyses.every(an => an.status === 'a_valider' || an.status === 'valide' || an.status === 'termine');
+
+          if (allSamplesInTestingOrDone && allAnalysesReady) {
+            setTimeout(() => {
+              updateRequestStatus(parentReq.id, 'En Validation' as AnalysisRequest['status']);
+            }, 0);
+          }
         }
       }
     }
-  }
 
-  setAnalyses(prev => prev.map(analysis => {
-    if (analysis.id === id) {
-      const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}`);
-      return { ...analysis, status, updatedAt: new Date().toISOString(), auditTrail: [audit, ...(analysis.auditTrail || [])] };
-    }
-    return analysis;
-  }));
+    return updatedAnalyses;
+  });
 };
 
     // 2. Vérification si TOUTES les analyses de la demande sont prêtes (a_valider, valide ou termine)

@@ -12,7 +12,7 @@
 
 import React, { useState } from 'react';
 import { useLims } from '../store';
-import { FileText, Clock, User, CheckCircle, Shield, AlertCircle, PlayCircle, History, Mail, XCircle, Plus, Box, Edit2, Save, Database, Layers, TestTube2 } from 'lucide-react';
+import { FileText, Clock, User, CheckCircle, Shield, AlertCircle, PlayCircle, History, Mail, XCircle, Plus, Box, Edit2, Save, Database, Layers, TestTube2, Trash2 } from 'lucide-react';
 import { RequestStatus, AnalysisRequest, MaterialState, Sample } from '../types';
 import { generateUniqueLimsId, generateUniqueBarcode } from '../utils/idGenerator';
 
@@ -28,7 +28,9 @@ export function RequestsInternal() {
     updateRequestStatus,
     rejectRequest,
     addSample,
+    deleteSample,
     addAnalysis,
+    deleteAnalysis,
     updateRequestData,
     samples,
     analyses,
@@ -52,6 +54,9 @@ export function RequestsInternal() {
   const [sampleMaterialTemplateId, setSampleMaterialTemplateId] = useState(activeMaterialTemplates[0]?.id || '');
   const [sampleMaterialState, setSampleMaterialState] = useState<MaterialState>('Massif');
   const [samplePriority, setSamplePriority] = useState<'basse' | 'normale' | 'haute'>('normale');
+  const [conclusionText, setConclusionText] = useState('');
+  const [addingAnalysisForSample, setAddingAnalysisForSample] = useState<string | null>(null);
+  const [selectedNewAnalysisTplId, setSelectedNewAnalysisTplId] = useState<string>('');
 
   // Liste des utilisateurs ayant le rôle analyste pour l'assignation
   const analysts = users.filter(u =>
@@ -207,7 +212,7 @@ export function RequestsInternal() {
       });
     }
 
-// Ensembles locaux pour suivre les IDs déjà existants + ceux créés dans la boucle en cours
+    // Ensembles locaux pour suivre les IDs déjà existants + ceux créés dans la boucle en cours
     const usedSampleIds = new Set(allSamples.map(s => s.id));
     const usedBarcodes = new Set(allSamples.map(s => s.barcode));
     const usedAnalysisIds = new Set(allAnalyses.map(a => a.id));
@@ -314,6 +319,7 @@ export function RequestsInternal() {
                       setIsEditing(false);
                       setEditedData(req.customData);
                       setSamplePriority((req as any).priority || 'normale');
+                      setConclusionText(req.conclusion || '');
                     }}
                     className={`w-full text-left p-4 rounded-lg border transition-all ${isSelected ? 'bg-blue-50 border-blue-300 shadow-sm' : 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-sm'
                       }`}
@@ -386,6 +392,28 @@ export function RequestsInternal() {
                         {analysts.map(a => (
                           <option key={a.id} value={a.id}>{a.name}</option>
                         ))}
+                      </select>
+                    </div>
+                    <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
+                      <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
+                        Forcer l'étape du Workflow
+                      </label>
+                      <select
+                        value={selectedRequest.status}
+                        onChange={(e) => {
+                          const targetStatus = e.target.value as RequestStatus;
+                          handleStatusChange(targetStatus);
+                        }}
+                        className="w-full text-sm border-slate-300 rounded-md focus:ring-blue-500 focus:border-blue-500 font-medium text-blue-700"
+                      >
+                        <option value="soumise">1. Soumise</option>
+                        <option value="En Revue">2. En Revue</option>
+                        <option value="validee">3. Validée</option>
+                        <option value="assignee">4. Assignée</option>
+                        <option value="En Cours">5. En Cours</option>
+                        <option value="En Validation">6. En Validation finale</option>
+                        <option value="terminee">7. Terminée</option>
+                        <option value="rejetee">Rejetée</option>
                       </select>
                     </div>
                   </div>
@@ -674,15 +702,52 @@ export function RequestsInternal() {
                     </div>
                   </div>
                 </div>
+                {/* Encart Conclusion Générale pour les Rapports */}
+                  <div className="mt-8 border-t border-slate-200 pt-6">
+                    <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-5">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                        <div>
+                          <h4 className="text-sm font-bold text-emerald-950 uppercase tracking-wider flex items-center">
+                            <FileText className="w-4 h-4 mr-2 text-emerald-700" />
+                            Conclusion Générale & Avis Technique (Rapport)
+                          </h4>
+                          <p className="text-xs text-emerald-700 mt-0.5">
+                            Cette conclusion sera automatiquement injectable dans vos rapports Word/PDF via la balise <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-emerald-200">{"{{demande.conclusion}}"}</code>.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateRequestData(selectedRequest.id, { conclusion: conclusionText }, 'Mise à jour de la conclusion du rapport');
+                            setSelectedRequest(prev => prev ? { ...prev, conclusion: conclusionText } : null);
+                          }}
+                          className="shrink-0 bg-emerald-600 text-white px-4 py-2 rounded-lg text-xs font-semibold hover:bg-emerald-700 transition-colors shadow-xs flex items-center"
+                        >
+                          <Save className="w-3.5 h-3.5 mr-1.5" />
+                          Enregistrer la conclusion
+                        </button>
+                      </div>
+                      <textarea
+                        rows={4}
+                        value={conclusionText}
+                        onChange={e => setConclusionText(e.target.value)}
+                        placeholder="Rédigez ici la conclusion générale de l'expertise, la conformité des échantillons ou les recommandations techniques..."
+                        className="w-full rounded-lg border border-emerald-300 bg-white p-3 text-sm text-slate-800 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 focus:outline-none"
+                      />
+                    </div>
+                  </div>
 
-                {/* Échantillons et Essais Rattachés */}
+                {/* Échantillons et Essais Rattachés (avec Ajout / Suppression par le Manager) */}
                 <div className="mt-8 border-t border-slate-200 pt-6">
                   <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center">
                     <Database className="w-4 h-4 mr-2" />
                     Échantillons & Analyses Générés
                   </h4>
                   {(() => {
+                    const isManager = currentUser?.role === 'manager' || currentUser?.role === 'admin';
                     const reqSamples = samples.filter(s => s.requestId === selectedRequest.id);
+                    const activeAnalysisTpls = analysisTemplates.filter(t => t.isActive !== false);
+
                     if (reqSamples.length === 0) {
                       return (
                         <div className="text-sm text-slate-500 italic bg-slate-50 p-4 rounded-lg border border-slate-100">
@@ -697,14 +762,88 @@ export function RequestsInternal() {
                           return (
                             <div key={sample.id} className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
                               <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
-                                <div className="font-semibold text-slate-800 flex items-center">
-                                  <Layers className="w-4 h-4 text-indigo-500 mr-2" />
-                                  Échantillon: {sample.id}
+                                <div className="font-semibold text-slate-800 flex items-center gap-2">
+                                  <Layers className="w-4 h-4 text-indigo-500" />
+                                  <span>Échantillon : {sample.id}</span>
+                                  <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full font-mono">
+                                    {sample.barcode}
+                                  </span>
                                 </div>
-                                <span className="text-xs px-2 py-1 bg-slate-100 text-slate-600 rounded-full font-medium">
-                                  {sample.barcode}
-                                </span>
+                                {isManager && (
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setAddingAnalysisForSample(addingAnalysisForSample === sample.id ? null : sample.id);
+                                        setSelectedNewAnalysisTplId(activeAnalysisTpls[0]?.id || '');
+                                      }}
+                                      className="text-xs px-2.5 py-1 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-md font-medium flex items-center transition-colors"
+                                    >
+                                      <Plus className="w-3.5 h-3.5 mr-1" /> Ajouter une analyse
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (window.confirm(`Supprimer l'échantillon ${sample.id} et toutes ses analyses associées ?`)) {
+                                          deleteSample(sample.id);
+                                        }
+                                      }}
+                                      className="text-xs p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                                      title="Supprimer cet échantillon"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                )}
                               </div>
+
+                              {/* Petit formulaire d'ajout d'analyse à la volée pour cet échantillon */}
+                              {isManager && addingAnalysisForSample === sample.id && (
+                                <div className="mb-3 p-3 bg-indigo-50/70 border border-indigo-100 rounded-lg flex flex-wrap items-center gap-2">
+                                  <select
+                                    value={selectedNewAnalysisTplId}
+                                    onChange={e => setSelectedNewAnalysisTplId(e.target.value)}
+                                    className="text-xs border-indigo-200 rounded-md py-1.5 px-2 bg-white flex-1 min-w-[200px]"
+                                  >
+                                    {activeAnalysisTpls.map(tpl => (
+                                      <option key={tpl.id} value={tpl.id}>{tpl.name} ({tpl.standardRef || 'Interne'})</option>
+                                    ))}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (!selectedNewAnalysisTplId) return;
+                                      const usedAnalysisIds = new Set(allAnalyses.map(a => a.id));
+                                      const newAnalysisId = generateUniqueLimsId('ESS', usedAnalysisIds);
+                                      addAnalysis({
+                                        id: newAnalysisId,
+                                        labId: selectedRequest.labId || activeLabId,
+                                        sampleId: sample.id,
+                                        templateId: selectedNewAnalysisTplId,
+                                        status: 'planifie',
+                                        technician: selectedRequest.assignedTo
+                                          ? (users.find(u => u.id === selectedRequest.assignedTo)?.name || 'Non assigné')
+                                          : 'Non assigné',
+                                        updatedAt: new Date().toISOString(),
+                                        results: {},
+                                        images: []
+                                      });
+                                      setAddingAnalysisForSample(null);
+                                    }}
+                                    className="text-xs px-3 py-1.5 bg-indigo-600 text-white rounded-md font-medium hover:bg-indigo-700"
+                                  >
+                                    Confirmer l'ajout
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setAddingAnalysisForSample(null)}
+                                    className="text-xs px-2.5 py-1.5 text-slate-600 hover:bg-slate-200 rounded-md"
+                                  >
+                                    Annuler
+                                  </button>
+                                </div>
+                              )}
+
                               {sampleAnalyses.length === 0 ? (
                                 <div className="text-xs text-slate-400 italic">Aucune analyse associée.</div>
                               ) : (
@@ -712,12 +851,33 @@ export function RequestsInternal() {
                                   {sampleAnalyses.map(analysis => {
                                     const tpl = analysisTemplates.find(t => t.id === analysis.templateId);
                                     return (
-                                      <div key={analysis.id} className="flex items-center text-sm border border-slate-100 rounded bg-slate-50 px-3 py-2">
-                                        <TestTube2 className="w-3.5 h-3.5 text-blue-500 mr-2" />
-                                        <span className="font-medium text-slate-700 truncate">{tpl?.name || analysis.id}</span>
-                                        <span className="ml-auto text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-500">
+                                      <div key={analysis.id} className="flex items-center text-sm border border-slate-100 rounded bg-slate-50 px-3 py-2 gap-2">
+                                        <TestTube2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                                        <div className="truncate flex-1">
+                                          <span className="font-medium text-slate-700">{tpl?.name || analysis.id}</span>
+                                          <span className="ml-1.5 text-[10px] font-mono text-slate-400">({analysis.id})</span>
+                                        </div>
+                                        <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border ${
+                                          analysis.status === 'rejete'
+                                            ? 'bg-red-50 border-red-200 text-red-700'
+                                            : 'bg-white border-slate-200 text-slate-500'
+                                        }`}>
                                           {analysis.status}
                                         </span>
+                                        {isManager && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              if (window.confirm(`Supprimer l'analyse ${analysis.id} (${tpl?.name || ''}) ?`)) {
+                                                deleteAnalysis(analysis.id);
+                                              }
+                                            }}
+                                            className="text-slate-400 hover:text-red-600 p-1 rounded hover:bg-red-50 transition-colors"
+                                            title="Supprimer cette analyse"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </button>
+                                        )}
                                       </div>
                                     );
                                   })}

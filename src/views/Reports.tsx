@@ -292,7 +292,11 @@ export function Reports() {
       "images.galerie": `${analysesData.flatMap((a: any) => a.micrographies || []).length} image(s) de micrographie — utiliser la boucle micrographies pour les insérer`,
       micrographies: analysesData.flatMap((a: any) => a.micrographies || []),
 
-      demande: { id: req?.id || "N/A" },
+      demande: { 
+        id: req?.id || "N/A",
+        titre: req?.title || "",
+        conclusion: req?.conclusion || "Aucune conclusion renseignée."
+      },
       date: { jour: formattedDate },
       demandeur: {
         nom: cl?.name || samps[0]?.client || "Non renseigné",

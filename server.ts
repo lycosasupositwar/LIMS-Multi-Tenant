@@ -783,6 +783,12 @@ async function startServer() {
           await setCollection(collection, [...myUpdatedRequests, ...otherUsersRequests]);
           return res.json({ success: true });
         }
+        if (collection === 'notifications') {
+          const otherUsersNotifications = existingData.filter((n: any) => n.userId !== user.id);
+          const myUpdatedNotifications = req.body.filter((n: any) => n.userId === user.id);
+          await setCollection(collection, [...myUpdatedNotifications, ...otherUsersNotifications]);
+          return res.json({ success: true });
+        }
       }
 
       if ((user.role === 'analyste' || user.role === 'manager') && user.labId && user.labId !== 'all') {

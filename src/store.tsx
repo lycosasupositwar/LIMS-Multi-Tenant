@@ -58,6 +58,7 @@ interface LimsContextType {
 
   notifications: Notification[];
   markNotificationAsRead: (id: string) => void;
+  clearUserNotifications: () => void; // Optionnel : pour un bouton "Tout effacer"
   addNotification: (userId: string, title: string, message: string, type?: 'system' | 'email', meta?: NotificationMeta) => void;
 
   materialTemplates: MaterialTemplate[];
@@ -426,7 +427,13 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const markNotificationAsRead = (id: string) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  };
+
+  const clearUserNotifications = () => {
+    if (!currentUser) return;
+    // Supprime toutes les notifications de l'utilisateur connecté
+    setNotifications(prev => prev.filter(n => n.userId !== currentUser.id));
   };
 
   const createAuditLog = (action: string, details: string): AuditLog => ({
@@ -481,99 +488,99 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setReportTemplates(prev => prev.filter(t => t.id !== id));
   };
 
-const addRequest = async (request: AnalysisRequest) => {
-  const targetLabId = request.labId || activeLabId;
-  const targetLab = laboratories.find(l => l.id === targetLabId);
-  const reqPrefix = targetLab?.settings?.idPrefixes?.request || `REQ-${targetLab?.code || 'LAB'}`;
+  const addRequest = async (request: AnalysisRequest) => {
+    const targetLabId = request.labId || activeLabId;
+    const targetLab = laboratories.find(l => l.id === targetLabId);
+    const reqPrefix = targetLab?.settings?.idPrefixes?.request || `REQ-${targetLab?.code || 'LAB'}`;
 
-  // Garantit un ID unique non-séquentiel (ou remplace l'ID s'il existe déjà)
-  const existingReqIds = new Set(rawRequests.map(r => r.id));
-  const uniqueReqId = (!request.id || existingReqIds.has(request.id))
-    ? generateUniqueLimsId(reqPrefix, existingReqIds)
-    : request.id;
+    // Garantit un ID unique non-séquentiel (ou remplace l'ID s'il existe déjà)
+    const existingReqIds = new Set(rawRequests.map(r => r.id));
+    const uniqueReqId = (!request.id || existingReqIds.has(request.id))
+      ? generateUniqueLimsId(reqPrefix, existingReqIds)
+      : request.id;
 
-  const initialAudit = createAuditLog('Création', `Demande soumise au laboratoire [${targetLabId}]`);
-  const newReq = { ...request, id: uniqueReqId, labId: targetLabId, auditTrail: [initialAudit] };
-  setRequests(prev => [newReq, ...prev]);
+    const initialAudit = createAuditLog('Création', `Demande soumise au laboratoire [${targetLabId}]`);
+    const newReq = { ...request, id: uniqueReqId, labId: targetLabId, auditTrail: [initialAudit] };
+    setRequests(prev => [newReq, ...prev]);
 
-  let currentUsers = users;
-  if (currentUsers.length === 0) {
-    try {
-      const res = await fetch('/api/users');
-      if (res.ok) {
-        currentUsers = await res.json();
-        setUsers(currentUsers);
-      } else {
-        console.error(`[Notification] Échec de récupération de /api/users (Statut HTTP ${res.status}) pour l'utilisateur ${currentUser?.email} [${currentUser?.role}]`);
+    let currentUsers = users;
+    if (currentUsers.length === 0) {
+      try {
+        const res = await fetch('/api/users');
+        if (res.ok) {
+          currentUsers = await res.json();
+          setUsers(currentUsers);
+        } else {
+          console.error(`[Notification] Échec de récupération de /api/users (Statut HTTP ${res.status}) pour l'utilisateur ${currentUser?.email} [${currentUser?.role}]`);
+        }
+      } catch (e) {
+        console.error('[Notification] Erreur réseau sur /api/users :', e);
       }
-    } catch (e) {
-      console.error('[Notification] Erreur réseau sur /api/users :', e);
     }
-  }
 
-  // Filtrage souple (insensible à la casse sur le rôle)
-  let labManagers = currentUsers.filter(u => {
-    const role = (u.role || '').toLowerCase();
-    const isManager = role === 'manager';
-    const matchesLab = !u.labId || u.labId === 'all' || u.labId === targetLabId;
-    return isManager && matchesLab;
-  });
+    // Filtrage souple (insensible à la casse sur le rôle)
+    let labManagers = currentUsers.filter(u => {
+      const role = (u.role || '').toLowerCase();
+      const isManager = role === 'manager';
+      const matchesLab = !u.labId || u.labId === 'all' || u.labId === targetLabId;
+      return isManager && matchesLab;
+    });
 
-  // Fallback : si aucun manager n'a le labId exact, on prend tous les managers existants
-  if (labManagers.length === 0) {
-    labManagers = currentUsers.filter(u => (u.role || '').toLowerCase() === 'manager');
-  }
+    // Fallback : si aucun manager n'a le labId exact, on prend tous les managers existants
+    if (labManagers.length === 0) {
+      labManagers = currentUsers.filter(u => (u.role || '').toLowerCase() === 'manager');
+    }
 
-  console.info(`[Notification] Création demande ${uniqueReqId} (Lab: ${targetLabId}) -> ${labManagers.length} manager(s) trouvé(s) sur ${currentUsers.length} utilisateur(s) chargé(s).`);
+    console.info(`[Notification] Création demande ${uniqueReqId} (Lab: ${targetLabId}) -> ${labManagers.length} manager(s) trouvé(s) sur ${currentUsers.length} utilisateur(s) chargé(s).`);
 
-  labManagers.forEach(m =>
-    addNotification(
-      m.id,
-      'Nouvelle demande d\'analyse',
-      `La demande ${uniqueReqId} ("${request.title}") a été soumise par ${currentUser?.name || 'un client'}.`,
-      'email',
-      { targetTab: 'requests', targetId: uniqueReqId, labId: targetLabId }
-    )
-  );
-};
-
-const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comment?: string) => {
-  const reqToUpdate = rawRequests.find(r => r.id === id);
-  
-  if (reqToUpdate && reqToUpdate.status !== status) {
-    // Dictionnaire UNIQUEMENT des étapes clés qui doivent notifier le demandeur
-    // Adaptez les clés selon les valeurs exactes utilisées dans votre fichier types.ts
-    const keyStageLabels: Record<string, string> = {
-      'validee': 'Validée et prise en compte par le laboratoire',
-      'en_cours': 'Analyses en cours de réalisation',
-      'En Validation': 'Résultats en cours de validation finale',
-      'en_validation': 'Résultats en cours de validation finale',
-      'a_valider': 'Résultats en cours de validation finale',
-      'terminee': 'Terminée'
-    };
-
-    const stageLabel = keyStageLabels[status];
-
-    // On notifie uniquement si le nouveau statut fait partie des étapes clés
-    if (stageLabel) {
+    labManagers.forEach(m =>
       addNotification(
-        reqToUpdate.requesterId,
-        `Avancement de votre demande ${reqToUpdate.id}`,
-        `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a atteint une étape clé : ${stageLabel}.${comment ? `\nCommentaire : ${comment}` : ''}`,
+        m.id,
+        'Nouvelle demande d\'analyse',
+        `La demande ${uniqueReqId} ("${request.title}") a été soumise par ${currentUser?.name || 'un client'}.`,
         'email',
-        { targetTab: 'requests', targetId: reqToUpdate.id, labId: reqToUpdate.labId }
-      );
-    }
-  }
+        { targetTab: 'requests', targetId: uniqueReqId, labId: targetLabId }
+      )
+    );
+  };
 
-  setRequests(prev => prev.map(r => {
-    if (r.id === id) {
-      const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}.${comment ? ` Raison : ${comment}` : ''}`);
-      return { ...r, status, auditTrail: [audit, ...(r.auditTrail || [])] };
+  const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comment?: string) => {
+    const reqToUpdate = rawRequests.find(r => r.id === id);
+
+    if (reqToUpdate && reqToUpdate.status !== status) {
+      // Dictionnaire UNIQUEMENT des étapes clés qui doivent notifier le demandeur
+      // Adaptez les clés selon les valeurs exactes utilisées dans votre fichier types.ts
+      const keyStageLabels: Record<string, string> = {
+        'validee': 'Validée et prise en compte par le laboratoire',
+        'en_cours': 'Analyses en cours de réalisation',
+        'En Validation': 'Résultats en cours de validation finale',
+        'en_validation': 'Résultats en cours de validation finale',
+        'a_valider': 'Résultats en cours de validation finale',
+        'terminee': 'Terminée'
+      };
+
+      const stageLabel = keyStageLabels[status];
+
+      // On notifie uniquement si le nouveau statut fait partie des étapes clés
+      if (stageLabel) {
+        addNotification(
+          reqToUpdate.requesterId,
+          `Avancement de votre demande ${reqToUpdate.id}`,
+          `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a atteint une étape clé : ${stageLabel}.${comment ? `\nCommentaire : ${comment}` : ''}`,
+          'email',
+          { targetTab: 'requests', targetId: reqToUpdate.id, labId: reqToUpdate.labId }
+        );
+      }
     }
-    return r;
-  }));
-};
+
+    setRequests(prev => prev.map(r => {
+      if (r.id === id) {
+        const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}.${comment ? ` Raison : ${comment}` : ''}`);
+        return { ...r, status, auditTrail: [audit, ...(r.auditTrail || [])] };
+      }
+      return r;
+    }));
+  };
 
   const rejectRequest = (id: string, reason: string) => {
     const reqToUpdate = rawRequests.find(r => r.id === id);
@@ -669,11 +676,11 @@ const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comm
       return r;
     }));
     if (updates.priority) {
-    setSamples(prev => prev.map(s => s.requestId === id ? { ...s, priority: updates.priority as any } : s));
-  }
+      setSamples(prev => prev.map(s => s.requestId === id ? { ...s, priority: updates.priority as any } : s));
+    }
   };
 
-const addSample = (sample: Sample) => {
+  const addSample = (sample: Sample) => {
     setSamples(prev => {
       const existingIds = new Set(prev.map(s => s.id));
       const prefix = labSettings?.idPrefixes?.sample || 'ECH';
@@ -703,7 +710,7 @@ const addSample = (sample: Sample) => {
     setSamples(prev => prev.map(s => s.id === id ? { ...s, images: [...s.images, imageUrl] } : s));
   };
 
-const addAnalysis = (analysis: Analysis) => {
+  const addAnalysis = (analysis: Analysis) => {
     setAnalyses(prev => {
       const existingIds = new Set(prev.map(a => a.id));
       const uniqueId = (!analysis.id || existingIds.has(analysis.id))
@@ -719,7 +726,7 @@ const addAnalysis = (analysis: Analysis) => {
     setAnalyses(prev => prev.filter(a => a.id !== id));
   };
 
-const updateAnalysisStatus = (id: string, status: Analysis['status'], comment?: string) => {
+  const updateAnalysisStatus = (id: string, status: Analysis['status'], comment?: string) => {
     setAnalyses(prevAnalyses => {
       const updatedAnalyses = prevAnalyses.map(analysis => {
         if (analysis.id === id) {
@@ -941,12 +948,12 @@ const updateAnalysisStatus = (id: string, status: Analysis['status'], comment?: 
       }
       return c;
     }));
-     };
+  };
 
-    // Vérification de la péremption des consommables au chargement
+  // Vérification de la péremption des consommables au chargement
   useEffect(() => {
     if (!currentUser || (currentUser.role !== 'manager') || (currentUser.role !== 'analyste')) return;
-    
+
     const now = new Date();
     const sixtyDaysLater = new Date();
     sixtyDaysLater.setDate(now.getDate() + 60);
@@ -957,20 +964,20 @@ const updateAnalysisStatus = (id: string, status: Analysis['status'], comment?: 
         if (expDate <= sixtyDaysLater) {
           const isExpired = expDate < now;
           const title = isExpired ? `Péremption Dépassée : ${c.name}` : `Alerte Péremption Proche : ${c.name}`;
-          const message = isExpired 
-            ? `Le consommable "${c.name}" a dépassé sa date de péremption (${c.expiryDate}).` 
+          const message = isExpired
+            ? `Le consommable "${c.name}" a dépassé sa date de péremption (${c.expiryDate}).`
             : `Le consommable "${c.name}" arrive à expiration le ${c.expiryDate}.`;
-          
+
           // Vérifie si une notification similaire n'existe pas déjà pour éviter le spam
           // (Optionnel selon votre gestion, ici déclenché en console/log ou notification)
           const labManagers = users.filter(u => (u.role === 'manager') && (u.labId === c.labId || u.labId === 'all' || !u.labId));
-        labManagers.forEach(m => addNotification(
-          m.id,
-          `Alerte Péremption Proche : ${c.name}`,
-          `Le consommable "${c.name}" arrive à expiration le ${c.expiryDate}.`,
-          'email',
-          { targetTab: 'inventory', targetId: c.id, labId: c.labId }
-        ));
+          labManagers.forEach(m => addNotification(
+            m.id,
+            `Alerte Péremption Proche : ${c.name}`,
+            `Le consommable "${c.name}" arrive à expiration le ${c.expiryDate}.`,
+            'email',
+            { targetTab: 'inventory', targetId: c.id, labId: c.labId }
+          ));
           console.warn(`[ALERTE PÉREMPTION] ${message}`);
         }
       }
@@ -978,7 +985,7 @@ const updateAnalysisStatus = (id: string, status: Analysis['status'], comment?: 
   }, [consumables, currentUser]);
 
 
- 
+
 
   const applyPatch = (patch: any) => {
     if (patch.laboratories) setLaboratories(patch.laboratories);
@@ -1010,7 +1017,7 @@ const updateAnalysisStatus = (id: string, status: Analysis['status'], comment?: 
       globalSearchQuery, setGlobalSearchQuery,
       currentUser, users, fetchUsers, login, logout,
       laboratories, activeLabId, activeLab, setActiveLabId, updateLaboratory, addLaboratory, deleteLaboratory,
-      notifications, markNotificationAsRead, addNotification,
+      notifications, markNotificationAsRead, addNotification, clearUserNotifications,
       materialTemplates, analysisTemplates, requestTemplates, reportTemplates,
       allMaterialTemplates: rawMaterialTemplates,
       allAnalysisTemplates: rawAnalysisTemplates,

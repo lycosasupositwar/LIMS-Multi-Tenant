@@ -5,7 +5,7 @@
  * 1. Profil Analyste / Opérateur :
  *    - Résumé des dossiers et analyses assignés personnellement
  *    - Décompte des échantillons en attente de préparation ou d'essais
- *    - Liste des dossiers prioritaires avec accès direct
+ *    - Liste des dossiers prioritaires avec modale de consultation rapide et navigation directe
  * 2. Profil Manager / Administrateur :
  *    - Filtres interactifs par période et par laboratoire
  *    - Indicateurs de suivi : demandes en retard, analyses en attente de validation,
@@ -63,6 +63,10 @@ import {
 } from '../types';
 
 type PeriodFilter = 'all' | '7d' | '30d' | '90d' | 'year' | 'custom';
+
+interface DashboardProps {
+  onNavigate?: (tab: string, targetId?: string) => void;
+}
 
 /* ============================================================================
  * GÉNÉRATEUR OPENXML (.XLSX) NATIF SANS DÉPENDANCE EXTERNE + GRAPHIQUES EXCEL
@@ -451,7 +455,7 @@ function isDateWithinPeriod(
   return true;
 }
 
-export function Dashboard() {
+export function Dashboard({ onNavigate }: DashboardProps = {}) {
   const {
     currentUser,
     laboratories,
@@ -470,8 +474,12 @@ export function Dashboard() {
     allMaterialTemplates,
     allAnalysisTemplates,
     allRequestTemplates,
-    labSettings
+    labSettings,
+    setGlobalSearchQuery
   } = useLims();
+
+  // État pour la modale d'ouverture rapide de dossier côté laborantin (analyste)
+  const [selectedAnalystRequest, setSelectedAnalystRequest] = useState<AnalysisRequest | null>(null);
 
   // États des filtres du Dashboard & de la modale "Générer Bilan"
   const canFilterAllLabs =
@@ -553,7 +561,7 @@ export function Dashboard() {
   };
 
   /* =========================================================================
-   * 1. TABLEAU DE BORD OPÉRATEUR (ANALYSTE)
+   * 1. TABLEAU DE BORD OPÉRATEUR (ANALYSTE / LABORANTIN)
    * ========================================================================= */
   if (currentUser?.role === 'analyste') {
     const assignedRequests = requests.filter(
@@ -568,6 +576,28 @@ export function Dashboard() {
       a => a.technician === currentUser.name && a.status === 'En Cours'
     );
 
+    const handleGoToTab = (tab: string, targetId?: string) => {
+      if (targetId && setGlobalSearchQuery) {
+        setGlobalSearchQuery(targetId);
+      }
+      if (onNavigate) {
+        onNavigate(tab, targetId);
+      } else {
+        window.dispatchEvent(
+          new CustomEvent('lims:navigate', { detail: { tab, targetId } })
+        );
+      }
+      setSelectedAnalystRequest(null);
+    };
+
+    const requestSamples = selectedAnalystRequest
+      ? samples.filter(s => s.requestId === selectedAnalystRequest.id)
+      : [];
+    const requestSampleIds = new Set(requestSamples.map(s => s.id));
+    const requestAnalyses = selectedAnalystRequest
+      ? analyses.filter(a => requestSampleIds.has(a.sampleId))
+      : [];
+
     return (
       <div className="space-y-6">
         <div className="flex justify-between items-center">
@@ -581,6 +611,7 @@ export function Dashboard() {
           </div>
         </div>
 
+        {/* Cartes de synthèse analyste */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex items-center">
             <div className="w-12 h-12 rounded-lg flex items-center justify-center bg-indigo-100 text-indigo-600">
@@ -615,6 +646,7 @@ export function Dashboard() {
           </div>
         </div>
 
+        {/* Liste des dossiers prioritaires */}
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden mt-6">
           <div className="p-4 border-b border-slate-200 bg-slate-50 font-semibold text-slate-700">
             Vos dossiers prioritaires
@@ -626,7 +658,11 @@ export function Dashboard() {
           ) : (
             <div className="divide-y divide-slate-100">
               {assignedRequests.map(r => (
-                <div key={r.id} className="p-4 flex items-center justify-between hover:bg-slate-50">
+                <div
+                  key={r.id}
+                  onClick={() => setSelectedAnalystRequest(r)}
+                  className="p-4 flex items-center justify-between hover:bg-slate-50 cursor-pointer transition-colors"
+                >
                   <div>
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-mono text-sm font-semibold text-slate-900">{r.id}</span>
@@ -634,7 +670,14 @@ export function Dashboard() {
                     </div>
                     <div className="text-sm text-slate-600">{r.title}</div>
                   </div>
-                  <button className="text-blue-600 text-sm font-medium hover:underline">
+                  <button
+                    type="button"
+                    onClick={e => {
+                      e.stopPropagation();
+                      setSelectedAnalystRequest(r);
+                    }}
+                    className="text-blue-600 text-sm font-medium hover:underline px-3 py-1.5 rounded-lg hover:bg-blue-50 transition-colors"
+                  >
                     Ouvrir le dossier
                   </button>
                 </div>
@@ -642,6 +685,160 @@ export function Dashboard() {
             </div>
           )}
         </div>
+
+        {/* Modale de consultation rapide du dossier côté Laborantin */}
+        {selectedAnalystRequest && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+            <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-2xl w-full overflow-hidden max-h-[90vh] flex flex-col">
+              <div className="flex items-center justify-between px-6 py-4 bg-slate-900 text-white">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-sm font-bold text-blue-400">
+                      {selectedAnalystRequest.id}
+                    </span>
+                    {getStatusBadge(selectedAnalystRequest.status)}
+                  </div>
+                  <h3 className="text-lg font-display font-semibold mt-1">
+                    {selectedAnalystRequest.title}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedAnalystRequest(null)}
+                  className="text-slate-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-5 overflow-y-auto">
+                {/* Informations générales */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200 text-sm">
+                  <div>
+                    <span className="block text-xs text-slate-500">Date de création</span>
+                    <strong className="text-slate-800">
+                      {selectedAnalystRequest.createdAt
+                        ? new Date(selectedAnalystRequest.createdAt).toLocaleDateString('fr-FR')
+                        : '—'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="block text-xs text-slate-500">Priorité</span>
+                    <strong className="text-slate-800 uppercase">
+                      {selectedAnalystRequest.priority || 'Normale'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="block text-xs text-slate-500">Échantillons liés</span>
+                    <strong className="text-slate-800">{requestSamples.length}</strong>
+                  </div>
+                </div>
+
+                {/* Échantillons du dossier */}
+                <div>
+                  <h4 className="text-xs font-semibold uppercase text-slate-500 mb-2">
+                    Échantillons associés ({requestSamples.length})
+                  </h4>
+                  {requestSamples.length === 0 ? (
+                    <p className="text-sm text-slate-500 italic">
+                      Aucun échantillon rattaché à cette demande pour le moment.
+                    </p>
+                  ) : (
+                    <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl overflow-hidden">
+                      {requestSamples.map(s => (
+                        <div
+                          key={s.id}
+                          className="p-3 flex items-center justify-between text-sm bg-white"
+                        >
+                          <div>
+                            <span className="font-mono font-semibold text-slate-900">{s.id}</span>
+                            <span className="text-slate-500 ml-2">
+                              ({s.materialState} · {s.project || s.client || 'Sans projet'})
+                            </span>
+                          </div>
+                          <span className="px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-700 font-medium">
+                            {s.status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Analyses du dossier */}
+                <div>
+                  <h4 className="text-xs font-semibold uppercase text-slate-500 mb-2">
+                    Essais & Analyses programmés ({requestAnalyses.length})
+                  </h4>
+                  {requestAnalyses.length === 0 ? (
+                    <p className="text-sm text-slate-500 italic">
+                      Aucune analyse créée pour les échantillons de ce dossier.
+                    </p>
+                  ) : (
+                    <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl overflow-hidden">
+                      {requestAnalyses.map(a => {
+                        const tpl = analysisTemplates.find(t => t.id === a.templateId);
+                        return (
+                          <div
+                            key={a.id}
+                            className="p-3 flex items-center justify-between text-sm bg-white"
+                          >
+                            <div>
+                              <span className="font-mono font-semibold text-slate-900">{a.id}</span>
+                              <span className="text-slate-700 ml-2 font-medium">
+                                {tpl?.name || a.templateId}
+                              </span>
+                              <span className="text-xs text-slate-500 ml-2">
+                                (Éch. {a.sampleId})
+                              </span>
+                            </div>
+                            <span className="px-2 py-0.5 text-xs rounded bg-amber-50 text-amber-800 font-medium">
+                              {a.status}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Actions de navigation directe */}
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex flex-wrap justify-between items-center gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleGoToTab('requests', selectedAnalystRequest.id)}
+                    className="px-3.5 py-2 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                  >
+                    Aller à la Demande complète
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleGoToTab('samples', selectedAnalystRequest.id)}
+                    className="px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-200 text-slate-800 hover:bg-slate-300 transition-colors"
+                  >
+                    Voir les Échantillons
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleGoToTab('analyses', selectedAnalystRequest.id)}
+                    className="px-3.5 py-2 rounded-lg text-xs font-semibold bg-amber-600 text-white hover:bg-amber-700 transition-colors"
+                  >
+                    Saisir les Analyses
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedAnalystRequest(null)}
+                  className="px-4 py-2 rounded-lg text-xs font-medium text-slate-600 hover:bg-slate-200 transition-colors"
+                >
+                  Fermer
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -844,7 +1041,6 @@ export function Dashboard() {
       .filter(Boolean)
       .join(' · ');
 
-    const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 100)} %` : '0 %');
     let y = 18;
 
     const ensureSpace = (needed = 16) => {
@@ -1183,7 +1379,6 @@ export function Dashboard() {
     ];
 
     // Tableaux sources pour les 3 graphiques Excel natifs (placés à partir de la ligne 19)
-    // Tableau 1 : Statuts des demandes
     dashRows.push([
       { v: 'DONNÉES GRAPHIQUE 1 : STATUTS DES DEMANDES', s: 2 },
       { v: 'NOMBRE DE DEMANDES', s: 2 }
@@ -1196,7 +1391,6 @@ export function Dashboard() {
 
     dashRows.push([]);
 
-    // Tableau 2 : Activité des analyses
     dashRows.push([
       { v: 'DONNÉES GRAPHIQUE 2 : ACTIVITÉ DES ANALYSES', s: 2 },
       { v: 'NOMBRE D’ANALYSES', s: 2 }
@@ -1209,7 +1403,6 @@ export function Dashboard() {
 
     dashRows.push([]);
 
-    // Tableau 3 : État des stocks
     dashRows.push([
       { v: 'DONNÉES GRAPHIQUE 3 : SYNTHÈSE DES STOCKS', s: 2 },
       { v: 'NOMBRE DE RÉFÉRENCES', s: 2 }
@@ -1222,7 +1415,6 @@ export function Dashboard() {
 
     dashRows.push([]);
 
-    // Tableau récapitulatif des alertes de stock sur le Dashboard
     dashRows.push([
       { v: 'LISTE DES ALERTES DE STOCK PRIORITAIRES', s: 2 },
       { v: 'CATÉGORIE', s: 2 },

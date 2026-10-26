@@ -62,7 +62,7 @@ function Main() {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard />;
+        return <Dashboard onNavigate={(tab) => setActiveTab(tab)} />;
       case 'requests':
         return <RequestsInternal />;
       case 'samples':
@@ -75,11 +75,15 @@ function Main() {
         return <Inventory />;
       case 'builder':
         // Le module de conception de formulaires et templates est réservé aux managers
-        return currentUser.role === 'manager' ? <BuilderCMS /> : <Dashboard />;
+        return currentUser.role === 'manager' || currentUser.role === 'admin' ? (
+          <BuilderCMS />
+        ) : (
+          <Dashboard onNavigate={(tab) => setActiveTab(tab)} />
+        );
       case 'settings':
         return <Settings />;
       default:
-        return <Dashboard />;
+        return <Dashboard onNavigate={(tab) => setActiveTab(tab)} />;
     }
   };
 

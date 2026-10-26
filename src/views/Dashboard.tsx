@@ -690,10 +690,10 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
         {selectedAnalystRequest && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
             <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-2xl w-full overflow-hidden max-h-[90vh] flex flex-col">
-              <div className="flex items-center justify-between px-6 py-4 bg-slate-900 text-white">
+              <div className="flex items-center justify-between px-6 py-4 bg-white border-b border-slate-200">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-sm font-bold text-blue-400">
+                    <span className="font-mono text-sm font-bold text-blue-700">
                       {selectedAnalystRequest.id}
                     </span>
                     {getStatusBadge(selectedAnalystRequest.status)}
@@ -2142,10 +2142,10 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
       {isBilanModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
           <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-xl w-full overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 bg-slate-900 text-white">
+            <div className="flex items-center justify-between px-6 py-4 bg-white border-b border-slate-200">
               <div className="flex items-center gap-2.5">
                 <Download className="w-5 h-5 text-blue-400" />
-                <h3 className="text-lg font-display font-semibold">
+                <h3 className="text-lg font-display font-semibold mt-1 text-slate-900">
                   Générer le Bilan d&apos;Activité & Qualité
                 </h3>
               </div>

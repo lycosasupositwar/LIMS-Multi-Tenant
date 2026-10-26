@@ -16,13 +16,14 @@ interface LayoutProps {
 }
 
 export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
-  const { 
-    currentUser, 
-    logout, 
-    notifications, 
-    addNotification, 
-    markNotificationAsRead, 
-    globalSearchQuery, 
+  const {
+    currentUser,
+    logout,
+    notifications,
+    addNotification,
+    clearUserNotifications,
+    markNotificationAsRead,
+    globalSearchQuery,
     setGlobalSearchQuery,
     laboratories,
     activeLabId,
@@ -43,20 +44,20 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
    */
   React.useEffect(() => {
     if (currentUser?.role !== 'manager') return;
-    
+
     const checkRequests = async () => {
       try {
         const res = await fetch('/api/users/requests');
         if (res.ok) {
           const data = await res.json();
           setPendingRequestsCount(data.length);
-          
+
           if (data.length > notifiedCountRef.current) {
             const newCount = data.length - notifiedCountRef.current;
             addNotification(
-              currentUser.id, 
-              'Demande de compte', 
-              `Vous avez ${newCount} nouvelle(s) demande(s) en attente.`, 
+              currentUser.id,
+              'Demande de compte',
+              `Vous avez ${newCount} nouvelle(s) demande(s) en attente.`,
               'system',
               { targetTab: 'settings' }
             );
@@ -67,7 +68,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
         console.error('Erreur lors de la vérification des demandes de compte :', e);
       }
     };
-    
+
     checkRequests();
     const interval = setInterval(checkRequests, 15000);
     return () => clearInterval(interval);
@@ -178,7 +179,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
   if (currentUser?.role === 'manager') {
     navItems.push({ id: 'builder', label: 'Config. CMS', icon: Blocks });
   }
-  
+
   navItems.push({ id: 'settings', label: 'Paramètres', icon: Settings });
 
   return (
@@ -193,11 +194,11 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
             Materio<span className="text-blue-600">Lab</span>
           </h1>
         </div>
-        
+
         <div className="px-4 py-2.5 border-b border-slate-200 bg-slate-50">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 overflow-hidden">
-               <span className={`w-2 h-2 rounded-full shrink-0 ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).mainBg}`} />
+              <span className={`w-2 h-2 rounded-full shrink-0 ${getLabColor(laboratories.findIndex(l => l.id === activeLab.id)).mainBg}`} />
               <span className="text-xs font-bold text-slate-800 truncate" title={activeLab.name}>
                 {activeLab.shortName}
               </span>
@@ -207,7 +208,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
             </span>
           </div>
         </div>
-        
+
         <nav className="flex-1 py-6 px-4 space-y-1 overflow-y-auto">
           {navItems.map((item) => {
             const isActive = activeTab === item.id;
@@ -216,11 +217,10 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center justify-between px-3 py-2.5 text-sm font-medium rounded-lg transition-colors duration-200 ${
-                  isActive 
-                    ? 'bg-blue-50 text-blue-700' 
+                className={`w-full flex items-center justify-between px-3 py-2.5 text-sm font-medium rounded-lg transition-colors duration-200 ${isActive
+                    ? 'bg-blue-50 text-blue-700'
                     : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`}
+                  }`}
               >
                 <div className="flex items-center">
                   <Icon className={`w-5 h-5 mr-3 flex-shrink-0 ${isActive ? 'text-blue-600' : 'text-slate-400'}`} />
@@ -235,7 +235,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
             );
           })}
         </nav>
-        
+
         <div className="p-4 border-t border-slate-200">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
@@ -247,9 +247,9 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
                 <p className="text-xs text-slate-500 capitalize">{currentUser?.role}</p>
               </div>
             </div>
-            <button 
-              onClick={logout} 
-              className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors" 
+            <button
+              onClick={logout}
+              className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
               title="Déconnexion"
             >
               <LogOut className="w-4 h-4" />
@@ -328,9 +328,8 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
                             setActiveLabId(lab.id);
                             setIsLabMenuOpen(false);
                           }}
-                          className={`w-full text-left p-2.5 rounded-lg text-xs transition-colors flex items-start justify-between ${
-                            isSelected ? 'bg-slate-100 font-medium' : 'hover:bg-slate-50'
-                          }`}
+                          className={`w-full text-left p-2.5 rounded-lg text-xs transition-colors flex items-start justify-between ${isSelected ? 'bg-slate-100 font-medium' : 'hover:bg-slate-50'
+                            }`}
                         >
                           <div>
                             <div className="flex items-center gap-1.5 font-bold text-slate-800">
@@ -351,45 +350,80 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
           </div>
 
           {/* Menu déroulant des notifications */}
-          <div className="ml-4 flex items-center md:ml-6 relative group">
-            <button className="p-2 text-slate-400 hover:text-blue-600 relative rounded-full hover:bg-slate-100 transition-colors focus:outline-none">
-              <Bell className="h-5 w-5" />
-              {notifications.filter(n => !n.read && n.userId === currentUser?.id).length > 0 && (
-                <span className="absolute top-1.5 right-1.5 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white"></span>
-              )}
-            </button>
-            
-            <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-xl border border-slate-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 overflow-hidden flex flex-col max-h-96">
-              <div className="p-3 border-b border-slate-100 bg-slate-50 font-semibold text-slate-700 text-sm">
-                Notifications
-              </div>
-              <div className="flex-1 overflow-y-auto">
-                {notifications.filter(n => n.userId === currentUser?.id).length === 0 ? (
-                  <div className="p-4 text-center text-sm text-slate-500">Aucune notification.</div>
-                ) : (
-                  <div className="divide-y divide-slate-100">
-                    {notifications.filter(n => n.userId === currentUser?.id).map(notif => (
-                      <div 
-                        key={notif.id} 
-                        className={`p-3 text-sm transition-colors cursor-pointer hover:bg-slate-50 ${!notif.read ? 'bg-blue-50/50' : ''}`} 
-                        onClick={() => handleNotificationClick(notif)}
+          {(() => {
+            const unreadNotifications = notifications.filter(
+              n => !n.read && n.userId === currentUser?.id
+            );
+
+            return (
+              <div className="ml-4 flex items-center md:ml-6 relative group">
+                <button className="p-2 text-slate-400 hover:text-blue-600 relative rounded-full hover:bg-slate-100 transition-colors focus:outline-none">
+                  <Bell className="h-5 w-5" />
+                  {unreadNotifications.length > 0 && (
+                    <span className="absolute top-1.5 right-1.5 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white"></span>
+                  )}
+                </button>
+
+                <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-xl border border-slate-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 overflow-hidden flex flex-col max-h-96">
+                  <div className="p-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+                    <span className="font-semibold text-slate-700 text-sm">
+                      Notifications {unreadNotifications.length > 0 && `(${unreadNotifications.length})`}
+                    </span>
+                    {unreadNotifications.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          clearUserNotifications();
+                        }}
+                        className="text-xs text-blue-600 hover:text-blue-800 font-medium"
                       >
-                        <div className="flex justify-between mb-1">
-                          <span className="font-semibold text-slate-900">{notif.title}</span>
-                          {notif.type === 'email' && (
-                            <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-bold tracking-wider">
-                              Email Envoyé
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-slate-600 text-xs line-clamp-2">{notif.message}</p>
-                      </div>
-                    ))}
+                        Tout effacer
+                      </button>
+                    )}
                   </div>
-                )}
+                  <div className="flex-1 overflow-y-auto">
+                    {unreadNotifications.length === 0 ? (
+                      <div className="p-4 text-center text-sm text-slate-500">Aucune nouvelle notification.</div>
+                    ) : (
+                      <div className="divide-y divide-slate-100">
+                        {unreadNotifications.map(notif => (
+                          <div
+                            key={notif.id}
+                            className="p-3 text-sm transition-colors cursor-pointer hover:bg-slate-50 bg-blue-50/50 relative group/item"
+                            onClick={() => handleNotificationClick(notif)}
+                          >
+                            <div className="flex justify-between items-start gap-2 mb-1">
+                              <span className="font-semibold text-slate-900">{notif.title}</span>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {notif.type === 'email' && (
+                                  <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-bold tracking-wider">
+                                    Email Envoyé
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    markNotificationAsRead(notif.id);
+                                  }}
+                                  className="text-slate-400 hover:text-slate-600 px-1 rounded hover:bg-slate-200/60"
+                                  title="Marquer comme lu"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
+                            <p className="text-slate-600 text-xs line-clamp-2">{notif.message}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            );
+          })()}
         </header>
 
         <main className="flex-1 overflow-y-auto p-6 lg:p-8">

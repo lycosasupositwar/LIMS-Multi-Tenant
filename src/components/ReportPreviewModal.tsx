@@ -463,6 +463,8 @@ export function ReportPreviewModal({
       "tables_series": tables_series,
       "tables_analyses": tables_analyses,
       "demande.id": request?.id || "N/A",
+      "demande.titre": request?.title || "",
+      "demande.conclusion": request?.conclusion || "Aucune conclusion renseignée.",
       "date.jour": todayFormatted,
       "demandeur.nom": client?.name || reportSamples[0]?.client || "Non renseigné",
       "demandeur.email": client?.email || "Non renseigné",
@@ -486,6 +488,8 @@ export function ReportPreviewModal({
 
       demande: {
         id: request?.id || "N/A",
+        titre: request?.title || "",
+        conclusion: request?.conclusion || "Aucune conclusion renseignée.",
         custom: Object.fromEntries(
           Object.entries(request?.customData || {}).map(([k, v]) => {
             if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'string' && v[0].includes('-')) {
@@ -1042,6 +1046,19 @@ export function ReportPreviewModal({
               {/* 4. Conclusion & Approbation (avec pb-6 et pr-3 pour ne jamais tronquer le tampon incliné APPROUVÉ) */}
               <section className="pdf-block mt-8 pt-6 pb-6 pr-3 border-t-2 border-slate-200 break-inside-avoid bg-white">
                 <h2 className="text-lg font-bold mb-4 text-slate-800">4. Conclusion & Approbation</h2>
+
+                {/* Encadré de la conclusion technique de la demande */}
+                <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                    Conclusion de l'étude
+                  </div>
+                  <p className="text-sm text-slate-800 whitespace-pre-line leading-relaxed">
+                    {request?.conclusion?.trim()
+                      ? request.conclusion
+                      : "Aucune conclusion particulière n'a été renseignée pour ce dossier."}
+                  </p>
+                </div>
+
                 <div className="flex justify-between items-start">
                   <div className="w-1/2 pr-4">
                     <p className="text-sm text-slate-600 mb-4">

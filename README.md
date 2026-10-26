@@ -22,7 +22,7 @@ Application web de gestion de laboratoire (LIMS, *Laboratory Information Managem
 
 ## Fonctionnalités
 
-- **Tableau de bord** : vue d’ensemble de l’activité et génération d’un bilan PDF opérationnel (indicateurs, statuts, demandes récentes, échantillons, analyses, modèles de matériaux, stocks et points d’attention).
+- **Tableau de bord** : vue d’ensemble de l’activité, génération d’un bilan PDF opérationnel et export d’un classeur Excel multi-feuilles (Dashboard, Demandes, Échantillons, Analyses, Stocks, Modèles matériaux et Modèles analyses). Les exports reprennent les données accessibles au compte connecté au moment de la génération.
 - **Demandes** : création, consultation et suivi des demandes clients.
 - **Portail demandeur** : espace client dédié pour déposer et suivre les demandes et, selon leur état, les modifier ou les soumettre à nouveau.
 - **Échantillons** : gestion et suivi des échantillons associés aux demandes.
@@ -174,6 +174,18 @@ Depuis le tableau de bord de pilotage, le bouton **Générer Bilan PDF** téléc
 - une pagination et un pied de page daté.
 
 Le périmètre suit le laboratoire associé au compte connecté lorsque ce périmètre est renseigné. Le bilan est un outil de pilotage : il ne remplace pas un rapport d’essai officiel approuvé, une revue qualité, ni une démonstration de conformité ISO/IEC 17025. Les indicateurs de délai ne sont pas calculés si les dates d’échéance et les horodatages nécessaires ne sont pas disponibles. Vérifiez les chiffres et les autorisations d’accès dans l’environnement cible avant d’utiliser le document pour une décision qualité ou réglementaire.
+
+
+### Bilan et export Excel du tableau de bord
+
+Depuis le tableau de bord de direction, deux exports sont proposés :
+
+- **Générer Bilan PDF** : rapport d’activité paginé avec synthèse, statuts, échantillons, analyses, modèles, stocks et points d’attention.
+- **Exporter Dashboard Excel** : classeur compatible Microsoft Excel, avec une feuille de synthèse et des feuilles de détail pour les demandes, échantillons, analyses, stocks et modèles.
+
+Les fichiers sont générés côté navigateur à partir des données déjà chargées dans l’application. Le périmètre est limité au laboratoire du compte connecté lorsque celui-ci est défini ; un compte dont le laboratoire est `all` voit les données accessibles globalement. Le classeur est un export ponctuel : il ne se synchronise pas ensuite avec le LIMS. Pour actualiser les chiffres, générez un nouvel export.
+
+**Limites et usage qualité :** les indicateurs sont calculés à partir des statuts et dates réellement disponibles. Les délais moyens, le respect des délais contractuels, les non-conformités formelles et la piste d’audit complète ne sont pas déduits lorsqu’ils ne sont pas enregistrés de façon structurée. Le bilan ne remplace pas une revue qualité et n’atteste pas, à lui seul, la conformité ISO/IEC 17025. Vérifiez les chiffres et les règles métier du laboratoire avant de diffuser le rapport.
 
 ## Builder CMS et formulaires clients
 

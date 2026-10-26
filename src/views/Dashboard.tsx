@@ -175,7 +175,7 @@ export function Dashboard() {
     const labAddress = labSettings?.labAddress || '';
     const labContact = [labSettings?.contactEmail, labSettings?.phone].filter(Boolean).join(' · ');
     const scopedLabId = currentUser?.labId;
-    const inScope = (item: any) => !scopedLabId || item?.labId === scopedLabId;
+    const inScope = (item: any) => !scopedLabId || scopedLabId === 'all' || item?.labId === scopedLabId;
     const scopedRequests = requests.filter(inScope);
     const scopedSamples = samples.filter(inScope);
     const scopedAnalyses = analyses.filter(inScope);
@@ -298,6 +298,75 @@ export function Dashboard() {
     doc.save(`bilan-laboratoire-${fileDate}.pdf`);
   };
 
+
+  /**
+   * Export Excel compatible (classeur multi-feuilles SpreadsheetML) à partir
+   * des données du périmètre courant. Aucune donnée n'est simulée.
+   */
+  const generateExcelDashboard = () => {
+    const scopedLabId = currentUser?.labId;
+    const inScope = (item: any) => !scopedLabId || scopedLabId === 'all' || item?.labId === scopedLabId;
+    const req = requests.filter(inScope);
+    const sam = samples.filter(inScope);
+    const ana = analyses.filter(inScope);
+    const stock = consumables.filter(inScope);
+    const mats = materialTemplates.filter(inScope);
+    const templates = (analysisTemplates || []).filter(inScope);
+    const now = new Date();
+    const dateLabel = now.toLocaleString('fr-FR');
+    const esc = (value: any) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+    const cell = (value: any, type?: string) => {
+      const inferred = type || (typeof value === 'number' ? 'Number' : 'String');
+      return `<Cell><Data ss:Type="${inferred}">${esc(value)}</Data></Cell>`;
+    };
+    const row = (values: any[]) => `<Row>${values.map(v => Array.isArray(v) ? cell(v[0], v[1]) : cell(v)).join('')}</Row>`;
+    const sheet = (name: string, rows: any[][]) => `<Worksheet ss:Name="${esc(name.slice(0,31))}"><Table>${rows.map(row).join('')}</Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><FreezePanes/><FrozenNoSplit/><SplitHorizontal>1</SplitHorizontal><TopRowBottomPane>1</TopRowBottomPane><ActivePane>2</ActivePane></WorksheetOptions></Worksheet>`;
+    const countStatus = (items: any[]) => {
+      const counts: Record<string, number> = {};
+      items.forEach(x => { const k = String(x.status || 'Non défini'); counts[k] = (counts[k] || 0) + 1; });
+      return Object.entries(counts).sort((a,b) => b[1]-a[1]);
+    };
+    const low = stock.filter((c: any) => Number(c.stockLevel) <= Number(c.minThreshold));
+    const doneRequests = req.filter((r: any) => r.status === 'terminee').length;
+    const validated = ana.filter((a: any) => ['valide','termine'].includes(a.status)).length;
+    const pendingValidation = ana.filter((a: any) => a.status === 'a_valider').length;
+    const open = req.filter((r: any) => !['terminee','rejetee','brouillon'].includes(r.status)).length;
+    const pct = (n: number, d: number) => d ? Math.round(n/d*100) : 0;
+    const dashboardRows: any[][] = [
+      [['BILAN D’ACTIVITÉ DU LABORATOIRE','String']],
+      [['Laboratoire','String'], [labSettings?.labName || 'Laboratoire','String']],
+      [['Date de génération','String'], [dateLabel,'String']],
+      [['Périmètre','String'], [scopedLabId ? `Laboratoire ${scopedLabId}` : 'Données accessibles au compte','String']],
+      [['Préparé par','String'], [currentUser?.name || 'Utilisateur connecté','String']],
+      ['Indicateur','Valeur','Commentaire'],
+      ['Demandes enregistrées', req.length, `${open} ouvertes / en traitement`],
+      ['Demandes terminées', doneRequests, `${pct(doneRequests, req.length)} % du total`],
+      ['Échantillons enregistrés', sam.length, 'Tous statuts confondus'],
+      ['Analyses enregistrées', ana.length, `${validated} validées ou terminées`],
+      ['Analyses en attente de validation', pendingValidation, pendingValidation ? 'Action requise' : 'Aucune en attente'],
+      ['Consommables sous seuil', low.length, low.length ? 'Risque d’approvisionnement' : 'Aucune alerte de seuil'],
+      ['Modèles matériaux actifs', mats.filter((m:any) => m.isActive !== false).length, `${mats.length} modèles au total`],
+      ['Modèles d’analyses', templates.length, 'Modèles disponibles dans le périmètre'],
+      ['Taux de clôture demandes (%)', pct(doneRequests, req.length), 'Calculé sur les demandes enregistrées'],
+      [],
+      ['Répartition des demandes par statut','Nombre'],
+      ...countStatus(req)
+    ];
+    const requestsRows: any[][] = [['Référence','Titre','Statut','Date création','Priorité','Assigné à','Conclusion'], ...req.map((r:any) => [r.id, r.title, r.status, r.createdAt || '', r.priority || '', r.assignedTo || '', r.conclusion || ''])];
+    const samplesRows: any[][] = [['ID','Code-barres','Demande','Client','Projet','Statut','Reçu le','Priorité','État matière'], ...sam.map((s:any) => [s.id, s.barcode, s.requestId || '', s.client || '', s.project || '', s.status, s.receivedAt || '', s.priority || '', s.materialState || ''])];
+    const analysesRows: any[][] = [['ID analyse','Échantillon','Modèle / méthode','Technicien','Statut','Mise à jour','Notes'], ...ana.map((a:any) => [a.id, a.sampleId, templates.find((t:any) => t.id === a.templateId)?.name || a.templateId, a.technician || '', a.status, a.updatedAt || '', a.notes || ''])];
+    const stockRows: any[][] = [['Consommable','Stock actuel','Seuil minimum','Unité','Alerte'], ...stock.map((c:any) => [c.name, Number(c.stockLevel), Number(c.minThreshold), c.unit || '', Number(c.stockLevel) <= Number(c.minThreshold) ? 'ALERTE' : 'OK'])];
+    const materialsRows: any[][] = [['Modèle matériau','Catégorie','Actif','Nombre de propriétés','Propriétés'], ...mats.map((m:any) => [m.name, m.category || '', m.isActive === false ? 'Non' : 'Oui', (m.fields || []).length, (m.fields || []).map((f:any) => `${f.name} (${f.type}${f.unit ? ', '+f.unit : ''})`).join('; ')])];
+    const analysisTemplateRows: any[][] = [['Modèle analyse','Catégorie','Référence norme','Actif','Résultats attendus'], ...templates.map((t:any) => [t.name, t.category || '', t.standardRef || '', t.isActive === false ? 'Non' : 'Oui', (t.expectedResults || []).map((r:any) => `${r.name} (${r.type}${r.unit ? ', '+r.unit : ''})`).join('; ')])];
+    const workbook = `<?xml version="1.0"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:html="http://www.w3.org/TR/REC-html40"><Styles><Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center"/><Font ss:FontName="Calibri" ss:Size="10"/></Style></Styles>${sheet('Dashboard', dashboardRows)}${sheet('Demandes', requestsRows)}${sheet('Échantillons', samplesRows)}${sheet('Analyses', analysesRows)}${sheet('Stocks', stockRows)}${sheet('Modèles matériaux', materialsRows)}${sheet('Modèles analyses', analysisTemplateRows)}</Workbook>`;
+    const blob = new Blob(['\ufeff', workbook], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `dashboard-lims-${now.toISOString().slice(0,10)}.xls`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  };
+
   /**
    * Composant carte d'indicateur individuel
    */
@@ -320,10 +389,16 @@ export function Dashboard() {
           <h2 className="text-2xl font-display font-bold text-slate-900">Direction & KPI Laboratoire</h2>
           <p className="text-sm text-slate-500 mt-1">Métriques globales et supervision des demandes en attente de revue.</p>
         </div>
-        <button onClick={generateBilan} className="inline-flex items-center gap-2 bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm hover:bg-blue-800 transition-colors shadow-sm" title="Télécharger un bilan PDF complet de l’activité du laboratoire">
-          <Download className="w-4 h-4" />
-          Générer Bilan PDF
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={generateBilan} className="inline-flex items-center gap-2 bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm hover:bg-blue-800 transition-colors shadow-sm" title="Télécharger un bilan PDF complet de l’activité du laboratoire">
+            <Download className="w-4 h-4" />
+            Générer Bilan PDF
+          </button>
+          <button onClick={generateExcelDashboard} className="inline-flex items-center gap-2 bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium text-sm hover:bg-emerald-800 transition-colors shadow-sm" title="Exporter un classeur Excel avec tableau de bord et feuilles de détail">
+            <FileText className="w-4 h-4" />
+            Exporter Dashboard Excel
+          </button>
+        </div>
       </div>
 
       {/* Cartes d'indicateurs synthétiques */}

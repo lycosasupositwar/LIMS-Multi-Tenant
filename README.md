@@ -1,107 +1,261 @@
-# Documentation LIMS (Laboratory Information Management System)
+# LIMS — Gestion de laboratoire
 
-Bienvenue dans la documentation complète de l'application LIMS. Ce guide vous guidera à travers l'installation, la configuration et l'utilisation quotidienne de la plateforme.
+Application web de gestion de laboratoire (LIMS, *Laboratory Information Management System*) construite avec React, TypeScript, Vite et Express. Elle regroupe le suivi des demandes clients, des échantillons, des analyses, des rapports et des consommables, ainsi que la configuration des formulaires et des modèles métier.
 
-## 1. Introduction
+> **État du document :** cette documentation décrit la structure et les commandes visibles dans le dépôt. Les étapes de déploiement et les fonctions doivent être validées dans l’environnement cible avant une mise en production.
 
-Ce LIMS a été conçu pour gérer efficacement les flux de travail au sein d'un ou plusieurs laboratoires. Il permet de :
-- Gérer les demandes d'analyses (clients/demandeurs)
-- Suivre les échantillons
-- Saisir et valider les résultats d'analyses
-- Générer des rapports personnalisables
-- Gérer les utilisateurs et les laboratoires
+## Sommaire
 
-## 2. Installation et Démarrage
+- [Fonctionnalités](#fonctionnalités)
+- [Technologies](#technologies)
+- [Prérequis](#prérequis)
+- [Installation](#installation)
+- [Démarrage et commandes](#démarrage-et-commandes)
+- [Configuration](#configuration)
+- [Comptes, rôles et accès](#comptes-rôles-et-accès)
+- [Utilisation](#utilisation)
+- [Builder CMS et formulaires clients](#builder-cms-et-formulaires-clients)
+- [Stockage et sauvegardes](#stockage-et-sauvegardes)
+- [Sécurité](#sécurité)
+- [Dépannage](#dépannage)
+- [Structure du projet](#structure-du-projet)
 
-### Prérequis
-- [Node.js](https://nodejs.org/) (version 22 ou supérieure recommandée)
-- [npm](https://www.npmjs.com/) ou [Bun](https://bun.sh/)
+## Fonctionnalités
 
-### Étapes d'installation
+- **Tableau de bord** : vue d’ensemble de l’activité.
+- **Demandes** : création, consultation et suivi des demandes clients.
+- **Portail demandeur** : espace client dédié pour déposer et suivre les demandes et, selon leur état, les modifier ou les soumettre à nouveau.
+- **Échantillons** : gestion et suivi des échantillons associés aux demandes.
+- **Essais et analyses** : gestion des analyses et saisie des résultats attendus.
+- **Rapports** : gestion des modèles et des rapports, avec prise en charge de documents Word et de fichiers PDF dans les flux concernés.
+- **Inventaire** : gestion des éléments d’inventaire/consommables.
+- **Builder CMS** : création et configuration des modèles de matériaux, des modèles d’analyses, des formulaires de demande et des modèles de rapports.
+- **Utilisateurs et laboratoires** : gestion des comptes, rôles et périmètres de laboratoire.
+- **Notifications par e-mail** : configuration SMTP depuis l’application.
+- **Journaux système** : consultation des journaux d’administration disponibles dans l’application.
 
-1. **Cloner le dépôt et installer les dépendances**
-   ```bash
-   # Utilisation de npm
-   npm install
+Les fonctions disponibles dans l’interface peuvent varier selon le rôle de l’utilisateur.
 
-   # Ou avec Bun
-   bun install
-   ```
+## Technologies
 
-2. **Démarrer le serveur de développement**
-   ```bash
-   npm run dev &
-   # ou bun run dev &
-   ```
+- React 19 et TypeScript
+- Vite et Tailwind CSS
+- Express 5 (serveur HTTP et API)
+- SQLite via `node:sqlite` pour les données persistantes
+- JWT et `bcryptjs` pour l’authentification et le hachage des mots de passe
+- Bibliothèques de génération/lecture de documents et de visualisation, notamment `docxtemplater`, `docx-preview`, `jspdf` et `react-pdf`
 
-   Le serveur démarre généralement sur `http://localhost:3000` ou `http://localhost:5173`.
+## Prérequis
 
-### Build pour la production
+- **Node.js 22 ou supérieur** recommandé (le projet utilise `node:sqlite`).
+- npm, fourni avec Node.js. Bun est présent dans le dépôt, mais les commandes ci-dessous utilisent npm.
+- Pour convertir certains documents Word en PDF côté serveur, une installation fonctionnelle de **LibreOffice** peut être nécessaire selon le système et le flux utilisé.
+
+## Installation
+
+Placez-vous dans le répertoire du projet, celui qui contient `package.json`.
+
+```bash
+npm install
+```
+
+Créez un fichier `.env` à la racine du projet. Exemple minimal :
+
+```dotenv
+NODE_ENV=development
+JWT_SECRET=remplacer-par-une-cle-aleatoire-longue-et-secrete
+```
+
+Générez une clé aléatoire, par exemple avec Node.js :
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
+Copiez le résultat dans `JWT_SECRET`. Ne publiez pas ce fichier et ne partagez pas sa valeur.
+
+### Installation assistée
+
+Le dépôt contient un script `install.sh` destiné aux environnements Linux compatibles. Il peut installer Node.js et les dépendances, créer un fichier `.env` si nécessaire et configurer un compte administrateur.
+
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+**Attention :** examinez le script avant de l’exécuter, notamment sur un serveur existant. Il peut utiliser `sudo`, installer des paquets système et créer ou réinitialiser le compte administrateur. Choisissez un mot de passe fort et unique. Si l’installation manuelle est préférable, utilisez les étapes précédentes.
+
+## Démarrage et commandes
+
+### Développement
+
+```bash
+npm run dev
+```
+
+Le serveur Express démarre sur le **port 3000**. Ouvrez ensuite [http://localhost:3000](http://localhost:3000). Le serveur intègre les middlewares Vite en mode développement.
+
+### Vérification TypeScript
+
+```bash
+npm run lint
+```
+
+Cette commande exécute `tsc --noEmit` : elle vérifie les types, mais ne remplace pas un test fonctionnel complet.
+
+### Compilation et production
 
 ```bash
 npm run build
-npm run start &
+npm run start
 ```
 
-## 3. Fonctionnalités et Utilisation
+La compilation produit les fichiers frontend dans `dist/` et le serveur compilé dans `dist/server.cjs`. `npm run start` lance le serveur de production. Définissez `NODE_ENV=production` et fournissez obligatoirement un `JWT_SECRET` robuste avant le démarrage.
 
-### 3.1. Page de connexion
-L'accès à l'application est sécurisé et nécessite une authentification.
-![Page de connexion](docs/images/login.png)
+Autres commandes :
 
-### 3.2. Tableau de bord (Dashboard)
-Le tableau de bord offre une vue d'ensemble de l'activité du laboratoire :
-- **KPIs** : Nombre de demandes, échantillons, analyses en attente.
-- **Graphiques** : Répartition des statuts, évolution des demandes.
-![Tableau de bord](docs/images/dashboard.png)
+```bash
+npm run preview # prévisualisation Vite du frontend compilé
+npm run clean   # supprime les artefacts ciblés par le script
+```
 
-### 3.3. Gestion des Demandes (Requests)
-- **Création** : Un demandeur peut créer une nouvelle demande en spécifiant les informations générales.
-- **Suivi** : Les statuts permettent de suivre l'avancement (Brouillon, Soumise, En cours, Terminée).
-- **Assignation** : Les managers peuvent assigner des demandes à des analystes spécifiques.
-![Gestion des demandes](docs/images/requests.png)
+Le serveur définit actuellement son port dans `server.ts` à `3000` ; la variable `PORT` écrite par le script d’installation n’est donc pas utilisée par cette version. Pour changer le port, adaptez le code serveur et vérifiez la configuration de déploiement.
 
-### 3.4. Gestion des Échantillons (Samples)
-Chaque demande peut contenir plusieurs échantillons.
-- **Réception** : Enregistrement de la réception physique.
-- **Préparation** : Suivi des étapes de préparation (ex: montage, polissage).
-- **Traçabilité** : Code unique pour chaque échantillon.
-![Gestion des échantillons](docs/images/samples.png)
+## Configuration
 
-### 3.5. Analyses et Résultats
-- **Saisie** : Les analystes saisissent les résultats des mesures.
-- **Validation** : Processus de validation des résultats (ex: ISO 17025) par un manager.
-- **Pièces jointes** : Ajout d'images ou de documents liés à l'analyse.
-![Analyses et Résultats](docs/images/analyses.png)
+### Variables d’environnement
 
-### 3.6. Génération de Rapports
-- **Modèles** : Utilisation de modèles de rapports préconfigurés.
-- **Génération PDF/Word** : Export automatique des résultats validés vers un format final.
-![Génération de rapports](docs/images/reports.png)
+| Variable | Utilisation | Recommandation |
+|---|---|---|
+| `JWT_SECRET` | Signature et vérification des jetons d’authentification | Obligatoire en production ; clé aléatoire, longue et privée |
+| `NODE_ENV` | Sélection du comportement développement/production | Définir `production` en production |
+| `DISABLE_HMR` | Référencée par la configuration serveur pour le comportement HMR | À utiliser uniquement si nécessaire dans l’environnement de développement |
 
-## 4. Administration et Paramètres
+Le port est actuellement fixé à `3000` dans `server.ts`. La configuration SMTP se fait depuis l’interface d’administration, si les droits nécessaires sont disponibles : renseignez l’hôte, le port, le mode sécurisé, l’utilisateur, le mot de passe et l’adresse d’expédition. Effectuez un envoi de test après configuration.
 
-### 4.1. Gestion des Utilisateurs
-L'onglet Paramètres > Utilisateurs permet aux administrateurs de :
-- **Créer des utilisateurs** : Définir le nom, l'email, le mot de passe provisoire et le rôle.
-- **Rôles disponibles** :
-  - `demandeur` : Client externe ou interne.
-  - `analyste` : Technicien de laboratoire.
-  - `manager` : Responsable de laboratoire.
-  - `admin` : Administrateur système.
-- **Attribution de Laboratoire** :
-  - Les managers et analystes peuvent être affectés à un **laboratoire spécifique** ou à **tous les laboratoires** (Accès global).
-  - Cela garantit qu'un manager ne voit et ne gère que les données de son périmètre.
-- **Suppression** : Les administrateurs (`admin`) peuvent **supprimer un utilisateur** via le bouton corbeille rouge dans la liste.
+## Comptes, rôles et accès
 
-### 4.2. Gestion des Laboratoires
-- Création et modification des entités laboratoires.
-- Définition des coordonnées et des spécificités de chaque site.
+Les rôles utilisés dans l’application comprennent :
 
-## 5. Sécurité et Accès
-- Authentification par JWT (JSON Web Tokens).
-- Base de données SQLite locale pour un déploiement simplifié.
-- Les données sensibles (mots de passe) sont hachées avec bcrypt.
+- **`demandeur`** : accès au portail client, pour créer et suivre ses demandes.
+- **`analyste`** : accès aux vues opérationnelles internes autorisées, notamment les échantillons et les analyses.
+- **`manager`** : accès aux vues de gestion, aux paramètres correspondants et au Builder CMS.
+- **`admin`** : rôle d’administration système, notamment pour la gestion des utilisateurs.
+
+Les vues et les données disponibles sont filtrées selon le rôle et, pour les utilisateurs internes, le laboratoire associé lorsque cette règle est applicable. Vérifiez les droits avec plusieurs comptes avant la mise en production.
+
+La base d’authentification crée les tables nécessaires au premier démarrage. Si aucun utilisateur n’est présent, le code initialise le schéma ; la création du compte super-administrateur peut être effectuée avec le script d’installation. Ne supposez pas qu’un mot de passe de démonstration est sûr : définissez un identifiant et un mot de passe propres à votre installation.
+
+## Utilisation
+
+### Demandes et portail client
+
+1. Connectez-vous avec un compte autorisé.
+2. Le demandeur utilise son portail pour créer et suivre une demande.
+3. Le personnel interne consulte les demandes dans la vue **Demandes**.
+4. Les échantillons, analyses et rapports sont ensuite gérés dans leurs vues respectives, selon les droits attribués.
+
+### Échantillons, analyses et rapports
+
+- Associez les échantillons à la demande correspondante et renseignez les informations de suivi.
+- Utilisez les modèles d’analyses pour définir les champs et les résultats attendus.
+- Configurez les modèles de rapports et les fichiers de modèle requis par votre processus. Vérifiez les documents générés et leur mise en page avant de les utiliser officiellement.
+
+## Builder CMS et formulaires clients
+
+Le **Builder CMS** est réservé aux utilisateurs disposant du rôle `manager`. Il comporte quatre zones principales : **Matériaux**, **Analyses**, **Formulaires** et **Rapports**.
+
+### Modèles de matériaux
+
+La zone **Matériaux** sert à définir les modèles de matériaux, leurs champs/propriétés et leur disponibilité pour le laboratoire concerné. Activez les modèles qui doivent pouvoir être proposés dans un formulaire client.
+
+### Modèles d’analyses
+
+La zone **Analyses** sert à configurer les modèles d’analyse et les résultats attendus : nom du champ, type, unité éventuelle, options et caractère obligatoire selon le type de champ.
+
+### Formulaires de demande côté client
+
+La configuration du formulaire client se fait dans **Builder CMS → Formulaires** — et non dans la zone **Matériaux**.
+
+Pour proposer les matériaux au client :
+
+1. Ouvrez **Builder CMS → Formulaires** et créez ou modifiez le formulaire de demande concerné.
+2. Ajoutez un champ de formulaire de type **Matériaux du modèle** (`materials`).
+3. Enregistrez le formulaire.
+4. Dans le portail client, les modèles de matériaux actifs associés au laboratoire de la demande sont proposés à la sélection.
+5. Lorsque le client sélectionne un modèle, les propriétés configurées pour ce matériau sont affichées avec leur type de saisie (texte, nombre, date, liste, choix multiples ou Oui/Non, selon la définition de la propriété).
+6. Les valeurs saisies sont enregistrées dans les données personnalisées de la demande et sont réaffichées dans le formulaire de modification.
+
+Si aucun matériau n’apparaît, vérifiez que le modèle est actif et associé au même laboratoire que la demande, puis vérifiez que le champ `materials` est bien présent dans le formulaire client.
+
+> Les libellés précis affichés dans l’interface peuvent dépendre de la version de l’application. La clé technique du type de champ est `materials`.
+
+### Modèles de rapports
+
+La zone **Rapports** permet de gérer les modèles de rapport et, dans les flux concernés, d’importer un document Word (`.docx`). Testez les balises, images et conversions avec un document non critique avant de généraliser le modèle.
+
+## Stockage et sauvegardes
+
+- **Base de données SQLite :** `database.sqlite` à la racine du projet. Elle contient les comptes et les collections métier sérialisées en JSON.
+- **Rapports enregistrés :** `storage/reports/`.
+- **Fichiers temporaires et artefacts :** certains fichiers peuvent être créés pendant la génération ou la consultation de documents.
+
+Avant toute mise à jour, arrêtez l’application et effectuez une sauvegarde cohérente de `database.sqlite` ainsi que du répertoire `storage/`. Stockez les sauvegardes hors du serveur, limitez-en l’accès et testez périodiquement leur restauration. Ne supprimez pas la base de données pour résoudre un problème sans avoir effectué une sauvegarde.
+
+## Sécurité
+
+- Utilisez un `JWT_SECRET` robuste et différent pour chaque environnement ; il est obligatoire en production.
+- N’utilisez pas de mots de passe par défaut ou partagés. Changez immédiatement les identifiants initialement créés.
+- Ne commitez jamais `.env`, les bases de données, les documents clients ou les sauvegardes dans le dépôt.
+- Servez l’application derrière HTTPS en production et limitez l’accès réseau au serveur.
+- Restreignez l’accès au fichier SQLite, aux rapports générés et aux sauvegardes aux seuls comptes système nécessaires.
+- Configurez SMTP avec des identifiants dédiés et protégez-les comme des secrets.
+- Testez les permissions, les scénarios de réinitialisation de mot de passe et l’accès inter-laboratoires avant la mise en service.
+- Les journaux peuvent contenir des détails techniques : évitez d’y écrire des données personnelles ou confidentielles et contrôlez leur accès.
+
+Cette documentation ne constitue pas une certification de conformité réglementaire. Pour une utilisation en environnement réglementé, définissez et validez vos procédures de sauvegarde, de traçabilité, de validation et de contrôle d’accès.
+
+## Dépannage
+
+- **Le serveur ne démarre pas :** vérifiez `node -v` (Node.js 22+), puis exécutez `npm install` et consultez les messages du terminal.
+- **Le port 3000 est déjà utilisé :** arrêtez le service qui l’occupe ou adaptez le port dans `server.ts` et vérifiez les paramètres de déploiement.
+- **Erreur de jeton en production :** vérifiez que `JWT_SECRET` est défini avant de lancer le serveur.
+- **Le formulaire ne propose aucun matériau :** vérifiez le laboratoire sélectionné, l’état actif du modèle et la présence du champ de type `materials` dans **Builder CMS → Formulaires**.
+- **Un rapport Word/PDF échoue :** vérifiez le fichier modèle, les droits d’écriture sur `storage/reports/` et la disponibilité de LibreOffice si une conversion est requise.
+- **Une modification ne semble pas enregistrée :** vérifiez les messages du serveur et la sauvegarde de `database.sqlite` avant de tenter une réparation.
+
+## Structure du projet
+
+```text
+.
+├── server.ts                 # Serveur Express, API et service de fichiers
+├── install.sh                # Script d’installation assistée Linux
+├── package.json              # Dépendances et commandes npm
+├── index.html                # Point d’entrée HTML
+├── vite.config.ts            # Configuration Vite
+├── tsconfig.json             # Configuration TypeScript
+└── src/
+    ├── App.tsx               # Navigation et contrôle d’accès par rôle
+    ├── main.tsx              # Point d’entrée React
+    ├── store.tsx             # État et données partagées de l’application
+    ├── types.ts              # Types TypeScript
+    ├── data.ts               # Données/configurations initiales
+    ├── db/                   # Accès aux bases SQLite
+    ├── components/           # Modales et composants partagés
+    ├── views/                # Écrans métier
+    └── utils/                # Utilitaires
+```
+
+## Contribution et maintenance
+
+Avant de livrer une modification :
+
+1. Exécutez `npm run lint`.
+2. Exécutez `npm run build`.
+3. Testez les parcours concernés avec des comptes de rôles différents.
+4. Vérifiez la création, la modification et la persistance des demandes, notamment les propriétés des matériaux si le formulaire utilise le champ `materials`.
+5. Sauvegardez la base et les fichiers avant le déploiement.
 
 ---
-*Ce document évolue en fonction des mises à jour de l'application. N'hésitez pas à le compléter avec des captures d'écran de votre propre instance.*
+
+*Document maintenu avec le projet. Mettez-le à jour à chaque changement de comportement, de configuration ou de procédure d’installation.*

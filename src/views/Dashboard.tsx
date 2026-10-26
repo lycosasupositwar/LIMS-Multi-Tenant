@@ -13,13 +13,14 @@
  */
 
 import React from 'react';
+import { jsPDF } from 'jspdf';
 import { useLims } from '../store';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { Box, Activity, CheckCircle, Factory, FileText, AlertCircle,ClipboardClock } from 'lucide-react';
+import { Box, Activity, CheckCircle, Factory, FileText, AlertCircle, ClipboardClock, Download } from 'lucide-react';
 import { RequestStatus } from '../types';
 
 export function Dashboard() {
-  const { currentUser, samples, analyses, requests, materialTemplates, consumables } = useLims();
+  const { currentUser, samples, analyses, requests, materialTemplates, consumables, analysisTemplates, labSettings } = useLims() as any;
 
   /**
    * Génère le badge visuel coloré correspondant à un statut de demande
@@ -159,6 +160,145 @@ export function Dashboard() {
   const COLORS = ['#10b981', '#ef4444', '#3b82f6', '#f59e0b', '#8b5cf6'];
 
   /**
+   * Produit un bilan PDF de pilotage à partir des données réellement disponibles dans le LIMS.
+   * Les chiffres sont calculés à la génération et les données manquantes ne sont pas inventées.
+   */
+  const generateBilan = () => {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 16;
+    const contentWidth = pageWidth - margin * 2;
+    const generatedAt = new Date();
+    const dateLabel = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'long', timeStyle: 'short' }).format(generatedAt);
+    const labName = labSettings?.labName || 'Laboratoire';
+    const labAddress = labSettings?.labAddress || '';
+    const labContact = [labSettings?.contactEmail, labSettings?.phone].filter(Boolean).join(' · ');
+    const scopedLabId = currentUser?.labId;
+    const inScope = (item: any) => !scopedLabId || item?.labId === scopedLabId;
+    const scopedRequests = requests.filter(inScope);
+    const scopedSamples = samples.filter(inScope);
+    const scopedAnalyses = analyses.filter(inScope);
+    const scopedConsumables = consumables.filter(inScope);
+    const scopedMaterials = materialTemplates.filter(inScope);
+    const scopedAnalysisTemplates = (analysisTemplates || []).filter(inScope);
+    const statusCount = (items: any[]) => items.reduce((acc: Record<string, number>, item: any) => {
+      const status = String(item.status || 'Non défini'); acc[status] = (acc[status] || 0) + 1; return acc;
+    }, {});
+    const reqStatuses = statusCount(scopedRequests);
+    const sampleStatuses = statusCount(scopedSamples);
+    const analysisStatuses = statusCount(scopedAnalyses);
+    const lowStock = scopedConsumables.filter((c: any) => Number(c.stockLevel) <= Number(c.minThreshold));
+    const validatedAnalyses = scopedAnalyses.filter((a: any) => ['valide', 'termine'].includes(a.status)).length;
+    const completedRequests = scopedRequests.filter((r: any) => r.status === 'terminee').length;
+    const pendingValidation = scopedAnalyses.filter((a: any) => a.status === 'a_valider').length;
+    const openRequests = scopedRequests.filter((r: any) => !['terminee', 'rejetee', 'brouillon'].includes(r.status)).length;
+    const pct = (n: number, d: number) => d ? `${Math.round(n / d * 100)} %` : 'N/D';
+    let y = 18;
+
+    const ensureSpace = (needed = 16) => { if (y + needed > pageHeight - 17) { doc.addPage(); y = 18; } };
+    const section = (title: string) => {
+      ensureSpace(17); doc.setFillColor(30, 64, 104); doc.roundedRect(margin, y, contentWidth, 8, 1.5, 1.5, 'F');
+      doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.text(title, margin + 3, y + 5.4);
+      y += 13; doc.setTextColor(35, 45, 58); doc.setFont('helvetica', 'normal');
+    };
+    const line = (label: string, value: string | number) => {
+      const lines = doc.splitTextToSize(`${label} : ${value}`, contentWidth - 4);
+      ensureSpace(lines.length * 5 + 2); doc.setFontSize(9); doc.text(lines, margin + 2, y); y += lines.length * 4.8 + 1.8;
+    };
+    const table = (headers: string[], rows: string[][], widths?: number[]) => {
+      const cols = widths || headers.map(() => contentWidth / headers.length);
+      const drawRow = (cells: string[], header = false) => {
+        const wrapped = cells.map((c, i) => doc.splitTextToSize(String(c ?? '—'), cols[i] - 3));
+        const rowH = Math.max(7, ...wrapped.map(w => w.length * 4 + 3));
+        ensureSpace(rowH + 1);
+        let x = margin;
+        cells.forEach((_, i) => {
+          if (header) doc.setFillColor(226, 232, 240); else doc.setFillColor(255, 255, 255);
+          doc.setDrawColor(203, 213, 225); doc.rect(x, y - 3.5, cols[i], rowH, 'FD');
+          doc.setTextColor(35, 45, 58); doc.setFont('helvetica', header ? 'bold' : 'normal'); doc.setFontSize(8);
+          doc.text(wrapped[i], x + 1.5, y + 0.5); x += cols[i];
+        });
+        y += rowH;
+      };
+      drawRow(headers, true); rows.forEach(row => drawRow(row)); y += 4;
+    };
+
+    // Page de garde / identification
+    doc.setFillColor(15, 45, 78); doc.rect(0, 0, pageWidth, 43, 'F');
+    doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(19); doc.text('BILAN D’ACTIVITÉ DU LABORATOIRE', margin, 18);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.text(labName, margin, 27);
+    doc.setFontSize(8.5); doc.text(`Généré le ${dateLabel}`, margin, 34);
+    doc.setTextColor(35, 45, 58); y = 52;
+    if (labAddress) line('Adresse', labAddress);
+    if (labContact) line('Contact', labContact);
+    line('Périmètre', scopedLabId ? 'Données du laboratoire associé au compte connecté' : 'Toutes les données accessibles au compte connecté');
+    line('Préparé par', currentUser?.name || 'Utilisateur connecté');
+
+    section('1. Synthèse exécutive');
+    table(['Indicateur', 'Valeur', 'Lecture'], [
+      ['Demandes enregistrées', String(scopedRequests.length), `${openRequests} ouvertes / en traitement`],
+      ['Demandes terminées', String(completedRequests), pct(completedRequests, scopedRequests.length) + ' des demandes'],
+      ['Échantillons enregistrés', String(scopedSamples.length), `${scopedSamples.filter((s: any) => s.status === 'termine').length} terminés`],
+      ['Analyses enregistrées', String(scopedAnalyses.length), `${validatedAnalyses} validées ou terminées`],
+      ['Analyses en attente de validation', String(pendingValidation), pendingValidation ? 'Action requise' : 'Aucune en attente'],
+      ['Consommables sous seuil', String(lowStock.length), lowStock.length ? 'Risque d’approvisionnement' : 'Aucune alerte de seuil']
+    ], [contentWidth * .42, contentWidth * .18, contentWidth * .40]);
+
+    section('2. Activité des demandes');
+    line('Demandes à revoir', scopedRequests.filter((r: any) => ['soumise', 'En Revue'].includes(r.status)).length);
+    line('Taux de clôture', pct(completedRequests, scopedRequests.length));
+    table(['Statut', 'Nombre'], (Object.entries(reqStatuses) as [string, number][]).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, String(v)]), [contentWidth * .7, contentWidth * .3]);
+    const recentRequests = [...scopedRequests].sort((a: any, b: any) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, 12);
+    table(['Référence', 'Demande', 'Statut', 'Créée le'], recentRequests.map((r: any) => [r.id, r.title || 'Sans titre', r.status, r.createdAt ? new Date(r.createdAt).toLocaleDateString('fr-FR') : 'N/D']), [contentWidth * .22, contentWidth * .36, contentWidth * .23, contentWidth * .19]);
+
+    section('3. Échantillons et traçabilité');
+    table(['Statut échantillon', 'Nombre'], (Object.entries(sampleStatuses) as [string, number][]).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, String(v)]), [contentWidth * .7, contentWidth * .3]);
+    const recentSamples = [...scopedSamples].sort((a: any, b: any) => String(b.receivedAt || '').localeCompare(String(a.receivedAt || ''))).slice(0, 12);
+    table(['Code-barres', 'Demande', 'Client / projet', 'Statut'], recentSamples.map((s: any) => [s.barcode || s.id, s.requestId || '—', [s.client, s.project].filter(Boolean).join(' / ') || '—', s.status]), [contentWidth * .24, contentWidth * .2, contentWidth * .34, contentWidth * .22]);
+
+    section('4. Analyses et validation technique');
+    line('Analyses validées / terminées', `${validatedAnalyses} (${pct(validatedAnalyses, scopedAnalyses.length)})`);
+    line('Analyses en cours', scopedAnalyses.filter((a: any) => a.status === 'En Cours').length);
+    line('Analyses en attente de validation', pendingValidation);
+    table(['Statut analyse', 'Nombre'], (Object.entries(analysisStatuses) as [string, number][]).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, String(v)]), [contentWidth * .7, contentWidth * .3]);
+    const recentAnalyses = [...scopedAnalyses].sort((a: any, b: any) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))).slice(0, 15);
+    table(['Échantillon', 'Méthode / modèle', 'Technicien', 'Statut', 'Mise à jour'], recentAnalyses.map((a: any) => [a.sampleId, scopedAnalysisTemplates.find((t: any) => t.id === a.templateId)?.name || a.templateId, a.technician || 'Non assigné', a.status, a.updatedAt ? new Date(a.updatedAt).toLocaleDateString('fr-FR') : 'N/D']), [contentWidth * .19, contentWidth * .28, contentWidth * .19, contentWidth * .17, contentWidth * .19]);
+
+    section('5. Matériaux et modèles disponibles');
+    line('Modèles de matériaux configurés', scopedMaterials.length);
+    line('Modèles de matériaux actifs', scopedMaterials.filter((m: any) => m.isActive !== false).length);
+    line('Modèles d’analyses configurés', scopedAnalysisTemplates.length);
+    table(['Modèle matériau', 'Catégorie', 'Propriétés définies'], scopedMaterials.slice(0, 20).map((m: any) => [m.name, m.category || '—', String(m.fields?.length || 0)]), [contentWidth * .48, contentWidth * .28, contentWidth * .24]);
+
+    section('6. Stocks et risques opérationnels');
+    line('Références de consommables suivies', scopedConsumables.length);
+    line('Références sous seuil minimum', lowStock.length);
+    table(['Consommable', 'Stock', 'Seuil mini', 'Unité', 'État'], lowStock.concat(scopedConsumables.filter((c: any) => Number(c.stockLevel) > Number(c.minThreshold)).slice(0, 8)).slice(0, 20).map((c: any) => [c.name, String(c.stockLevel), String(c.minThreshold), c.unit || '—', Number(c.stockLevel) <= Number(c.minThreshold) ? 'ALERTE' : 'OK']), [contentWidth * .34, contentWidth * .15, contentWidth * .17, contentWidth * .13, contentWidth * .21]);
+
+    section('7. Points d’attention et limites du bilan');
+    const risks = [] as string[];
+    if (pendingValidation) risks.push(`${pendingValidation} analyse(s) attend(ent) une validation technique.`);
+    if (openRequests) risks.push(`${openRequests} demande(s) ne sont pas clôturées.`);
+    if (lowStock.length) risks.push(`${lowStock.length} consommable(s) sont au seuil minimum ou en dessous.`);
+    if (!risks.length) risks.push('Aucune alerte automatique identifiée parmi les indicateurs suivis. Cela ne remplace pas une revue qualité.');
+    risks.forEach(r => line('•', r));
+    line('Données de délai', 'Les délais moyens et le respect des échéances ne sont pas calculés car les données de dates d’échéance et d’étapes horodatées ne sont pas uniformément disponibles.');
+    line('Interprétation', 'Ce bilan est un rapport opérationnel généré à partir des données disponibles au moment de l’export. Il ne constitue pas, à lui seul, une preuve de conformité ISO/IEC 17025 ni un rapport d’essai validé.');
+
+    // Pied de page paginé
+    const pages = doc.getNumberOfPages();
+    for (let i = 1; i <= pages; i++) {
+      doc.setPage(i); doc.setDrawColor(203, 213, 225); doc.line(margin, pageHeight - 12, pageWidth - margin, pageHeight - 12);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(100, 116, 139);
+      doc.text(`${labName} · Bilan généré le ${generatedAt.toLocaleDateString('fr-FR')}`, margin, pageHeight - 7);
+      doc.text(`Page ${i}/${pages}`, pageWidth - margin, pageHeight - 7, { align: 'right' });
+    }
+    const fileDate = generatedAt.toISOString().slice(0, 10);
+    doc.save(`bilan-laboratoire-${fileDate}.pdf`);
+  };
+
+  /**
    * Composant carte d'indicateur individuel
    */
   const StatCard = ({ title, value, icon: Icon, colorClass, highlight }: any) => (
@@ -180,8 +320,9 @@ export function Dashboard() {
           <h2 className="text-2xl font-display font-bold text-slate-900">Direction & KPI Laboratoire</h2>
           <p className="text-sm text-slate-500 mt-1">Métriques globales et supervision des demandes en attente de revue.</p>
         </div>
-        <button className="bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-lg font-medium text-sm hover:bg-slate-50 transition-colors">
-          Générer Bilan
+        <button onClick={generateBilan} className="inline-flex items-center gap-2 bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm hover:bg-blue-800 transition-colors shadow-sm" title="Télécharger un bilan PDF complet de l’activité du laboratoire">
+          <Download className="w-4 h-4" />
+          Générer Bilan PDF
         </button>
       </div>
 

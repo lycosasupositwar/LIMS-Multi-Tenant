@@ -22,7 +22,7 @@ Application web de gestion de laboratoire (LIMS, *Laboratory Information Managem
 
 ## Fonctionnalités
 
-- **Tableau de bord** : vue d’ensemble de l’activité.
+- **Tableau de bord** : vue d’ensemble de l’activité et génération d’un bilan PDF opérationnel (indicateurs, statuts, demandes récentes, échantillons, analyses, modèles de matériaux, stocks et points d’attention).
 - **Demandes** : création, consultation et suivi des demandes clients.
 - **Portail demandeur** : espace client dédié pour déposer et suivre les demandes et, selon leur état, les modifier ou les soumettre à nouveau.
 - **Échantillons** : gestion et suivi des échantillons associés aux demandes.
@@ -160,6 +160,20 @@ La base d’authentification crée les tables nécessaires au premier démarrage
 - Associez les échantillons à la demande correspondante et renseignez les informations de suivi.
 - Utilisez les modèles d’analyses pour définir les champs et les résultats attendus.
 - Configurez les modèles de rapports et les fichiers de modèle requis par votre processus. Vérifiez les documents générés et leur mise en page avant de les utiliser officiellement.
+
+## Bilan PDF depuis le tableau de bord
+
+Depuis le tableau de bord de pilotage, le bouton **Générer Bilan PDF** télécharge un bilan d’activité construit à partir des données disponibles dans l’application au moment de la génération. Le document comprend :
+
+- les informations d’identification du laboratoire et la date de génération ;
+- une synthèse des demandes, échantillons, analyses, validations en attente et alertes de consommables ;
+- la répartition des demandes, échantillons et analyses par statut ;
+- des listes récentes de demandes, échantillons et analyses pour faciliter le suivi ;
+- un aperçu des modèles de matériaux et des propriétés configurées ;
+- les stocks sous seuil et une section de points d’attention ;
+- une pagination et un pied de page daté.
+
+Le périmètre suit le laboratoire associé au compte connecté lorsque ce périmètre est renseigné. Le bilan est un outil de pilotage : il ne remplace pas un rapport d’essai officiel approuvé, une revue qualité, ni une démonstration de conformité ISO/IEC 17025. Les indicateurs de délai ne sont pas calculés si les dates d’échéance et les horodatages nécessaires ne sont pas disponibles. Vérifiez les chiffres et les autorisations d’accès dans l’environnement cible avant d’utiliser le document pour une décision qualité ou réglementaire.
 
 ## Builder CMS et formulaires clients
 

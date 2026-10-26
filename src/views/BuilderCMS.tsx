@@ -597,7 +597,6 @@ export function BuilderCMS() {
                           <option value="select">Liste déroulante</option>
                           <option value="multiselect">Sélection multiple</option>
                           <option value="boolean">Oui / Non</option>
-                          <option value="materials">Matériaux du modèle</option>
                         </select>
                       </div>
                       <div>
@@ -909,6 +908,7 @@ export function BuilderCMS() {
                           <option value="multiselect">Sélection multiple</option>
                           <option value="boolean">Oui / Non (Case à cocher)</option>
                           <option value="analyses">Analyses (Modèles actifs)</option>
+                          <option value="materials">Matériaux du modèle (avec propriétés)</option>
                         </select>
                       </div>
                       {['select', 'multiselect'].includes(newFieldType) && (

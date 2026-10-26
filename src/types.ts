@@ -111,7 +111,7 @@ export interface Notification {
 export interface CustomField {
   id: string;
   name: string;
-  type: 'text' | 'number' | 'number_series' | 'select' | 'boolean' | 'multiselect' | 'date' | 'analyses' | 'image';
+  type: 'text' | 'number' | 'number_series' | 'select' | 'boolean' | 'multiselect' | 'date' | 'analyses' | 'materials' | 'image';
   options?: string[];
   required: boolean;
   unit?: string;

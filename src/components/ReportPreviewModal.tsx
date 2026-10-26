@@ -156,8 +156,10 @@ export function ReportPreviewModal({
 
     // Fonction utilitaire pour capturer un élément DOM en image Haute Définition
     const captureElement = async (el: HTMLElement) => {
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
+      const rect = el.getBoundingClientRect();
+      const w = Math.ceil(rect.width || el.offsetWidth);
+      const h = Math.ceil(rect.height || el.offsetHeight);
+
       const dataUrl = await domtoimage.toJpeg(el, {
         quality: 0.98,
         bgcolor: '#ffffff',
@@ -168,7 +170,6 @@ export function ReportPreviewModal({
           transformOrigin: 'top left',
           width: `${w}px`,
           height: `${h}px`,
-          margin: '0'
         },
       });
       const heightMm = (h * contentWidth) / w;
@@ -852,7 +853,7 @@ export function ReportPreviewModal({
               className="bg-white w-full max-w-[210mm] min-h-[297mm] h-fit mx-auto shadow-lg p-10 sm:p-14 text-slate-900"
               style={{ fontFamily: '"Inter", sans-serif' }}
             >
-              {/* En-tête officiel du laboratoire */}
+              {/* En-tête officiel du laboratoire (répété sur chaque page du PDF) */}
               <header className="pdf-header flex justify-between items-start border-b-2 border-blue-900 pb-6 mb-6 bg-white">
                 <div>
                   {labSettings.logoUrl ? (
@@ -884,8 +885,10 @@ export function ReportPreviewModal({
               </header>
 
               {/* 1. Informations Générales */}
-              <section className="pdf-block mb-6 bg-white">
-                <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-4 text-slate-800">1. Informations Générales</h2>
+              <section className="pdf-block mb-6 pb-2 bg-white">
+                <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-4 text-slate-800">
+                  1. Informations Générales
+                </h2>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div><span className="font-semibold text-slate-600">Titre de l'étude :</span> {report.title}</div>
                   <div><span className="font-semibold text-slate-600">ID Demande :</span> {request?.id || 'N/A'}</div>
@@ -895,8 +898,10 @@ export function ReportPreviewModal({
               </section>
 
               {/* 2. Matrice des Échantillons */}
-              <section className="pdf-block mb-6 break-inside-avoid bg-white">
-                <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-4 text-slate-800">2. Matrice des Échantillons</h2>
+              <section className="pdf-block mb-6 pb-2 break-inside-avoid bg-white">
+                <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-4 text-slate-800">
+                  2. Matrice des Échantillons
+                </h2>
                 <table className="w-full text-sm border-collapse border border-slate-200">
                   <thead>
                     <tr className="bg-slate-100">
@@ -924,9 +929,9 @@ export function ReportPreviewModal({
               </section>
 
               {/* 3. Résultats des Analyses */}
-              <section className="mb-8">
-                <div className="pdf-block bg-white">
-                  <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-4 text-slate-800">
+              <section className="mb-6">
+                <div className="pdf-block bg-white pb-2">
+                  <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-2 text-slate-800">
                     3. Résultats des Analyses
                   </h2>
                 </div>
@@ -936,8 +941,8 @@ export function ReportPreviewModal({
                   if (sampleAnalyses.length === 0) return null;
 
                   return (
-                    <div key={sample.id} className="mb-6">
-                      <div className="pdf-block bg-white pb-2">
+                    <div key={sample.id} className="mb-4">
+                      <div className="pdf-block bg-white py-2">
                         <h3 className="text-md font-semibold text-slate-700 bg-slate-50 p-2 border-l-4 border-blue-500">
                           Échantillon {sample.id}
                         </h3>
@@ -948,8 +953,78 @@ export function ReportPreviewModal({
                         if (!tpl) return null;
 
                         return (
-                          <div key={analysis.id} className="pdf-block ml-4 mb-4 break-inside-avoid bg-white pb-2">
-                            {/* ... contenu existant de l'analyse (tableau, images, observations) inchangé ... */}
+                          <div key={analysis.id} className="pdf-block pl-4 py-2 mb-3 break-inside-avoid bg-white">
+                            <h4 className="text-sm font-bold text-slate-800 mb-2">{tpl.name}</h4>
+                            <table className="w-full text-sm border-collapse border border-slate-200 mb-3">
+                              <tbody>
+                                {tpl.expectedResults.map(expected => (
+                                  <tr key={expected.id}>
+                                    <td className="border border-slate-200 p-2 text-slate-600 bg-slate-50 w-1/2">{expected.name}</td>
+                                    <td className="border border-slate-200 p-2 font-medium">
+                                      {analysis.results[expected.id] !== undefined ? (
+                                        expected.type === 'micrography'
+                                          ? (() => {
+                                            const microValue = analysis.results[expected.id];
+                                            const microImages = Array.isArray(microValue?.images) ? microValue.images : [];
+                                            if (microImages.length === 0) return <span className="text-slate-400">Aucune image</span>;
+                                            return (
+                                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                {microImages.map((img: any, idx: number) => (
+                                                  <div key={img.id || idx} className="min-w-0 rounded border border-slate-200 p-2 break-inside-avoid bg-white">
+                                                    <img src={img.dataUrl} alt={img.name || `Micrographie ${idx + 1}`} className="w-full max-h-56 object-contain bg-slate-50" />
+                                                    <div className="mt-1 text-xs font-semibold text-slate-600">Image {idx + 1}{img.name ? ` — ${img.name}` : ''}</div>
+                                                    {img.comment?.trim() && <p className="mt-1 whitespace-pre-wrap text-xs font-normal text-slate-700">{img.comment}</p>}
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            );
+                                          })()
+                                          : expected.type === 'number_series'
+                                            ? (() => {
+                                              const vals = Array.isArray(analysis.results[expected.id]) ? analysis.results[expected.id] : [];
+                                              const numVals = vals.map((v: any) => Number(v)).filter((v: number) => !isNaN(v));
+                                              if (numVals.length === 0) return '-';
+                                              const mean = numVals.reduce((a: number, b: number) => a + b, 0) / numVals.length;
+                                              const variance = numVals.length > 1 ? numVals.reduce((a: number, b: number) => a + Math.pow(b - mean, 2), 0) / (numVals.length - 1) : null;
+                                              const stdDev = variance !== null ? Math.sqrt(variance) : null;
+                                              return `Moy: ${mean.toFixed(2)} ${expected.unit || ''} (σ: ${stdDev ? stdDev.toFixed(2) : '-'}) [${vals.join(', ')}]`;
+                                            })()
+                                            : expected.type === 'boolean'
+                                              ? (analysis.results[expected.id] ? 'Conforme / Oui' : 'Non Conforme / Non')
+                                              : expected.type === 'multiselect' && Array.isArray(analysis.results[expected.id])
+                                                ? analysis.results[expected.id].join(', ')
+                                                : `${analysis.results[expected.id]} ${expected.unit || ''}`
+                                      ) : '-'}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+
+                            {analysis.images.length > 0 && (
+                              <div className="grid grid-cols-2 gap-4 mt-3">
+                                {analysis.images.map((img, idx) => (
+                                  <div key={idx} className="border border-slate-200 p-1 break-inside-avoid bg-white">
+                                    <img
+                                      src={img}
+                                      alt={`Micrographie ${idx + 1}`}
+                                      crossOrigin="anonymous"
+                                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                                      className="w-full h-auto object-contain bg-slate-100"
+                                      style={{ maxHeight: '200px' }}
+                                    />
+                                    <div className="text-center text-xs text-slate-500 mt-1 italic">Fig {idx + 1}. {tpl.name}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {analysis.notes && (
+                              <div className="text-sm mt-2 p-3 bg-blue-50/50 border border-blue-100 rounded text-slate-700 italic">
+                                <span className="font-semibold block mb-1 text-blue-900 not-italic text-xs uppercase">Observations</span>
+                                {analysis.notes}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -958,17 +1033,18 @@ export function ReportPreviewModal({
                 })}
 
                 {reportAnalyses.length === 0 && (
-                  <p className="pdf-block text-sm text-slate-500 italic bg-white">
+                  <p className="pdf-block text-sm text-slate-500 italic bg-white py-2">
                     Aucun résultat d'analyse disponible pour les échantillons de ce rapport.
                   </p>
                 )}
               </section>
-              {/* 4. Conclusion & Approbation */}
-              <section className="pdf-block mt-8 pt-6 border-t-2 border-slate-200 break-inside-avoid bg-white">
+
+              {/* 4. Conclusion & Approbation (avec pb-6 et pr-3 pour ne jamais tronquer le tampon incliné APPROUVÉ) */}
+              <section className="pdf-block mt-8 pt-6 pb-6 pr-3 border-t-2 border-slate-200 break-inside-avoid bg-white">
                 <h2 className="text-lg font-bold mb-4 text-slate-800">4. Conclusion & Approbation</h2>
-                <div className="flex justify-between">
+                <div className="flex justify-between items-start">
                   <div className="w-1/2 pr-4">
-                    <p className="text-sm text-slate-600 mb-6">
+                    <p className="text-sm text-slate-600 mb-4">
                       Les résultats consignés dans le présent document ne se rapportent qu'aux objets soumis à l'essai. La reproduction de ce rapport d'essai n'est autorisée que sous la forme de fac-similé photographique intégral.
                     </p>
                   </div>
@@ -978,7 +1054,7 @@ export function ReportPreviewModal({
                     <div className="text-xs text-slate-500">Manager Technique</div>
 
                     {report.status === 'genere' ? (
-                      <div className="mt-4 border-2 border-green-600 text-green-600 p-2 font-black uppercase text-xl rotate-[-5deg] opacity-70">
+                      <div className="mt-5 mb-2 mr-2 border-2 border-green-600 text-green-600 px-3 py-1.5 font-black uppercase text-xl rotate-[-5deg] opacity-80 inline-block">
                         APPROUVÉ
                       </div>
                     ) : (
@@ -990,11 +1066,10 @@ export function ReportPreviewModal({
 
               {/* Pied de page des accréditations */}
               {labSettings.isoCertifications.length > 0 && (
-                <footer className="pdf-footer mt-8 pt-4 border-t border-slate-200 text-center text-xs text-slate-500 font-medium tracking-wide bg-white">
+                <footer className="pdf-footer mt-8 pt-4 pb-2 border-t border-slate-200 text-center text-xs text-slate-500 font-medium tracking-wide bg-white">
                   CERTIFICATIONS LABORATOIRE : {labSettings.isoCertifications.join(' • ')}
                 </footer>
               )}
-
             </div>
           )}
         </div>

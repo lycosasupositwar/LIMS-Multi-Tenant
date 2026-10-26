@@ -19,19 +19,19 @@ import { Search, Filter, MoreHorizontal, FlaskConical, Link as LinkIcon, Image a
 import { Sample, SampleStatus } from '../types';
 
 export function Samples() {
-  const { 
-    samples, 
-    requests, 
-    materialTemplates, 
-    addSampleImage, 
-    updateSampleStatus, 
-    updateSampleMounting, 
-    globalSearchQuery, 
-    addSample, 
-    labSettings, 
-    analyses, 
-    analysisTemplates, 
-    currentUser 
+  const {
+    samples,
+    requests,
+    materialTemplates,
+    addSampleImage,
+    updateSampleStatus,
+    updateSampleMounting,
+    globalSearchQuery,
+    addSample,
+    labSettings,
+    analyses,
+    analysisTemplates,
+    currentUser
   } = useLims();
 
   // États locaux de recherche et de navigation
@@ -40,13 +40,13 @@ export function Samples() {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-  
+
   // États d'édition métallographique et découpe
   const [isEditingMounting, setIsEditingMounting] = useState(false);
   const [mountingData, setMountingData] = useState<Sample['mountingInfo']>();
   const [isCreatingEnrobage, setIsCreatingEnrobage] = useState(false);
   const [enrobageCount, setEnrobageCount] = useState(2);
-  
+
   // Onglets actifs
   const [activeAnalysisTab, setActiveAnalysisTab] = useState<'pending' | 'history'>('pending');
   const [activeMainTab, setActiveMainTab] = useState<'pending' | 'history'>('pending');
@@ -58,22 +58,22 @@ export function Samples() {
     // Filtre global transverse
     if (globalSearchQuery) {
       const q = globalSearchQuery.toLowerCase();
-      const matchesGlobal = s.id.toLowerCase().includes(q) || 
-                            s.client.toLowerCase().includes(q) ||
-                            s.project.toLowerCase().includes(q) ||
-                            (s.requestId && s.requestId.toLowerCase().includes(q));
+      const matchesGlobal = s.id.toLowerCase().includes(q) ||
+        s.client.toLowerCase().includes(q) ||
+        s.project.toLowerCase().includes(q) ||
+        (s.requestId && s.requestId.toLowerCase().includes(q));
       if (!matchesGlobal) return false;
     }
 
     // Filtre textuel local
-    const matchesSearch = s.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    const matchesSearch = s.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
       s.client.toLowerCase().includes(searchTerm.toLowerCase()) ||
       s.project.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (s.requestId && s.requestId.toLowerCase().includes(searchTerm.toLowerCase()));
-    
+
     // Filtre par statut spécifique
     const matchesFilter = filterStatus === 'all' || s.status === filterStatus;
-    
+
     // Séparation en-cours / historique
     const isHistory = s.status === 'termine' || s.status === 'non_conforme';
     const matchesMainTab = activeMainTab === 'pending' ? !isHistory : isHistory;
@@ -92,9 +92,9 @@ export function Samples() {
     ];
     const randomImg = mockImages[Math.floor(Math.random() * mockImages.length)];
     addSampleImage(sampleId, randomImg);
-    
+
     if (selectedSample && selectedSample.id === sampleId) {
-      setSelectedSample({...selectedSample, images: [...selectedSample.images, randomImg]});
+      setSelectedSample({ ...selectedSample, images: [...selectedSample.images, randomImg] });
     }
   };
 
@@ -103,15 +103,15 @@ export function Samples() {
    */
   const getStatusBadge = (status: SampleStatus) => {
     switch (status) {
-      case 'receptionne': 
+      case 'receptionne':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-800">Réceptionné</span>;
-      case 'en_preparation': 
+      case 'en_preparation':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">En préparation / Enrobage</span>;
-      case 'en_essai': 
+      case 'en_essai':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">En essai / Métallo</span>;
-      case 'termine': 
+      case 'termine':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">Terminé</span>;
-      case 'non_conforme': 
+      case 'non_conforme':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">Non Conforme</span>;
     }
   };
@@ -139,7 +139,7 @@ export function Samples() {
   const getAnalysisName = (templateId: string) => {
     return analysisTemplates.find(t => t.id === templateId)?.name || templateId;
   };
-  
+
   /**
    * Résolution du libellé d'un modèle de matériau
    */
@@ -161,13 +161,13 @@ export function Samples() {
         <div className={`bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col flex-1 overflow-hidden transition-all duration-300 ${selectedSample ? 'lg:w-2/3 hidden lg:flex' : 'w-full'}`}>
           {/* En-tête des onglets d'état */}
           <div className="flex border-b border-slate-200 bg-slate-50">
-            <button 
+            <button
               onClick={() => setActiveMainTab('pending')}
               className={`flex-1 py-3 text-sm font-bold ${activeMainTab === 'pending' ? 'bg-white text-blue-700 border-b-2 border-blue-600' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
             >
               Échantillons en cours
             </button>
-            <button 
+            <button
               onClick={() => setActiveMainTab('history')}
               className={`flex-1 py-3 text-sm font-bold ${activeMainTab === 'history' ? 'bg-white text-blue-700 border-b-2 border-blue-600' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
             >
@@ -190,7 +190,7 @@ export function Samples() {
               />
             </div>
             <div className="relative">
-              <button 
+              <button
                 onClick={() => setIsFilterOpen(!isFilterOpen)}
                 className={`flex items-center px-4 py-2 bg-white border ${filterStatus !== 'all' ? 'border-blue-500 text-blue-700 bg-blue-50' : 'border-slate-300 text-slate-700'} rounded-lg text-sm font-medium hover:bg-slate-50`}
               >
@@ -225,14 +225,17 @@ export function Samples() {
               </thead>
               <tbody className="bg-white divide-y divide-slate-200">
                 {filteredSamples.map((sample) => (
-                  <tr 
-                    key={sample.id} 
+                  <tr
+                    key={sample.id}
                     onClick={() => setSelectedSample(sample)}
                     className={`cursor-pointer transition-colors ${selectedSample?.id === sample.id ? 'bg-blue-50/50' : 'hover:bg-slate-50'}`}
                   >
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex flex-col">
-                        <span className="text-sm font-semibold text-slate-900">{sample.id}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-slate-900">{sample.id}</span>
+                          {getPriorityBadge(sample.priority)}
+                        </div>
                         <span className="text-xs text-slate-500 font-mono mt-0.5">{sample.barcode}</span>
                       </div>
                     </td>
@@ -264,36 +267,36 @@ export function Samples() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       {sample.status === 'receptionne' && (
-                        <button 
-                          onClick={(e) => { 
-                            e.stopPropagation(); 
-                            updateSampleStatus(sample.id, 'en_preparation'); 
-                            if (selectedSample?.id === sample.id) setSelectedSample({...selectedSample, status: 'en_preparation'}); 
-                          }} 
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            updateSampleStatus(sample.id, 'en_preparation');
+                            if (selectedSample?.id === sample.id) setSelectedSample({ ...selectedSample, status: 'en_preparation' });
+                          }}
                           className="text-xs bg-amber-100 text-amber-800 hover:bg-amber-200 px-3 py-1.5 rounded-md font-medium transition-colors shadow-sm"
                         >
                           Préparer
                         </button>
                       )}
                       {sample.status === 'en_preparation' && (
-                        <button 
-                          onClick={(e) => { 
-                            e.stopPropagation(); 
-                            updateSampleStatus(sample.id, 'en_essai'); 
-                            if (selectedSample?.id === sample.id) setSelectedSample({...selectedSample, status: 'en_essai'}); 
-                          }} 
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            updateSampleStatus(sample.id, 'en_essai');
+                            if (selectedSample?.id === sample.id) setSelectedSample({ ...selectedSample, status: 'en_essai' });
+                          }}
                           className="text-xs bg-blue-100 text-blue-800 hover:bg-blue-200 px-3 py-1.5 rounded-md font-medium transition-colors shadow-sm"
                         >
                           Passer en essai
                         </button>
                       )}
                       {sample.status === 'en_essai' && (
-                        <button 
-                          onClick={(e) => { 
-                            e.stopPropagation(); 
-                            updateSampleStatus(sample.id, 'termine'); 
-                            if (selectedSample?.id === sample.id) setSelectedSample({...selectedSample, status: 'termine'}); 
-                          }} 
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            updateSampleStatus(sample.id, 'termine');
+                            if (selectedSample?.id === sample.id) setSelectedSample({ ...selectedSample, status: 'termine' });
+                          }}
                           className="text-xs bg-emerald-100 text-emerald-800 hover:bg-emerald-200 px-3 py-1.5 rounded-md font-medium transition-colors shadow-sm"
                         >
                           Terminer
@@ -313,13 +316,13 @@ export function Samples() {
         {/* Volet latéral d'inspection détaillée */}
         {selectedSample && (
           <div className="w-full lg:w-1/3 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden animate-in slide-in-from-right-4">
-            
+
             <div className="bg-white border-b border-slate-200 p-4">
               <div className="flex justify-between items-start mb-4">
                 <div>
                   <h3 className="font-display font-bold text-lg text-slate-900">Détails Échantillon</h3>
                   <p className="text-xs text-slate-500 font-mono mt-0.5">
-                    {selectedSample.id} 
+                    {selectedSample.id}
                     {selectedSample.parentSampleId && (
                       <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-800 text-[10px] rounded-md">
                         Découpé de {selectedSample.parentSampleId}
@@ -327,8 +330,8 @@ export function Samples() {
                     )}
                   </p>
                 </div>
-                <button 
-                  onClick={() => setSelectedSample(null)} 
+                <button
+                  onClick={() => setSelectedSample(null)}
                   className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-md transition-colors"
                 >
                   <X className="w-5 h-5" />
@@ -348,10 +351,10 @@ export function Samples() {
                     };
                     const statusOrder = ['receptionne', 'en_preparation', 'en_essai', 'termine'];
                     const currentIndex = statusOrder.indexOf(selectedSample.status);
-                    
+
                     let stateClass = "bg-slate-200 text-slate-500 border border-slate-300";
                     let isClickable = false;
-                    
+
                     if (selectedSample.status === 'non_conforme') {
                       stateClass = "bg-red-50 border border-red-200 text-red-500";
                     } else if (index < currentIndex) {
@@ -364,7 +367,7 @@ export function Samples() {
                       isClickable = true;
                     }
 
-                    if (currentUser?.role === 'manager' && index !== currentIndex) {
+                    if ((currentUser?.role === 'manager' || currentUser?.role === 'admin') && index !== currentIndex) {
                       isClickable = true;
                       if (!stateClass.includes('hover:')) {
                         stateClass += " hover:bg-slate-100 cursor-pointer";
@@ -373,11 +376,11 @@ export function Samples() {
 
                     return (
                       <React.Fragment key={step}>
-                        <button 
+                        <button
                           onClick={() => {
                             if (isClickable) {
                               updateSampleStatus(selectedSample.id, step as SampleStatus);
-                              setSelectedSample({...selectedSample, status: step as SampleStatus});
+                              setSelectedSample({ ...selectedSample, status: step as SampleStatus });
                             }
                           }}
                           disabled={!isClickable && index !== currentIndex}
@@ -392,10 +395,10 @@ export function Samples() {
                 </div>
                 {selectedSample.status !== 'non_conforme' && selectedSample.status !== 'termine' && (
                   <div className="mt-2 text-right">
-                    <button 
+                    <button
                       onClick={() => {
                         updateSampleStatus(selectedSample.id, 'non_conforme');
-                        setSelectedSample({...selectedSample, status: 'non_conforme'});
+                        setSelectedSample({ ...selectedSample, status: 'non_conforme' });
                       }}
                       className="text-[10px] text-red-500 hover:text-red-700 hover:underline font-medium"
                     >
@@ -404,17 +407,17 @@ export function Samples() {
                   </div>
                 )}
                 {selectedSample.status === 'non_conforme' && (
-                   <div className="mt-2 text-right">
-                   <button 
-                     onClick={() => {
-                       updateSampleStatus(selectedSample.id, 'receptionne');
-                       setSelectedSample({...selectedSample, status: 'receptionne'});
-                     }}
-                     className="text-[10px] text-slate-500 hover:text-slate-700 hover:underline font-medium"
-                   >
-                     Annuler la non-conformité
-                   </button>
-                 </div>
+                  <div className="mt-2 text-right">
+                    <button
+                      onClick={() => {
+                        updateSampleStatus(selectedSample.id, 'receptionne');
+                        setSelectedSample({ ...selectedSample, status: 'receptionne' });
+                      }}
+                      className="text-[10px] text-slate-500 hover:text-slate-700 hover:underline font-medium"
+                    >
+                      Annuler la non-conformité
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -440,6 +443,7 @@ export function Samples() {
                   <div><span className="block text-slate-500 text-xs">Client</span><span className="font-medium text-slate-900 truncate block">{selectedSample.client}</span></div>
                   <div><span className="block text-slate-500 text-xs">Projet</span><span className="font-medium text-slate-900 truncate block">{selectedSample.project}</span></div>
                   <div><span className="block text-slate-500 text-xs">Date de réception</span><span className="font-medium text-slate-900">{formatDate(selectedSample.receivedAt)}</span></div>
+                  <div><span className="block text-slate-500 text-xs">Priorité</span><span className="font-medium">{getPriorityBadge(selectedSample.priority)}</span></div>
                   <div className="col-span-2"><span className="block text-slate-500 text-xs">Type de Matériau</span><span className="font-medium text-slate-900">{getTemplateName(selectedSample.templateId)} - {selectedSample.materialState}</span></div>
                 </div>
               </section>
@@ -481,7 +485,7 @@ export function Samples() {
                       <button onClick={() => {
                         if (mountingData) {
                           updateSampleMounting(selectedSample.id, mountingData);
-                          setSelectedSample({...selectedSample, mountingInfo: mountingData});
+                          setSelectedSample({ ...selectedSample, mountingInfo: mountingData });
                         }
                         setIsEditingMounting(false);
                       }} className="text-xs text-blue-600 font-medium hover:underline">Sauvegarder</button>
@@ -497,22 +501,22 @@ export function Samples() {
                   <div className="bg-slate-50 rounded-lg p-3 border border-slate-200 text-sm space-y-3">
                     <div>
                       <label className="block text-xs font-medium text-slate-700 mb-1">Méthode</label>
-                      <select value={mountingData.method} onChange={e => setMountingData({...mountingData, method: e.target.value as any})} className="w-full text-sm border-slate-300 rounded px-2 py-1">
+                      <select value={mountingData.method} onChange={e => setMountingData({ ...mountingData, method: e.target.value as any })} className="w-full text-sm border-slate-300 rounded px-2 py-1">
                         <option value="A chaud">A chaud</option>
                         <option value="A froid">A froid</option>
                       </select>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-700 mb-1">Résine</label>
-                      <input type="text" value={mountingData.resinType} onChange={e => setMountingData({...mountingData, resinType: e.target.value})} className="w-full text-sm border-slate-300 rounded px-2 py-1" placeholder="Ex: Phénolique..." />
+                      <input type="text" value={mountingData.resinType} onChange={e => setMountingData({ ...mountingData, resinType: e.target.value })} className="w-full text-sm border-slate-300 rounded px-2 py-1" placeholder="Ex: Phénolique..." />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-700 mb-1">Diamètre (mm)</label>
-                      <input type="number" value={mountingData.diameter} onChange={e => setMountingData({...mountingData, diameter: Number(e.target.value)})} className="w-full text-sm border-slate-300 rounded px-2 py-1" />
+                      <input type="number" value={mountingData.diameter} onChange={e => setMountingData({ ...mountingData, diameter: Number(e.target.value) })} className="w-full text-sm border-slate-300 rounded px-2 py-1" />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-700 mb-1">Attaque chimique</label>
-                      <input type="text" value={mountingData.etching || ''} onChange={e => setMountingData({...mountingData, etching: e.target.value})} className="w-full text-sm border-slate-300 rounded px-2 py-1" placeholder="Ex: Nital 3%..." />
+                      <input type="text" value={mountingData.etching || ''} onChange={e => setMountingData({ ...mountingData, etching: e.target.value })} className="w-full text-sm border-slate-300 rounded px-2 py-1" placeholder="Ex: Nital 3%..." />
                     </div>
                   </div>
                 ) : selectedSample.mountingInfo ? (
@@ -534,7 +538,7 @@ export function Samples() {
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Imagerie (Macro/Micro)</h4>
                   <button onClick={() => handleMockImageAdd(selectedSample.id)} className="text-xs text-blue-600 font-medium flex items-center hover:underline">
-                    <Plus className="w-3 h-3 mr-1"/> Ajouter
+                    <Plus className="w-3 h-3 mr-1" /> Ajouter
                   </button>
                 </div>
                 {selectedSample.images.length > 0 ? (
@@ -553,18 +557,18 @@ export function Samples() {
                 )}
               </section>
             </div>
-            
+
             {/* Pied de panneau : Découpe en sous-échantillons et Essais rattachés */}
             <div className="p-4 border-t border-slate-200 bg-slate-50 space-y-3">
               {isCreatingEnrobage ? (
                 <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100">
                   <label className="block text-xs font-semibold text-indigo-900 mb-2">Nombre d'enrobages à créer :</label>
                   <div className="flex gap-2">
-                    <input 
-                      type="number" 
-                      min="1" 
+                    <input
+                      type="number"
+                      min="1"
                       max="20"
-                      value={enrobageCount} 
+                      value={enrobageCount}
                       onChange={(e) => setEnrobageCount(parseInt(e.target.value) || 1)}
                       className="w-20 px-2 py-1.5 border border-indigo-200 rounded-md text-sm font-medium focus:ring-indigo-500 focus:border-indigo-500"
                     />
@@ -595,7 +599,7 @@ export function Samples() {
                     >
                       Confirmer
                     </button>
-                    <button 
+                    <button
                       onClick={() => setIsCreatingEnrobage(false)}
                       className="px-3 py-1.5 bg-white border border-slate-300 text-slate-700 rounded-md text-sm font-medium hover:bg-slate-50 transition-colors"
                     >
@@ -611,17 +615,17 @@ export function Samples() {
                   <Plus className="w-4 h-4 mr-2" /> Créer Enrobages (Découpe)
                 </button>
               )}
-              
+
               {(selectedSample.status === 'en_essai' || selectedSample.status === 'termine') && (
                 <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden flex flex-col mt-4">
                   <div className="flex border-b border-slate-200">
-                    <button 
+                    <button
                       onClick={() => setActiveAnalysisTab('pending')}
                       className={`flex-1 py-2 text-xs font-bold ${activeAnalysisTab === 'pending' ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
                     >
                       Essais en cours
                     </button>
-                    <button 
+                    <button
                       onClick={() => setActiveAnalysisTab('history')}
                       className={`flex-1 py-2 text-xs font-bold ${activeAnalysisTab === 'history' ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
                     >
@@ -631,7 +635,7 @@ export function Samples() {
                   <div className="p-0 bg-white max-h-48 overflow-y-auto">
                     {(() => {
                       const sampleAnalyses = analyses.filter(a => a.sampleId === selectedSample.id);
-                      const displayed = activeAnalysisTab === 'pending' 
+                      const displayed = activeAnalysisTab === 'pending'
                         ? sampleAnalyses.filter(a => a.status !== 'terminee')
                         : sampleAnalyses.filter(a => a.status === 'terminee');
 
@@ -642,7 +646,7 @@ export function Samples() {
                           </div>
                         );
                       }
-                      
+
                       return displayed.map((analysis) => (
                         <div key={analysis.id} className="p-3 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 flex justify-between items-center">
                           <div>
@@ -650,11 +654,13 @@ export function Samples() {
                             <div className="text-[10px] text-slate-500 font-mono mt-0.5">{analysis.id}</div>
                           </div>
                           <div>
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${
-                              analysis.status === 'terminee' ? 'bg-emerald-100 text-emerald-800' : 
-                              analysis.status === 'en_cours' ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-800'
-                            }`}>
-                              {analysis.status === 'terminee' ? 'Terminée' : analysis.status === 'en_cours' ? 'En cours' : 'À planifier'}
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${analysis.status === 'valide' || analysis.status === 'termine' ? 'bg-emerald-100 text-emerald-800' :
+                                analysis.status === 'En Cours' || analysis.status === 'en_cours' ? 'bg-blue-100 text-blue-800' :
+                                  analysis.status === 'a_valider' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-800'
+                              }`}>
+                              {analysis.status === 'valide' || analysis.status === 'termine' ? 'Terminé' :
+                                analysis.status === 'En Cours' || analysis.status === 'en_cours' ? 'En cours' :
+                                  analysis.status === 'a_valider' ? 'À valider' : 'Planifié'}
                             </span>
                           </div>
                         </div>

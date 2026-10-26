@@ -1,91 +1,71 @@
 /**
  * Gestionnaire d'État Global & Multi-Laboratoires (LIMS React Context)
- * 
- * Ce module orchestre le fonctionnement applicatif côté client pour une
- * architecture multi-instances (Multi-Tenancy) :
- * 
- * 1. Isolation Étanche Multi-Laboratoires :
- *    - Gestion dynamique des entités Laboratoire (Métallographie vs Mécanique & Chimie)
- *    - Ségrégation stricte des collections métier selon le laboratoire actif :
- *      * Catalogues de gabarits (CMS Builder : analyses, formulaires, matériaux, rapports)
- *      * Équipes et habilitations (managers et techniciens rattachés)
- *      * Dossiers en cours (échantillons, essais, rapports, consommables)
- * 
- * 2. Portail Demandeur Unifié :
- *    - Point d'accès unique pour les donneurs d'ordre et clients externes
- *    - Vision consolidée de l'ensemble de leurs demandes tous laboratoires confondus
- *    - Sélection intuitive du laboratoire technique destinataire lors du dépôt
- * 
- * 3. Synchronisation & Traçabilité :
- *    - Synchronisation bidirectionnelle avec la base de données persistante SQLite
- *    - Enregistrement automatique des pistes d'audit (Audit Trail) garantissant l'intégrité ISO 17025
- *    - Alertes e-mail et notifications en temps réel
  */
 
 import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react';
-import { 
+import {
   Laboratory,
-  Sample, 
-  Analysis, 
-  Report, 
-  MaterialTemplate, 
-  AnalysisTemplate, 
-  User, 
-  RequestTemplate, 
-  AnalysisRequest, 
-  Notification, 
-  AuditLog, 
-  Consumable, 
-  LabSettings, 
-  ReportTemplate 
+  Sample,
+  Analysis,
+  Report,
+  MaterialTemplate,
+  AnalysisTemplate,
+  User,
+  RequestTemplate,
+  AnalysisRequest,
+  Notification,
+  AuditLog,
+  Consumable,
+  LabSettings,
+  ReportTemplate
 } from './types';
-import { 
+import {
   initialLaboratories,
-  initialSamples, 
-  initialAnalyses, 
-  initialReports, 
-  initialMaterialTemplates, 
-  initialAnalysisTemplates, 
-  initialRequestTemplates, 
-  initialRequests, 
-  initialConsumables, 
-  initialReportTemplates 
+  initialSamples,
+  initialAnalyses,
+  initialReports,
+  initialMaterialTemplates,
+  initialAnalysisTemplates,
+  initialRequestTemplates,
+  initialRequests,
+  initialConsumables,
+  initialReportTemplates
 } from './data';
+import { generateUniqueLimsId } from './utils/idGenerator';
+interface NotificationMeta {
+  targetTab?: string;
+  targetId?: string;
+  labId?: string;
+}
 
-/**
- * Contrat d'interface complet exposé par le contexte applicatif LIMS
- */
 interface LimsContextType {
-  // Recherche globale
   globalSearchQuery: string;
   setGlobalSearchQuery: (query: string) => void;
 
-  // Session & Utilisateurs
   currentUser: User | null;
   users: User[];
   fetchUsers: () => Promise<void>;
   login: (user: User) => void;
   logout: () => void;
-  
-  // Multi-Tenancy & Laboratoires
+
   laboratories: Laboratory[];
   activeLabId: string;
   activeLab: Laboratory;
   setActiveLabId: (labId: string) => void;
   updateLaboratory: (id: string, updates: Partial<Laboratory>) => void;
-  
-  // Notifications système
+  addLaboratory: (lab: Laboratory) => void;
+  deleteLaboratory: (id: string) => void;
+
   notifications: Notification[];
   markNotificationAsRead: (id: string) => void;
-  addNotification: (userId: string, title: string, message: string, type?: 'system' | 'email') => void;
-  
-  // Modèles configurables (CMS Builder - filtrés selon le lab actif)
+  clearUserNotifications: () => void; // Optionnel : pour un bouton "Tout effacer"
+  addNotification: (userId: string, title: string, message: string, type?: 'system' | 'email', meta?: NotificationMeta) => void;
+
   materialTemplates: MaterialTemplate[];
   analysisTemplates: AnalysisTemplate[];
   requestTemplates: RequestTemplate[];
   reportTemplates: ReportTemplate[];
-  
-  // Collections brutes complètes (tous laboratoires confondus)
+
   allMaterialTemplates: MaterialTemplate[];
   allAnalysisTemplates: AnalysisTemplate[];
   allRequestTemplates: RequestTemplate[];
@@ -96,81 +76,63 @@ interface LimsContextType {
   allRequests: AnalysisRequest[];
   allConsumables: Consumable[];
 
-  // Entités opérationnelles (filtrées selon le contexte actif)
   samples: Sample[];
   analyses: Analysis[];
   reports: Report[];
   requests: AnalysisRequest[];
   consumables: Consumable[];
   labSettings: LabSettings;
-  
-  // Opérations CMS - Matériaux
+
   addMaterialTemplate: (template: MaterialTemplate) => void;
   updateMaterialTemplate: (id: string, updates: Partial<MaterialTemplate>) => void;
   deleteMaterialTemplate: (id: string) => void;
 
-  // Opérations CMS - Méthodes d'analyses
   addAnalysisTemplate: (template: AnalysisTemplate) => void;
   updateAnalysisTemplate: (id: string, updates: Partial<AnalysisTemplate>) => void;
   deleteAnalysisTemplate: (id: string) => void;
 
-  // Opérations CMS - Formulaires de demandes
   addRequestTemplate: (template: RequestTemplate) => void;
   updateRequestTemplate: (id: string, updates: Partial<RequestTemplate>) => void;
   deleteRequestTemplate: (id: string) => void;
 
-  // Opérations CMS - Modèles de rapports
   addReportTemplate: (template: ReportTemplate) => void;
   updateReportTemplate: (id: string, updates: Partial<ReportTemplate>) => void;
   deleteReportTemplate: (id: string) => void;
-  
-  // Cycle de vie des demandes clients
+
   addRequest: (request: AnalysisRequest) => void;
   updateRequestStatus: (id: string, status: AnalysisRequest['status'], comment?: string) => void;
   updateRequestData: (id: string, updates: Partial<AnalysisRequest>, summary: string) => void;
   rejectRequest: (id: string, reason: string) => void;
   resubmitRequest: (id: string, customData: Record<string, any>) => void;
   assignRequest: (requestId: string, analystId: string) => void;
-  
-  // Traitement et préparation des échantillons
+
   addSample: (sample: Sample) => void;
+  deleteSample: (id: string) => void;
   updateSampleStatus: (id: string, status: Sample['status']) => void;
   updateSampleMounting: (id: string, mountingInfo: Sample['mountingInfo']) => void;
   addSampleImage: (id: string, imageUrl: string) => void;
 
-  // Exécution et validation des analyses
   addAnalysis: (analysis: Analysis) => void;
+  deleteAnalysis: (id: string) => void;
   updateAnalysisStatus: (id: string, status: Analysis['status']) => void;
   updateAnalysisResult: (id: string, resultId: string, value: any) => void;
   addAnalysisImage: (id: string, imageUrl: string) => void;
 
-  // Rapports et certificats
   addReport: (report: Report) => void;
   deleteReport: (id: string) => void;
-  
-  // Gestion de stock des consommables
+
   updateConsumableStock: (id: string, newLevel: number) => void;
   addConsumable: (consumable: Consumable) => void;
   deleteConsumable: (id: string) => void;
-  
-  // Paramétrage du laboratoire actif
+
   updateLabSettings: (settings: Partial<LabSettings>) => void;
 
-  // Maintenance & Patches
   purgeData: (options: Record<string, boolean>) => void;
   applyPatch: (patch: any) => void;
 }
 
-/** Création de l'instance du contexte React */
 const LimsContext = createContext<LimsContextType | undefined>(undefined);
 
-/**
- * Hook de synchronisation avec la couche de persistance SQLite du serveur.
- * 
- * @param collection Identifiant unique de la collection en base
- * @param initialData Valeurs de repli lors du premier amorçage
- * @param isAuthenticated Conditionne les requêtes à la présence d'une session valide
- */
 function useSyncedState<T>(collection: string, initialData: T, isAuthenticated: boolean) {
   const [data, setData] = useState<T>(initialData);
 
@@ -182,11 +144,10 @@ function useSyncedState<T>(collection: string, initialData: T, isAuthenticated: 
         if (res !== null && !res.error) {
           setData(res);
         } else if (res === null) {
-          // Injection initiale de la collection dans SQLite
-          fetch(`/api/db/${collection}`, { 
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify(initialData) 
+          fetch(`/api/db/${collection}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(initialData)
           });
         }
       })
@@ -197,10 +158,10 @@ function useSyncedState<T>(collection: string, initialData: T, isAuthenticated: 
     setData(prev => {
       const next = typeof action === 'function' ? (action as any)(prev) : action;
       if (isAuthenticated) {
-        fetch(`/api/db/${collection}`, { 
-          method: 'POST', 
-          headers: { 'Content-Type': 'application/json' }, 
-          body: JSON.stringify(next) 
+        fetch(`/api/db/${collection}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(next)
         }).catch(console.error);
       }
       return next;
@@ -210,21 +171,13 @@ function useSyncedState<T>(collection: string, initialData: T, isAuthenticated: 
   return [data, setSyncedData] as const;
 }
 
-/**
- * Fournisseur principal du Contexte LIMS
- */
 export const LimsProvider = ({ children }: { children: ReactNode }) => {
-  // Recherche transversale rapide
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
 
-  // Gestion de la session utilisateur
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [isInitializing, setIsInitializing] = useState(true);
 
-  /**
-   * Recharge la liste des utilisateurs du système depuis le serveur
-   */
   const fetchUsers = async () => {
     try {
       const res = await fetch('/api/users');
@@ -237,9 +190,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  /**
-   * Vérifie la session active lors du chargement initial via le cookie de session
-   */
   useEffect(() => {
     const checkSession = async () => {
       try {
@@ -258,31 +208,32 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     checkSession();
   }, []);
 
+  useEffect(() => {
+    if (currentUser && (currentUser.role === 'manager' || currentUser.role === 'analyste')) {
+      if (currentUser.labId && currentUser.labId !== 'all') {
+        setActiveLabIdState(currentUser.labId);
+      }
+    }
+  }, [currentUser]);
+
   const isAuthenticated = !!currentUser;
 
-  // ==========================================
-  // 1. Collections Métier Synchronisées
-  // ==========================================
   const [laboratories, setLaboratories] = useSyncedState<Laboratory[]>('laboratories', initialLaboratories, isAuthenticated);
   const [notifications, setNotifications] = useSyncedState<Notification[]>('notifications', [], isAuthenticated);
-  
+
   const [rawMaterialTemplates, setMaterialTemplates] = useSyncedState<MaterialTemplate[]>('materialTemplates', initialMaterialTemplates, isAuthenticated);
   const [rawAnalysisTemplates, setAnalysisTemplates] = useSyncedState<AnalysisTemplate[]>('analysisTemplates', initialAnalysisTemplates, isAuthenticated);
   const [rawRequestTemplates, setRequestTemplates] = useSyncedState<RequestTemplate[]>('requestTemplates', initialRequestTemplates, isAuthenticated);
   const [rawReportTemplates, setReportTemplates] = useSyncedState<ReportTemplate[]>('reportTemplates', initialReportTemplates, isAuthenticated);
-  
+
   const [rawSamples, setSamples] = useSyncedState<Sample[]>('samples', initialSamples, isAuthenticated);
   const [rawAnalyses, setAnalyses] = useSyncedState<Analysis[]>('analyses', initialAnalyses, isAuthenticated);
   const [rawReports, setReports] = useSyncedState<Report[]>('reports', initialReports, isAuthenticated);
   const [rawRequests, setRequests] = useSyncedState<AnalysisRequest[]>('requests', initialRequests, isAuthenticated);
   const [rawConsumables, setConsumables] = useSyncedState<Consumable[]>('consumables', initialConsumables, isAuthenticated);
 
-  // ==========================================
-  // 2. Sélection & Contexte du Laboratoire Actif
-  // ==========================================
-  const [activeLabId, setActiveLabIdState] = useState<string>('lab-metallurgie');
+  const [activeLabId, setActiveLabIdState] = useState<string>(initialLaboratories[0]?.id || '');
 
-  // Ajustement automatique du laboratoire actif à la connexion selon le rattachement de l'utilisateur
   useEffect(() => {
     if (currentUser?.labId && currentUser.labId !== 'all') {
       setActiveLabIdState(currentUser.labId);
@@ -290,31 +241,36 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   }, [currentUser]);
 
   const setActiveLabId = (labId: string) => {
+    if (currentUser?.role === 'manager' || currentUser?.role === 'analyste') {
+      if (currentUser.labId && currentUser.labId !== 'all' && currentUser.labId !== labId) {
+        console.warn('Accès refusé : Vous ne pouvez pas sélectionner un laboratoire auquel vous n\'êtes pas assigné.');
+        return;
+      }
+    }
     setActiveLabIdState(labId);
   };
 
-  /**
-   * Laboratoire actif résolu (ou repli sur le premier laboratoire enregistré)
-   */
   const activeLab = useMemo(() => {
     return laboratories.find(l => l.id === activeLabId) || laboratories[0] || initialLaboratories[0];
   }, [laboratories, activeLabId]);
 
-  /**
-   * Paramètres de configuration du laboratoire actuellement sélectionné
-   */
   const labSettings = activeLab.settings;
 
-  /**
-   * Met à jour les métadonnées ou paramètres d'un laboratoire
-   */
   const updateLaboratory = (id: string, updates: Partial<Laboratory>) => {
     setLaboratories(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
   };
 
-  /**
-   * Met à jour les paramètres administratifs et charte du laboratoire actif
-   */
+  const addLaboratory = (lab: Laboratory) => {
+    setLaboratories(prev => [...prev, lab]);
+  };
+
+  const deleteLaboratory = (id: string) => {
+    setLaboratories(prev => prev.filter(l => l.id !== id));
+    if (activeLabId === id) {
+      setActiveLabIdState(laboratories.find(l => l.id !== id)?.id || '');
+    }
+  };
+
   const updateLabSettings = (settings: Partial<LabSettings>) => {
     setLaboratories(prev => prev.map(l => {
       if (l.id === activeLabId) {
@@ -327,13 +283,8 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }));
   };
 
-  // ==========================================
-  // 3. Filtrage Dynamique selon le Rôle et le Contexte
-  // ==========================================
   const isRequester = currentUser?.role === 'demandeur';
 
-  // Pour les demandeurs : vision unifiée sur leurs demandes à travers tous les laboratoires
-  // Pour le personnel interne (analystes, managers) : isolation stricte par laboratoire actif
   const requests = useMemo(() => {
     if (isRequester) {
       return rawRequests.filter(r => r.requesterId === currentUser?.id);
@@ -343,7 +294,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
 
   const samples = useMemo(() => {
     if (isRequester) {
-      // Les échantillons rattachés aux demandes du demandeur
       const myRequestIds = new Set(requests.map(r => r.id));
       return rawSamples.filter(s => s.requestId && myRequestIds.has(s.requestId));
     }
@@ -361,17 +311,20 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const reports = useMemo(() => {
     if (isRequester) {
       const myRequestIds = new Set(requests.map(r => r.id));
-      return rawReports.filter(r => r.requestId && myRequestIds.has(r.requestId));
+      const mySampleIds = new Set(samples.map(s => s.id));
+      return rawReports.filter(
+        r =>
+          (r.requestId && myRequestIds.has(r.requestId)) ||
+          (Array.isArray(r.sampleIds) && r.sampleIds.some(sId => mySampleIds.has(sId)))
+      );
     }
     return rawReports.filter(r => r.labId === activeLabId);
-  }, [rawReports, isRequester, requests, activeLabId]);
+  }, [rawReports, isRequester, requests, samples, activeLabId]);
 
   const consumables = useMemo(() => {
     return rawConsumables.filter(c => c.labId === activeLabId);
   }, [rawConsumables, activeLabId]);
 
-  // Pour le Builder CMS : affichage et configuration des templates du laboratoire actif
-  // Pour le portail demandeur : possibilité d'accéder aux modèles selon le lab choisi
   const materialTemplates = useMemo(() => {
     if (isRequester) return rawMaterialTemplates;
     return rawMaterialTemplates.filter(t => t.labId === activeLabId);
@@ -392,9 +345,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     return rawReportTemplates.filter(t => t.labId === activeLabId);
   }, [rawReportTemplates, isRequester, activeLabId]);
 
-  // ==========================================
-  // 4. Authentification & Cycle de Session
-  // ==========================================
   const login = async (user: User) => {
     setCurrentUser(user);
     if (user.labId && user.labId !== 'all') {
@@ -402,7 +352,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }
     await fetchUsers();
   };
-  
+
   const logout = async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
@@ -412,10 +362,17 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setCurrentUser(null);
   };
 
-  // ==========================================
-  // 5. Journalisation & Notifications
-  // ==========================================
-  const addNotification = (userId: string, title: string, message: string, type: 'system' | 'email' = 'system') => {
+  /**
+   * Ajoute une notification enrichie (targetTab, targetId, labId) dans l'application
+   * ET déclenche l'envoi d'un e-mail au destinataire via le serveur SMTP configuré.
+   */
+  const addNotification = (
+    userId: string,
+    title: string,
+    message: string,
+    type: 'system' | 'email' = 'email',
+    meta?: NotificationMeta
+  ) => {
     const newNotif: Notification = {
       id: `NOTIF-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       userId,
@@ -423,16 +380,60 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       message,
       read: false,
       createdAt: new Date().toISOString(),
-      type
+      type,
+      targetTab: meta?.targetTab,
+      targetId: meta?.targetId,
+      labId: meta?.labId
     };
+
     setNotifications(prev => [newNotif, ...prev]);
+
     if (type === 'email') {
-      console.log(`[SIMULATION EMAIL vers Utilisateur ${userId}] ${title} - ${message}`);
+      void (async () => {
+        try {
+          const res = await fetch('/api/notifications/send-email', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              userId,
+              title,
+              message
+            })
+          });
+
+          const data = await res.json().catch(() => ({}));
+
+          if (!res.ok) {
+            console.warn('[Notification Mail] Échec HTTP', {
+              userId,
+              status: res.status,
+              title,
+              error: data.error ?? data.message ?? 'Erreur inconnue',
+              details: data
+            });
+            return;
+          }
+
+          if (data.sent === true) {
+            console.info(`[Notification Mail] E-mail envoyé avec succès pour ${userId}`);
+          }
+        } catch (error) {
+          console.error(`[Notification Mail] Erreur réseau pour ${userId}`, error);
+        }
+      })();
     }
   };
 
   const markNotificationAsRead = (id: string) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  };
+
+  const clearUserNotifications = () => {
+    if (!currentUser) return;
+    // Supprime toutes les notifications de l'utilisateur connecté
+    setNotifications(prev => prev.filter(n => n.userId !== currentUser.id));
   };
 
   const createAuditLog = (action: string, details: string): AuditLog => ({
@@ -443,9 +444,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     details
   });
 
-  // ==========================================
-  // 6. Opérations Métier (avec injection de labId)
-  // ==========================================
   const addMaterialTemplate = (template: MaterialTemplate) => {
     const item = { ...template, labId: template.labId || activeLabId };
     setMaterialTemplates(prev => [...prev, item]);
@@ -456,7 +454,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const deleteMaterialTemplate = (id: string) => {
     setMaterialTemplates(prev => prev.filter(t => t.id !== id));
   };
-  
+
   const addAnalysisTemplate = (template: AnalysisTemplate) => {
     const item = { ...template, labId: template.labId || activeLabId };
     setAnalysisTemplates(prev => [...prev, item]);
@@ -467,7 +465,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const deleteAnalysisTemplate = (id: string) => {
     setAnalysisTemplates(prev => prev.filter(t => t.id !== id));
   };
-  
+
   const addRequestTemplate = (template: RequestTemplate) => {
     const item = { ...template, labId: template.labId || activeLabId };
     setRequestTemplates(prev => [...prev, item]);
@@ -478,7 +476,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const deleteRequestTemplate = (id: string) => {
     setRequestTemplates(prev => prev.filter(t => t.id !== id));
   };
-  
+
   const addReportTemplate = (template: ReportTemplate) => {
     const item = { ...template, labId: template.labId || activeLabId };
     setReportTemplates(prev => [...prev, item]);
@@ -490,25 +488,94 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setReportTemplates(prev => prev.filter(t => t.id !== id));
   };
 
-  /**
-   * Création d'une demande avec rattachement au laboratoire destinataire
-   */
-  const addRequest = (request: AnalysisRequest) => {
+  const addRequest = async (request: AnalysisRequest) => {
     const targetLabId = request.labId || activeLabId;
+    const targetLab = laboratories.find(l => l.id === targetLabId);
+    const reqPrefix = targetLab?.settings?.idPrefixes?.request || `REQ-${targetLab?.code || 'LAB'}`;
+
+    // Garantit un ID unique non-séquentiel (ou remplace l'ID s'il existe déjà)
+    const existingReqIds = new Set(rawRequests.map(r => r.id));
+    const uniqueReqId = (!request.id || existingReqIds.has(request.id))
+      ? generateUniqueLimsId(reqPrefix, existingReqIds)
+      : request.id;
+
     const initialAudit = createAuditLog('Création', `Demande soumise au laboratoire [${targetLabId}]`);
-    const newReq = { ...request, labId: targetLabId, auditTrail: [initialAudit] };
+    const newReq = { ...request, id: uniqueReqId, labId: targetLabId, auditTrail: [initialAudit] };
     setRequests(prev => [newReq, ...prev]);
-    
-    // Notification des managers rattachés à ce laboratoire spécifique
-    const labManagers = users.filter(u => u.role === 'manager' && (u.labId === targetLabId || u.labId === 'all' || !u.labId));
-    labManagers.forEach(m => addNotification(m.id, 'Nouvelle demande', `Demande ${request.id} soumise par ${currentUser?.name || 'le client'}.`, 'email'));
+
+    let currentUsers = users;
+    if (currentUsers.length === 0) {
+      try {
+        const res = await fetch('/api/users');
+        if (res.ok) {
+          currentUsers = await res.json();
+          setUsers(currentUsers);
+        } else {
+          console.error(`[Notification] Échec de récupération de /api/users (Statut HTTP ${res.status}) pour l'utilisateur ${currentUser?.email} [${currentUser?.role}]`);
+        }
+      } catch (e) {
+        console.error('[Notification] Erreur réseau sur /api/users :', e);
+      }
+    }
+
+    // Filtrage souple (insensible à la casse sur le rôle)
+    let labManagers = currentUsers.filter(u => {
+      const role = (u.role || '').toLowerCase();
+      const isManager = role === 'manager';
+      const matchesLab = !u.labId || u.labId === 'all' || u.labId === targetLabId;
+      return isManager && matchesLab;
+    });
+
+    // Fallback : si aucun manager n'a le labId exact, on prend tous les managers existants
+    if (labManagers.length === 0) {
+      labManagers = currentUsers.filter(u => (u.role || '').toLowerCase() === 'manager');
+    }
+
+    console.info(`[Notification] Création demande ${uniqueReqId} (Lab: ${targetLabId}) -> ${labManagers.length} manager(s) trouvé(s) sur ${currentUsers.length} utilisateur(s) chargé(s).`);
+
+    labManagers.forEach(m =>
+      addNotification(
+        m.id,
+        'Nouvelle demande d\'analyse',
+        `La demande ${uniqueReqId} ("${request.title}") a été soumise par ${currentUser?.name || 'un client'}.`,
+        'email',
+        { targetTab: 'requests', targetId: uniqueReqId, labId: targetLabId }
+      )
+    );
   };
 
   const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comment?: string) => {
+    const reqToUpdate = rawRequests.find(r => r.id === id);
+
+    if (reqToUpdate && reqToUpdate.status !== status) {
+      // Dictionnaire UNIQUEMENT des étapes clés qui doivent notifier le demandeur
+      // Adaptez les clés selon les valeurs exactes utilisées dans votre fichier types.ts
+      const keyStageLabels: Record<string, string> = {
+        'validee': 'Validée et prise en compte par le laboratoire',
+        'en_cours': 'Analyses en cours de réalisation',
+        'En Validation': 'Résultats en cours de validation finale',
+        'en_validation': 'Résultats en cours de validation finale',
+        'a_valider': 'Résultats en cours de validation finale',
+        'terminee': 'Terminée'
+      };
+
+      const stageLabel = keyStageLabels[status];
+
+      // On notifie uniquement si le nouveau statut fait partie des étapes clés
+      if (stageLabel) {
+        addNotification(
+          reqToUpdate.requesterId,
+          `Avancement de votre demande ${reqToUpdate.id}`,
+          `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a atteint une étape clé : ${stageLabel}.${comment ? `\nCommentaire : ${comment}` : ''}`,
+          'email',
+          { targetTab: 'requests', targetId: reqToUpdate.id, labId: reqToUpdate.labId }
+        );
+      }
+    }
+
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
         const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}.${comment ? ` Raison : ${comment}` : ''}`);
-        addNotification(r.requesterId, 'Mise à jour de votre demande', `Votre demande ${r.id} est maintenant : ${status}`, 'email');
         return { ...r, status, auditTrail: [audit, ...(r.auditTrail || [])] };
       }
       return r;
@@ -516,10 +583,19 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const rejectRequest = (id: string, reason: string) => {
+    const reqToUpdate = rawRequests.find(r => r.id === id);
+    if (reqToUpdate) {
+      addNotification(
+        reqToUpdate.requesterId,
+        `Demande ${reqToUpdate.id} refusée`,
+        `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a été refusée.\nMotif : ${reason}`,
+        'email',
+        { targetTab: 'requests', targetId: reqToUpdate.id, labId: reqToUpdate.labId }
+      );
+    }
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
         const audit = createAuditLog('Rejetée', `Demande refusée. Motif : ${reason}`);
-        addNotification(r.requesterId, 'Demande refusée', `Votre demande ${r.id} a été refusée. Motif : ${reason}`, 'email');
         return { ...r, status: 'rejetee', rejectionReason: reason, auditTrail: [audit, ...(r.auditTrail || [])] };
       }
       return r;
@@ -527,11 +603,22 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const resubmitRequest = (id: string, customData: Record<string, any>) => {
+    const reqToUpdate = rawRequests.find(r => r.id === id);
+    if (reqToUpdate) {
+      const labManagers = users.filter(u => (u.role === 'manager') && (u.labId === reqToUpdate.labId || u.labId === 'all' || !u.labId));
+      labManagers.forEach(m =>
+        addNotification(
+          m.id,
+          `Demande ${reqToUpdate.id} resoumise`,
+          `La demande ${reqToUpdate.id} ("${reqToUpdate.title}") a été corrigée et resoumise par le client.`,
+          'email',
+          { targetTab: 'requests', targetId: reqToUpdate.id, labId: reqToUpdate.labId }
+        )
+      );
+    }
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
         const audit = createAuditLog('Resoumission', `Demande modifiée et resoumise par le demandeur.`);
-        const labManagers = users.filter(u => u.role === 'manager' && (u.labId === r.labId || u.labId === 'all' || !u.labId));
-        labManagers.forEach(m => addNotification(m.id, 'Demande resoumise', `La demande ${r.id} a été corrigée et resoumise.`, 'system'));
         return { ...r, status: 'soumise', customData, rejectionReason: undefined, auditTrail: [audit, ...(r.auditTrail || [])] };
       }
       return r;
@@ -539,20 +626,36 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const assignRequest = (requestId: string, analystId: string) => {
+    const reqToUpdate = rawRequests.find(r => r.id === requestId);
+    if (reqToUpdate) {
+      const analyst = users.find(u => u.id === analystId);
+      if (analystId) {
+        addNotification(
+          analystId,
+          `Nouvelle assignation (${reqToUpdate.id})`,
+          `La demande ${reqToUpdate.id} ("${reqToUpdate.title}") vous a été assignée pour réalisation des essais.`,
+          'email',
+          { targetTab: 'requests', targetId: reqToUpdate.id, labId: reqToUpdate.labId }
+        );
+        addNotification(
+          reqToUpdate.requesterId,
+          `Demande ${reqToUpdate.id} prise en charge`,
+          `Votre demande "${reqToUpdate.title}" (${reqToUpdate.id}) a été assignée à notre équipe technique (${analyst?.name || 'Analyste'}).`,
+          'email',
+          { targetTab: 'requests', targetId: reqToUpdate.id, labId: reqToUpdate.labId }
+        );
+      }
+    }
+
     setRequests(prev => prev.map(r => {
       if (r.id === requestId) {
         const analyst = users.find(u => u.id === analystId);
-        const audit = createAuditLog('Assignation', `Demande assignée à l'analyste : ${analyst?.name}`);
-        
-        addNotification(analystId, 'Nouvelle assignation', `La demande ${r.id} vous a été assignée.`, 'email');
-        addNotification(r.requesterId, 'Demande prise en charge', `Votre demande ${r.id} a été assignée à un analyste.`, 'system');
-
-        return { ...r, assignedTo: analystId, status: 'assignee', auditTrail: [audit, ...(r.auditTrail || [])] };
+        const audit = createAuditLog(analystId ? 'Assignation' : 'Désassignation', analystId ? `Demande assignée à l'analyste : ${analyst?.name}` : `Demande non assignée`);
+        return { ...r, assignedTo: analystId || undefined, status: analystId ? 'assignee' : (r.status === 'assignee' ? 'validee' : r.status), auditTrail: [audit, ...(r.auditTrail || [])] };
       }
       return r;
     }));
-    
-    // Propagation du technicien assigné aux analyses associées
+
     const analystName = users.find(u => u.id === analystId)?.name || 'Non assigné';
     setAnalyses(prev => prev.map(a => {
       const isRelated = rawSamples.some(s => s.requestId === requestId && s.id === a.sampleId);
@@ -572,20 +675,33 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       }
       return r;
     }));
+    if (updates.priority) {
+      setSamples(prev => prev.map(s => s.requestId === id ? { ...s, priority: updates.priority as any } : s));
+    }
   };
 
-  // ==========================================
-  // 7. Échantillons & Préparations
-  // ==========================================
   const addSample = (sample: Sample) => {
-    const item = { ...sample, labId: sample.labId || activeLabId };
-    setSamples(prev => [item, ...prev]);
+    setSamples(prev => {
+      const existingIds = new Set(prev.map(s => s.id));
+      const prefix = labSettings?.idPrefixes?.sample || 'ECH';
+      const uniqueId = (!sample.id || existingIds.has(sample.id))
+        ? generateUniqueLimsId(prefix, existingIds)
+        : sample.id;
+
+      const item = { ...sample, id: uniqueId, labId: sample.labId || activeLabId };
+      return [item, ...prev];
+    });
   };
-  
+  const deleteSample = (id: string) => {
+    // Supprime l'échantillon (ainsi que ses sous-échantillons éventuels) et toutes les analyses qui lui sont rattachées
+    setSamples(prev => prev.filter(s => s.id !== id && s.parentSampleId !== id));
+    setAnalyses(prev => prev.filter(a => a.sampleId !== id));
+  };
+
   const updateSampleStatus = (id: string, status: Sample['status']) => {
     setSamples(prev => prev.map(s => s.id === id ? { ...s, status } : s));
   };
-  
+
   const updateSampleMounting = (id: string, mountingInfo: Sample['mountingInfo']) => {
     setSamples(prev => prev.map(s => s.id === id ? { ...s, mountingInfo } : s));
   };
@@ -594,42 +710,142 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setSamples(prev => prev.map(s => s.id === id ? { ...s, images: [...s.images, imageUrl] } : s));
   };
 
-  // ==========================================
-  // 8. Analyses & Mesures
-  // ==========================================
   const addAnalysis = (analysis: Analysis) => {
-    const item = { ...analysis, labId: analysis.labId || activeLabId };
-    setAnalyses(prev => [item, ...prev]);
+    setAnalyses(prev => {
+      const existingIds = new Set(prev.map(a => a.id));
+      const uniqueId = (!analysis.id || existingIds.has(analysis.id))
+        ? generateUniqueLimsId('ESS', existingIds)
+        : analysis.id;
+
+      const item = { ...analysis, id: uniqueId, labId: analysis.labId || activeLabId };
+      return [item, ...prev];
+    });
   };
-  
-  const updateAnalysisStatus = (id: string, status: Analysis['status']) => {
-    setAnalyses(prev => prev.map(a => {
-      if (a.id === id) {
-        const audit = createAuditLog('Changement de statut', `Statut passé à : ${status}`);
-        return { ...a, status, updatedAt: new Date().toISOString(), auditTrail: [audit, ...(a.auditTrail || [])] };
+
+  const deleteAnalysis = (id: string) => {
+    setAnalyses(prev => prev.filter(a => a.id !== id));
+  };
+
+  const updateAnalysisStatus = (id: string, status: Analysis['status'], comment?: string) => {
+    setAnalyses(prevAnalyses => {
+      const updatedAnalyses = prevAnalyses.map(analysis => {
+        if (analysis.id === id) {
+          const audit = createAuditLog(
+            status === 'rejete' ? 'Essai refusé' : 'Changement de statut',
+            `Statut passé à : ${status}${comment ? ` — Motif : ${comment}` : ''}`
+          );
+          return {
+            ...analysis,
+            status,
+            rejectionReason: status === 'rejete' ? (comment || 'Résultats à reprendre') : (status === 'a_valider' ? undefined : analysis.rejectionReason),
+            updatedAt: new Date().toISOString(),
+            auditTrail: [audit, ...(analysis.auditTrail || [])]
+          };
+        }
+        return analysis;
+      });
+
+      const targetAnalysis = updatedAnalyses.find(an => an.id === id);
+
+      // Si le manager rejette l'analyse : on notifie l'analyste et on remet la demande "En Cours" si elle était "En Validation"
+      if (targetAnalysis && status === 'rejete') {
+        const sample = rawSamples.find(s => s.id === targetAnalysis.sampleId);
+        const parentReq = sample?.requestId ? rawRequests.find(r => r.id === sample.requestId) : undefined;
+        if (parentReq?.assignedTo) {
+          addNotification(
+            parentReq.assignedTo,
+            `Analyse ${targetAnalysis.id} refusée`,
+            `L'analyse ${targetAnalysis.id} (échantillon ${targetAnalysis.sampleId}) a été refusée par le manager.${comment ? `\nMotif : ${comment}` : ''}\nVeuillez corriger les résultats et la resoumettre.`,
+            'email',
+            { targetTab: 'analyses', targetId: targetAnalysis.id, labId: targetAnalysis.labId }
+          );
+        }
+        if (parentReq && parentReq.status === 'En Validation') {
+          setTimeout(() => {
+            updateRequestStatus(parentReq.id, 'En Cours', `Réouverture suite au refus de l'analyse ${targetAnalysis.id}`);
+          }, 0);
+        }
       }
-      return a;
-    }));
+
+      // Si l'essai passe à "a_valider" ou "valide" ou "termine"
+      if (targetAnalysis && (status === 'a_valider' || status === 'valide' || status === 'termine')) {
+        if (status === 'a_valider') {
+          const labManagers = users.filter(
+            u => (u.role === 'manager') && (u.labId === targetAnalysis.labId || u.labId === 'all' || !u.labId)
+          );
+          labManagers.forEach(m =>
+            addNotification(
+              m.id,
+              `Analyse ${targetAnalysis.id} à valider`,
+              `L'analyse ${targetAnalysis.id} sur l'échantillon ${targetAnalysis.sampleId} est prête pour validation technique.`,
+              'email',
+              { targetTab: 'analyses', targetId: targetAnalysis.id, labId: targetAnalysis.labId }
+            )
+          );
+        }
+
+        const sample = rawSamples.find(s => s.id === targetAnalysis.sampleId);
+        const parentRequestId = sample?.requestId || (
+          sample?.parentSampleId ? rawSamples.find(p => p.id === sample.parentSampleId)?.requestId : undefined
+        );
+
+        if (parentRequestId) {
+          const parentReq = rawRequests.find(r => r.id === parentRequestId);
+
+          if (parentReq && parentReq.status !== 'En Validation' && parentReq.status !== 'terminee') {
+            const reqSamples = rawSamples.filter(
+              s => s.requestId === parentRequestId || (s.parentSampleId && rawSamples.some(p => p.id === s.parentSampleId && p.requestId === parentRequestId))
+            );
+            const reqSampleIds = new Set(reqSamples.map(s => s.id));
+            const reqAnalyses = updatedAnalyses.filter(an => reqSampleIds.has(an.sampleId));
+
+            const allSamplesInTestingOrDone = reqSamples.every(
+              s => s.status === 'en_essai' || s.status === 'termine' || s.status === 'non_conforme'
+            );
+
+            const allAnalysesReady =
+              reqAnalyses.length > 0 &&
+              reqAnalyses.every(an => an.status === 'a_valider' || an.status === 'valide' || an.status === 'termine');
+
+            if (allSamplesInTestingOrDone && allAnalysesReady) {
+              setTimeout(() => {
+                updateRequestStatus(parentReq.id, 'En Validation' as AnalysisRequest['status']);
+              }, 0);
+            }
+          }
+        }
+      }
+
+      return updatedAnalyses;
+    });
   };
+
 
   const updateAnalysisResult = (id: string, resultId: string, value: any) => {
     setAnalyses(prev => prev.map(a => {
       if (a.id === id) {
-        const isManager = currentUser?.role === 'manager';
-        // Verrouillage ISO 17025 pour les statuts validés
+        const isManager = currentUser?.role === 'manager' || currentUser?.role === 'admin';
         const isLocked = (!isManager && (a.status === 'a_valider' || a.status === 'valide' || a.status === 'termine')) || (isManager && a.status === 'termine');
         if (isLocked) {
           console.warn('Modification refusée : l\'analyse est verrouillée pour ce profil.');
           return a;
         }
 
-        const previous = a.results[resultId] ?? 'N/A';
-        const audit = createAuditLog('Modification de résultat', `${resultId}: ${previous} -> ${value}`);
-        return { 
-          ...a, 
-          results: { ...a.results, [resultId]: value }, 
-          updatedAt: new Date().toISOString(), 
-          auditTrail: [audit, ...(a.auditTrail || [])] 
+        const formatAuditVal = (v: any) => {
+          if (v && typeof v === 'object' && Array.isArray(v.images)) {
+            return `${v.images.length} micrographie(s) (${v.images.map((i: any) => i.name).join(', ')})`;
+          }
+          return typeof v === 'object' ? JSON.stringify(v) : (v ?? 'N/A');
+        };
+
+        const previous = formatAuditVal(a.results[resultId]);
+        const nextVal = formatAuditVal(value);
+        const audit = createAuditLog('Modification de résultat', `${resultId}: ${previous} -> ${nextVal}`);
+        return {
+          ...a,
+          results: { ...a.results, [resultId]: value },
+          updatedAt: new Date().toISOString(),
+          auditTrail: [audit, ...(a.auditTrail || [])]
         };
       }
       return a;
@@ -639,22 +855,58 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const addAnalysisImage = (id: string, imageUrl: string) => {
     setAnalyses(prev => prev.map(a => {
       if (a.id === id) {
-        const isManager = currentUser?.role === 'manager';
+        const isManager = currentUser?.role === 'manager' || currentUser?.role === 'admin';
         const isLocked = (!isManager && (a.status === 'a_valider' || a.status === 'valide' || a.status === 'termine')) || (isManager && a.status === 'termine');
         if (isLocked) return a;
-        
+
         return { ...a, images: [...a.images, imageUrl], updatedAt: new Date().toISOString() };
       }
       return a;
     }));
   };
 
-  // ==========================================
-  // 9. Rapports & Consommables
-  // ==========================================
   const addReport = (report: Report) => {
-    const item = { ...report, labId: report.labId || activeLabId };
+    // Résolution automatique du requestId à partir des échantillons liés s'il n'est pas fourni
+    let resolvedRequestId = report.requestId;
+    if (!resolvedRequestId && Array.isArray(report.sampleIds) && report.sampleIds.length > 0) {
+      const sampleWithReq = rawSamples.find(s => report.sampleIds.includes(s.id) && s.requestId);
+      if (sampleWithReq?.requestId) {
+        resolvedRequestId = sampleWithReq.requestId;
+      }
+    }
+
+    const item: Report = {
+      ...report,
+      requestId: resolvedRequestId,
+      labId: report.labId || activeLabId
+    };
     setReports(prev => [item, ...prev]);
+
+    // Passe automatiquement la demande parente au statut 'terminee' et notifie le client
+    if (resolvedRequestId) {
+      const parentReq = rawRequests.find(r => r.id === resolvedRequestId);
+      if (parentReq) {
+        if (parentReq.status !== 'terminee') {
+          setRequests(prev =>
+            prev.map(r => {
+              if (r.id === resolvedRequestId) {
+                const audit = createAuditLog('Rapport généré', `Rapport ${item.id} publié et mis à disposition du demandeur.`);
+                return { ...r, status: 'terminee', auditTrail: [audit, ...(r.auditTrail || [])] };
+              }
+              return r;
+            })
+          );
+        }
+
+        addNotification(
+          parentReq.requesterId,
+          `Nouveau rapport disponible (${item.id})`,
+          `Le rapport d'analyse "${item.title}" (${item.id}) concernant votre demande ${parentReq.id} a été publié et est disponible au téléchargement sur votre espace client.`,
+          'email',
+          { targetTab: 'reports', targetId: item.id, labId: item.labId }
+        );
+      }
+    }
   };
 
   const deleteReport = (id: string) => {
@@ -671,11 +923,25 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const updateConsumableStock = (id: string, newLevel: number) => {
+    const c = rawConsumables.find(cons => cons.id === id);
+    if (c) {
+      if (newLevel <= c.minThreshold && c.stockLevel > c.minThreshold) {
+        const labManagers = users.filter(u => (u.role === 'manager') && (u.labId === c.labId || u.labId === 'all' || !u.labId));
+        labManagers.forEach(m => addNotification(
+          m.id,
+          `Alerte Stock Bas : ${c.name}`,
+          `Le niveau de stock pour "${c.name}" est passé sous le seuil minimal (${newLevel} ${c.unit} restants, seuil fixé à ${c.minThreshold} ${c.unit}).`,
+          'email',
+          { targetTab: 'inventory', targetId: c.id, labId: c.labId }
+        ));
+      }
+    }
+
     setConsumables(prev => prev.map(c => {
       if (c.id === id) {
         const isReplenished = newLevel > c.stockLevel;
-        return { 
-          ...c, 
+        return {
+          ...c,
           stockLevel: newLevel,
           lastRestocked: isReplenished ? new Date().toISOString() : c.lastRestocked
         };
@@ -684,9 +950,43 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }));
   };
 
-  // ==========================================
-  // 10. Patches & Maintenance
-  // ==========================================
+  // Vérification de la péremption des consommables au chargement
+  useEffect(() => {
+    if (!currentUser || (currentUser.role !== 'manager') || (currentUser.role !== 'analyste')) return;
+
+    const now = new Date();
+    const sixtyDaysLater = new Date();
+    sixtyDaysLater.setDate(now.getDate() + 60);
+
+    consumables.forEach(c => {
+      if (c.expiryDate) {
+        const expDate = new Date(c.expiryDate);
+        if (expDate <= sixtyDaysLater) {
+          const isExpired = expDate < now;
+          const title = isExpired ? `Péremption Dépassée : ${c.name}` : `Alerte Péremption Proche : ${c.name}`;
+          const message = isExpired
+            ? `Le consommable "${c.name}" a dépassé sa date de péremption (${c.expiryDate}).`
+            : `Le consommable "${c.name}" arrive à expiration le ${c.expiryDate}.`;
+
+          // Vérifie si une notification similaire n'existe pas déjà pour éviter le spam
+          // (Optionnel selon votre gestion, ici déclenché en console/log ou notification)
+          const labManagers = users.filter(u => (u.role === 'manager') && (u.labId === c.labId || u.labId === 'all' || !u.labId));
+          labManagers.forEach(m => addNotification(
+            m.id,
+            `Alerte Péremption Proche : ${c.name}`,
+            `Le consommable "${c.name}" arrive à expiration le ${c.expiryDate}.`,
+            'email',
+            { targetTab: 'inventory', targetId: c.id, labId: c.labId }
+          ));
+          console.warn(`[ALERTE PÉREMPTION] ${message}`);
+        }
+      }
+    });
+  }, [consumables, currentUser]);
+
+
+
+
   const applyPatch = (patch: any) => {
     if (patch.laboratories) setLaboratories(patch.laboratories);
     if (patch.materialTemplates) setMaterialTemplates(patch.materialTemplates);
@@ -716,8 +1016,8 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     <LimsContext.Provider value={{
       globalSearchQuery, setGlobalSearchQuery,
       currentUser, users, fetchUsers, login, logout,
-      laboratories, activeLabId, activeLab, setActiveLabId, updateLaboratory,
-      notifications, markNotificationAsRead, addNotification,
+      laboratories, activeLabId, activeLab, setActiveLabId, updateLaboratory, addLaboratory, deleteLaboratory,
+      notifications, markNotificationAsRead, addNotification, clearUserNotifications,
       materialTemplates, analysisTemplates, requestTemplates, reportTemplates,
       allMaterialTemplates: rawMaterialTemplates,
       allAnalysisTemplates: rawAnalysisTemplates,
@@ -729,17 +1029,17 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       allRequests: rawRequests,
       allConsumables: rawConsumables,
       samples, analyses, reports, requests, consumables, labSettings,
-      addMaterialTemplate, updateMaterialTemplate, deleteMaterialTemplate, 
+      addMaterialTemplate, updateMaterialTemplate, deleteMaterialTemplate,
       addAnalysisTemplate, updateAnalysisTemplate, deleteAnalysisTemplate,
-      addRequestTemplate, updateRequestTemplate, deleteRequestTemplate, 
-      addReportTemplate, updateReportTemplate, deleteReportTemplate, 
+      addRequestTemplate, updateRequestTemplate, deleteRequestTemplate,
+      addReportTemplate, updateReportTemplate, deleteReportTemplate,
       addRequest, updateRequestStatus, updateRequestData, rejectRequest, resubmitRequest, assignRequest,
-      addSample, updateSampleStatus, 
-      updateSampleMounting, addSampleImage, 
-      addAnalysis, updateAnalysisStatus, 
-      updateAnalysisResult, addAnalysisImage, 
-      addReport, deleteReport, 
-      addConsumable, deleteConsumable, updateConsumableStock, 
+      addSample, deleteSample, updateSampleStatus,
+      updateSampleMounting, addSampleImage,
+      addAnalysis, deleteAnalysis, updateAnalysisStatus,
+      updateAnalysisResult, addAnalysisImage,
+      addReport, deleteReport,
+      addConsumable, deleteConsumable, updateConsumableStock,
       updateLabSettings, purgeData, applyPatch
     }}>
       {children}
@@ -747,9 +1047,6 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   );
 };
 
-/**
- * Hook d'accès rapide au contexte LIMS
- */
 export const useLims = () => {
   const context = useContext(LimsContext);
   if (context === undefined) {

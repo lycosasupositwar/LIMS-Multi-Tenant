@@ -92,14 +92,7 @@ export const initialLaboratories: Laboratory[] = [
 /**
  * Utilisateurs de démonstration
  */
-export const mockUsers: User[] = [
-  { id: 'usr-1', email: 'jean.dupont@entreprise.com', name: 'Jean Dupont', role: 'demandeur', company: 'AeroTech Industries' },
-  { id: 'usr-2', email: 'sophie.martin@labo.com', name: 'Sophie Martin', role: 'analyste', company: 'Laboratoire Métallographie', labId: 'lab-metallurgie' },
-  { id: 'usr-3', email: 'marc.durand@labo.com', name: 'Dr. Marc Durand', role: 'manager', company: 'Laboratoire Métallographie', labId: 'lab-metallurgie' },
-  { id: 'usr-4', email: 'claire.leroy@labo-meca.com', name: 'Claire Leroy', role: 'analyste', company: 'Laboratoire Mécanique', labId: 'lab-mecanique' },
-  { id: 'usr-5', email: 'alexandre.roux@labo-meca.com', name: 'Alexandre Roux', role: 'manager', company: 'Laboratoire Mécanique', labId: 'lab-mecanique' },
-  { id: 'usr-6', email: 'directeur@groupelabo.com', name: 'Dr. Hélène Voisin', role: 'manager', company: 'Direction des Laboratoires', labId: 'all' }
-];
+
 
 /**
  * Modèles de formulaires de demandes configurés par laboratoire
@@ -470,7 +463,7 @@ export const initialRequests: AnalysisRequest[] = [
     requesterId: 'usr-1',
     templateId: 'REQ-TPL-MECA',
     title: 'Essais de Traction & Granulométrie Poudre AlSi10Mg',
-    status: 'en_cours',
+    status: 'En Cours',
     createdAt: '2026-03-12T14:15:00Z',
     assignedTo: 'usr-4',
     customData: {
@@ -560,7 +553,7 @@ export const initialAnalyses: Analysis[] = [
     labId: 'lab-metallurgie',
     sampleId: 'ECH-MET-001', 
     templateId: 'ANA-METALLO', 
-    status: 'en_cours', 
+    status: 'En Cours', 
     technician: 'Sophie Martin', 
     updatedAt: '2026-03-15T11:00:00Z',
     results: { 'porosite': 0.35, 'phases': 'Matrice gamma, précipités gamma prime et carbures TiC intragranulaires.' },

@@ -1,28 +1,18 @@
 /**
  * Vue Rapports d'Expertise & Certification (Reports)
- * 
- * Cette vue centralise la génération documentaire et l'archivage réglementaire du laboratoire :
- * 1. Moteur de fusion documentaire Docxtemplater :
- *    - Ingestion dynamique de modèles Word (.docx) paramétrables via le CMS
- *    - Remplacement des balises de fusion (demande, demandeur, échantillons, manager, etc.)
- *    - Boucles itératives pour matrices de résultats et micrographies rattachées
- *    - Génération de tableaux XML natifs OpenXML pour les séries statistiques (moyenne, écart-type)
- * 2. Pipeline de conversion en PDF vectoriel haute fidélité via l'API backend (/api/convert-pdf)
- * 3. Générateur de certificats de conformité unitaire par éprouvette ou lot de poudre
- * 4. Export brut au format tabulaire CSV pour exploitation statistique externe
- * 5. Visualiseur et modal d'aperçu avant impression et distribution
  */
 
 import React, { useState } from "react";
 import { useLims } from "../store";
 import { FileDown, FileText, Settings2, Download, Image as ImageIcon, X, Eye, Trash2, Search } from "lucide-react";
-import { Report, ReportTemplate } from "../types";
+import { Report } from "../types";
 import { ReportPreviewModal } from "../components/ReportPreviewModal";
 // @ts-ignore
 import Docxtemplater from "docxtemplater";
 // @ts-ignore
 import PizZip from "pizzip";
 import { saveAs } from "file-saver";
+import { createDocxImageModule } from "../utils/docxImageModule";
 
 export function Reports() {
   const { 
@@ -31,7 +21,6 @@ export function Reports() {
     samples, 
     analyses, 
     analysisTemplates, 
-    currentUser, 
     users, 
     reportTemplates, 
     labSettings,
@@ -39,34 +28,66 @@ export function Reports() {
     deleteReport 
   } = useLims() as any;
 
-  // États de sélection de modèle et de demande
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedRequestId, setSelectedRequestId] = useState('');
   const [previewReport, setPreviewReport] = useState<Report | null>(null);
+  const [autoDownloadPdf, setAutoDownloadPdf] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
 
-  // États pour les certificats unitaires
   const [isCertModalOpen, setIsCertModalOpen] = useState(false);
   const [certSelectedSample, setCertSelectedSample] = useState("");
   const [certSelectedTemplate, setCertSelectedTemplate] = useState("");
   const [isGeneratingCert, setIsGeneratingCert] = useState(false);
 
   /**
-   * Construction du dictionnaire complet de variables de substitution pour Docxtemplater
-   * Prépare les données scalaires, les boucles {#analyses} et les tableaux OpenXML natifs.
+   * Envoie et stocke physiquement un rapport Word/PDF dans le dossier sécurisé du serveur (storage/reports/)
    */
+  const uploadReportToStorage = async (
+    reportId: string,
+    requestId: string,
+    fileBase64: string,
+    format: 'PDF' | 'Word'
+  ): Promise<string | undefined> => {
+    try {
+      const res = await fetch('/api/reports/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportId, requestId, fileBase64, format })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.storedFileName;
+      }
+    } catch (e) {
+      console.error('Erreur lors du dépôt du rapport dans le dossier serveur :', e);
+    }
+    return undefined;
+  };
+
   const buildDocData = (req: any, cl: any, samps: any[], anals: any[], mgr: any) => {
     const formattedDate = new Intl.DateTimeFormat("fr-FR").format(new Date());
     
-    // Structure détaillée pour les boucles itératives {#analyses} ... {/analyses}
     const analysesData = anals.map((a: any) => {
       const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
       
       const sanitizeKey = (str: string) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
       const safeAnalysisName = sanitizeKey(t?.name || "inconnu");
       
+      const analysisMicrographies = Object.entries(a.results || {}).flatMap(([k, v]) => {
+        const expected = t?.expectedResults?.find((er: any) => er.id === k);
+        const images = v && typeof v === 'object' && Array.isArray((v as any).images) ? (v as any).images : [];
+        return images.map((img: any, index: number) => ({
+          analyse: t?.name || 'Micrographie',
+          champ: expected?.name || k,
+          echantillon: a.sampleId || '',
+          numero: index + 1,
+          nom: img.name || `Image ${index + 1}`,
+          commentaire: img.comment || '',
+          image: img.dataUrl || ''
+        }));
+      });
       const baseObj: any = {
         nom: t?.name || "Non défini",
         norme: t?.standardRef || "Non défini",
@@ -74,11 +95,11 @@ export function Reports() {
         remarques: a.notes || "Aucune",
         echantillon: a.sampleId,
         date: a.date ? new Intl.DateTimeFormat("fr-FR").format(new Date(a.date)) : formattedDate,
-        valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, valeur: Array.isArray(v) ? v.join(', ') : v })),
-        [`is_${safeAnalysisName}`]: true
+        valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, valeur: v && typeof v === 'object' && Array.isArray((v as any).images) ? `${(v as any).images.length} image(s) de micrographie` : Array.isArray(v) ? v.join(', ') : v })),
+        [`is_${safeAnalysisName}`]: true,
+        micrographies: analysisMicrographies
       };
       
-      // Extraction dynamique des séries de mesures et indicateurs statistiques
       const series_resultats: any[] = [];
       
       Object.entries(a.results || {}).forEach(([k, v]) => {
@@ -132,7 +153,6 @@ export function Reports() {
       return baseObj;
     });
 
-    // Génération des tableaux XML OpenXML pour l'intégration fidèle dans Word
     const tables_series: any[] = [];
     const seriesGroups: Record<string, { paramName: string, rows: any[] }> = {};
     const escapeXML = (str: string) => {
@@ -259,7 +279,6 @@ export function Reports() {
       "echantillon.projet": samps[0]?.project || "N/A",
       "manager.nom": mgr?.name || "Responsable non défini",
       
-      // Variables rétrocompatibles
       "analyse.nom": analysesData[0]?.nom || "Aucune analyse",
       "analyse.norme": analysesData[0]?.norme || "N/A",
       "analyse.technicien": analysesData.find((a: any) => a.technicien && a.technicien !== 'Non assigné')?.technicien || users.find((u: any) => u.id === req?.assignedTo)?.name || analysesData[0]?.technicien || "Non défini",
@@ -270,10 +289,14 @@ export function Reports() {
           return `${fieldName}: ${v}`;
         }).join("\n");
       }).join("\n---\n") : "Aucun résultat",
-      "images.galerie": "Images attachées au rapport",
+      "images.galerie": `${analysesData.flatMap((a: any) => a.micrographies || []).length} image(s) de micrographie — utiliser la boucle micrographies pour les insérer`,
+      micrographies: analysesData.flatMap((a: any) => a.micrographies || []),
 
-      // Objets hiérarchiques
-      demande: { id: req?.id || "N/A" },
+      demande: { 
+        id: req?.id || "N/A",
+        titre: req?.title || "",
+        conclusion: req?.conclusion || "Aucune conclusion renseignée."
+      },
       date: { jour: formattedDate },
       demandeur: {
         nom: cl?.name || samps[0]?.client || "Non renseigné",
@@ -290,74 +313,31 @@ export function Reports() {
         nom: mgr?.name || "Responsable non défini"
       },
       
-      // Boucles
       analyses: analysesData,
       resultats: analysesData
     };
   };
 
-  /**
-   * Formatage standard de date
-   */
   const formatDate = (dateString: string) => {
     const d = new Date(dateString);
     return new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' }).format(d);
   };
 
   /**
-   * Téléchargement direct du fichier source Word (.docx)
+   * Génération d'un rapport consolidé :
+   * - Si modèle Word (.docx) : fusionne, convertit en PDF et stocke dans storage/reports/
+   * - Si PDF standard : ouvre automatiquement ReportPreviewModal qui capture la mise en page A4
+   *   identique à l'aperçu et la stocke automatiquement dans storage/reports/
    */
-  const handleDownload = (report: any) => {
-    if (report.templateId) {
-      const template = reportTemplates.find((t: any) => t.id === report.templateId);
-      if (template && template.fileData) {
-        try {
-          const base64Data = template.fileData.split(",")[1];
-          const binaryString = atob(base64Data);
-          const len = binaryString.length;
-          const bytes = new Uint8Array(len);
-          for (let i = 0; i < len; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-          const zip = new PizZip(bytes);
-          const doc = new Docxtemplater(zip, {
-            paragraphLoop: true,
-            linebreaks: true,
-            delimiters: { start: "{{", end: "}}" }, 
-            nullGetter: () => ""
-          });
-          const linkedSamples = samples.filter((s: any) => report.sampleIds.includes(s.id));
-          const req = linkedSamples.length > 0 ? requests.find((r: any) => r.id === linkedSamples[0].requestId) : undefined;
-          const client = users.find((u: any) => u.id === req?.requesterId);
-          const reqAnalyses = analyses.filter((a: any) => linkedSamples.map((s: any) => s.id).includes(a.sampleId));
-          const manager = users.find((u: any) => u.role === "manager" || u.role === "admin");
-          const docData = buildDocData(req, client, linkedSamples, reqAnalyses, manager);
-          doc.render(docData);
-          const out = doc.getZip().generate({ type: "blob", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
-          const a = document.createElement("a");
-          a.href = URL.createObjectURL(out);
-          a.download = `Rapport_${report.id}.docx`;
-          a.click();
-        } catch (e) {
-          console.warn(e);
-          alert("Erreur lors de la génération du document Word.");
-        }
-      }
-    } else {
-      setPreviewReport(report);
-    }
-  };
-
-  /**
-   * Génération et enregistrement d'un rapport consolidé pour une demande d'analyse
-   */
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     if (!selectedRequestId) return;
     const req = requests.find((r: any) => r.id === selectedRequestId);
     if (!req) return;
     
+    const reportId = `RAP-${new Date().getFullYear()}-${Math.floor(Math.random() * 1000).toString().padStart(3, "0")}`;
     const linkedSamples = samples.filter((s: any) => s.requestId === selectedRequestId);
-    
+    let storedFileName: string | undefined;
+
     if (selectedTemplateId) {
       const template = reportTemplates.find((t: any) => t.id === selectedTemplateId);
       if (template && template.fileData) {
@@ -372,6 +352,7 @@ export function Reports() {
           const zip = new PizZip(bytes);
 
           const doc = new Docxtemplater(zip, {
+            modules: [createDocxImageModule()],
             paragraphLoop: true,
             linebreaks: true,
             delimiters: { start: "{{", end: "}}" }, 
@@ -382,11 +363,29 @@ export function Reports() {
           const manager = users.find((u: any) => u.role === "manager" || u.role === "admin");
           const docData = buildDocData(req, client, linkedSamples, reqAnalyses, manager);
           doc.render(docData);
+
+          const docxBase64 = doc.getZip().generate({ type: "base64" });
           const out = doc.getZip().generate({
             type: "blob",
             mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
           });
           saveAs(out, `Rapport_${req.id}.docx`);
+
+          try {
+            const convRes = await fetch('/api/convert-pdf', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ docxBase64 })
+            });
+            const convData = await convRes.json();
+            if (convRes.ok && convData.pdfBase64) {
+              storedFileName = await uploadReportToStorage(reportId, req.id, convData.pdfBase64, 'PDF');
+            } else {
+              storedFileName = await uploadReportToStorage(reportId, req.id, docxBase64, 'Word');
+            }
+          } catch {
+            storedFileName = await uploadReportToStorage(reportId, req.id, docxBase64, 'Word');
+          }
         } catch(e: any) {
           console.warn(e);
           if (e.properties && e.properties.errors instanceof Array) {
@@ -400,26 +399,33 @@ export function Reports() {
     }
     
     const newReport: Report = {
-      id: `RAP-${new Date().getFullYear()}-${Math.floor(Math.random() * 1000).toString().padStart(3, "0")}`,
+      id: reportId,
+      labId: req.labId,
       title: `Rapport d'Expertise - ${req.title}`,
       requestId: req.id,
       sampleIds: linkedSamples.map((s: any) => s.id),
       createdAt: new Date().toISOString(),
       status: "genere",
       format: selectedTemplateId ? "Word" : "PDF",
-      templateId: selectedTemplateId || undefined
+      templateId: selectedTemplateId || undefined,
+      storedFileName
     } as Report;
 
     if (addReport) {
       addReport(newReport);
     }
+
     setIsModalOpen(false);
     setSelectedRequestId("");
     setSelectedTemplateId("");
+
+    // Ouvre automatiquement l'aperçu A4 pour afficher le rapport et sauvegarder ce rendu exact sur le serveur
+    setAutoDownloadPdf(false);
+    setPreviewReport(newReport);
   };
 
   /**
-   * Pipeline de conversion serveur DOCX -> PDF
+   * Pipeline de conversion DOCX -> PDF ou déclenchement direct de l'export PDF depuis l'aperçu
    */
   const handleDownloadPDF = async (report: Report) => {
     const isDocx = !!report.templateId;
@@ -438,6 +444,7 @@ export function Reports() {
         }
         const zip = new PizZip(bytes);
         const doc = new Docxtemplater(zip, {
+          modules: [createDocxImageModule()],
           paragraphLoop: true,
           linebreaks: true,
           delimiters: { start: "{{", end: "}}" }, 
@@ -460,7 +467,7 @@ export function Reports() {
               : null);
               
         const client = request ? users.find((u: any) => u.id === request.requesterId) : null;
-        const manager = users.find((u: any) => u.role === 'manager');
+        const manager = users.find((u: any) => u.role === "manager" || u.role === "admin");
 
         const docData = buildDocData(request, client, linkedSamples, reqAnalyses, manager);
         doc.render(docData);
@@ -474,6 +481,8 @@ export function Reports() {
         const data = await res.json();
         
         if (data.pdfBase64) {
+          await uploadReportToStorage(report.id, request?.id || '', data.pdfBase64, 'PDF');
+
           const byteCharacters = atob(data.pdfBase64);
           const byteNumbers = new Array(byteCharacters.length);
           for (let i = 0; i < byteCharacters.length; i++) {
@@ -499,14 +508,12 @@ export function Reports() {
         setDownloadingReportId(null);
       }
     } else {
+      // Ouvre l'aperçu A4, sauvegarde sur le serveur et déclenche le téléchargement PDF exact
+      setAutoDownloadPdf(true);
       setPreviewReport(report);
-      alert("Veuillez cliquer sur 'Télécharger PDF' depuis l'aperçu pour les rapports HTML génériques.");
     }
   };
 
-  /**
-   * Export CSV des données brutes d'essais
-   */
   const handleGenerateCSV = () => {
     const headers = ["ID Analyse", "Date", "Echantillon ID", "Type", "Technicien", "Resultats Bruts"];
     let csvContent = headers.join(";") + "\n";
@@ -536,9 +543,6 @@ export function Reports() {
     setTimeout(() => URL.revokeObjectURL(url), 100);
   };
 
-  /**
-   * Génération d'un Certificat de Conformité unitaire au format PDF
-   */
   const handleGenerateCertificate = async () => {
     if (!certSelectedSample || !certSelectedTemplate) {
       alert("Veuillez sélectionner un échantillon et un modèle.");
@@ -572,8 +576,16 @@ export function Reports() {
           return {
             analyse: t?.name,
             norme: t?.standardRef,
-            valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, valeur: v }))
+            valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, valeur: v && typeof v === 'object' && Array.isArray((v as any).images) ? `${(v as any).images.length} image(s) de micrographie` : Array.isArray(v) ? v.join(', ') : v }))
           };
+        }),
+        micrographies: sampleAnalyses.flatMap((a: any) => {
+          const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
+          return Object.entries(a.results || {}).flatMap(([k, v]) => {
+            const expected = t?.expectedResults?.find((er: any) => er.id === k);
+            const images = v && typeof v === 'object' && Array.isArray((v as any).images) ? (v as any).images : [];
+            return images.map((img: any, index: number) => ({ analyse: t?.name || 'Micrographie', champ: expected?.name || k, echantillon: a.sampleId || '', numero: index + 1, nom: img.name || `Image ${index + 1}`, commentaire: img.comment || '', image: img.dataUrl || '' }));
+          });
         }),
       };
       
@@ -586,6 +598,7 @@ export function Reports() {
       }
       const zip = new PizZip(bytes);
       const doc = new Docxtemplater(zip, {
+        modules: [createDocxImageModule()],
         paragraphLoop: true,
         linebreaks: true,
         delimiters: { start: "{{", end: "}}" }, 
@@ -636,7 +649,7 @@ export function Reports() {
     (r.format?.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
-  const completedRequests = requests.filter((r: any) => r.status === 'terminee' || r.status === 'en_validation' || r.status === 'validee' || r.status === 'en_cours');
+  const completedRequests = requests.filter((r: any) => r.status === 'terminee' || r.status === 'En Validation' || r.status === 'validee' || r.status === 'En Cours' || r.status === 'assignee');
 
   return (
     <div className="space-y-6">
@@ -666,7 +679,6 @@ export function Reports() {
         </div>
       </div>
 
-      {/* Raccourcis de génération rapide */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-xl p-6 text-white shadow-md relative overflow-hidden">
           <FileText className="absolute right-[-20px] bottom-[-20px] w-32 h-32 text-white/10" />
@@ -678,18 +690,17 @@ export function Reports() {
           </button>
         </div>
         <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-          <h3 className="text-lg font-semibold text-slate-900 mb-1">Certificat Conformité Poudres</h3>
-          <p className="text-slate-500 text-sm mb-4">Export rapide des résultats granulométriques (D10, D50, D90) avec courbe laser intégrée.</p>
+          <h3 className="text-lg font-semibold text-slate-900 mb-1">Certificat Conformité</h3>
+          <p className="text-slate-500 text-sm mb-4">Export rapide des résultats ex : granulométriques (D10, D50, D90) avec courbe laser intégrée.</p>
           <button onClick={() => setIsCertModalOpen(true)} className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-200">Configurer</button>
         </div>
         <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
           <h3 className="text-lg font-semibold text-slate-900 mb-1">Export Brut (Data)</h3>
-          <p className="text-slate-500 text-sm mb-4">Export Excel des valeurs brutes de porosité et dureté Vickers pour analyse statistique externe.</p>
+          <p className="text-slate-500 text-sm mb-4">Export Excel des valeurs brutes ex : porosité et dureté Vickers pour analyse statistique externe.</p>
           <button onClick={handleGenerateCSV} className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-200">Générer CSV</button>
         </div>
       </div>
 
-      {/* Tableau d'archivage des rapports */}
       <h3 className="text-lg font-display font-bold text-slate-900 mb-4">Archives des Rapports</h3>
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
         <table className="min-w-full divide-y divide-slate-200">
@@ -729,7 +740,10 @@ export function Reports() {
                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                   <div className="flex items-center justify-end space-x-3">
                     <button 
-                      onClick={() => setPreviewReport(report)}
+                      onClick={() => {
+                        setAutoDownloadPdf(false);
+                        setPreviewReport(report);
+                      }}
                       className="flex items-center text-slate-500 hover:text-slate-800 transition-colors"
                       title="Aperçu"
                     >
@@ -914,13 +928,18 @@ export function Reports() {
       {/* Visualiseur de rapport complet */}
       <ReportPreviewModal 
         isOpen={!!previewReport}
-        onClose={() => setPreviewReport(null)}
+        onClose={() => {
+          setPreviewReport(null);
+          setAutoDownloadPdf(false);
+        }}
         report={previewReport}
         requests={requests}
         samples={samples}
         analyses={analyses}
         analysisTemplates={analysisTemplates}
         users={users}
+        autoDownload={autoDownloadPdf}
+        onAutoDownloadComplete={() => setAutoDownloadPdf(false)}
       />
     </div>
   );

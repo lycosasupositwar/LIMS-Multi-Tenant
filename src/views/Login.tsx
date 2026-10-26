@@ -212,7 +212,7 @@ export function Login() {
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   className="mt-1 block w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="Ex: jean.dupont@aero-tech.fr"
+                  placeholder="Ex: jean.dupont@swg.ch"
                 />
               </div>
               <div>
@@ -383,28 +383,6 @@ export function Login() {
             </form>
           )}
 
-          {/* 5. Guide des profils et comptes de démonstration */}
-          <div className="mt-6 pt-5 border-t border-slate-200">
-            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2.5">
-              Comptes de test (Mot de passe: password123)
-            </h4>
-            <div className="space-y-2 text-xs text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-200">
-              <div className="pb-1.5 border-b border-slate-200">
-                <span className="font-bold text-blue-700">Portail Client Unifié :</span><br />
-                <span className="font-mono text-slate-800">jean.dupont@aero-tech.fr</span> (Demandeur)
-              </div>
-              <div className="pb-1.5 border-b border-slate-200">
-                <span className="font-bold text-slate-800">Lab Métallographie (MET) :</span><br />
-                <span className="font-mono text-slate-700">marc.durand@materiolab.fr</span> (Manager)<br />
-                <span className="font-mono text-slate-700">sophie.martin@materiolab.fr</span> (Laborant)
-              </div>
-              <div>
-                <span className="font-bold text-emerald-800">Lab Mécanique & Poudres (MEC) :</span><br />
-                <span className="font-mono text-slate-700">claire.rousseau@materiolab.fr</span> (Manager)<br />
-                <span className="font-mono text-slate-700">thomas.bernard@materiolab.fr</span> (Laborant)
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>

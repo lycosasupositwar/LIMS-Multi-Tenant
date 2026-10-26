@@ -18,21 +18,34 @@ export function BuilderCMS() {
   const [activeReportTpl, setActiveReportTpl] = useState<ReportTemplate | null>(reportTemplates?.[0] || null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Synchronisation des templates actifs lors d'un changement d'instance de laboratoire
+  // Synchronise les données du modèle sélectionné sans perdre la sélection
+  // lorsque le store est mis à jour pendant la saisie.
   useEffect(() => {
-    setActiveMaterialTpl(materialTemplates[0] || null);
+    setActiveMaterialTpl(current => {
+      const selected = current && materialTemplates.find(tpl => tpl.id === current.id);
+      return selected || materialTemplates[0] || null;
+    });
   }, [activeLabId, materialTemplates]);
 
   useEffect(() => {
-    setActiveAnalysisTpl(analysisTemplates[0] || null);
+    setActiveAnalysisTpl(current => {
+      const selected = current && analysisTemplates.find(tpl => tpl.id === current.id);
+      return selected || analysisTemplates[0] || null;
+    });
   }, [activeLabId, analysisTemplates]);
 
   useEffect(() => {
-    setActiveRequestTpl(requestTemplates[0] || null);
+    setActiveRequestTpl(current => {
+      const selected = current && requestTemplates.find(tpl => tpl.id === current.id);
+      return selected || requestTemplates[0] || null;
+    });
   }, [activeLabId, requestTemplates]);
 
   useEffect(() => {
-    setActiveReportTpl(reportTemplates?.[0] || null);
+    setActiveReportTpl(current => {
+      const selected = current && reportTemplates?.find(tpl => tpl.id === current.id);
+      return selected || reportTemplates?.[0] || null;
+    });
   }, [activeLabId, reportTemplates]);
   
   const [isAddingField, setIsAddingField] = useState(false);
@@ -340,48 +353,6 @@ export function BuilderCMS() {
 
   return (
     <div className="space-y-6 h-full flex flex-col">
-      {/* Sélecteur & Indicateur d'Instance de Laboratoire pour le CMS */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 shadow-xs">
-        <div className="flex items-center gap-3">
-          <div className={`p-2.5 rounded-lg ${activeLab.id === 'lab-metallurgie' ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'}`}>
-            <Building2 className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Instance active :</span>
-              <span className="font-bold text-sm text-slate-900">{activeLab.name}</span>
-              <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                activeLab.id === 'lab-metallurgie' ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'
-              }`}>
-                {activeLab.code}
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Les gabarits (matériaux, essais, formulaires client, rapports) sont hermétiquement isolés par instance de laboratoire.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg">
-          {laboratories.map(lab => {
-            const isSelected = lab.id === activeLabId;
-            return (
-              <button
-                key={lab.id}
-                onClick={() => setActiveLabId(lab.id)}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${
-                  isSelected 
-                    ? 'bg-white text-slate-900 shadow-xs' 
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {lab.shortName}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-2xl font-display font-bold text-slate-900">CMS Modulaire & Configuration</h2>
@@ -626,6 +597,7 @@ export function BuilderCMS() {
                           <option value="select">Liste déroulante</option>
                           <option value="multiselect">Sélection multiple</option>
                           <option value="boolean">Oui / Non</option>
+                          <option value="materials">Matériaux du modèle</option>
                         </select>
                       </div>
                       <div>
@@ -780,7 +752,8 @@ export function BuilderCMS() {
                           <option value="text">Texte</option>
                           <option value="number">Nombre unique</option>
                           <option value="number_series">Série de nombres (Calcul Moyenne/Écart-type)</option>
-                          <option value="image">Image / Photo</option>
+                          <option value="image">Image unique</option>
+                          <option value="micrography">Micrographie (images multiples + commentaires)</option>
                           <option value="select">Liste déroulante</option>
                           <option value="multiselect">Sélection multiple</option>
                           <option value="boolean">Conforme / Non Conforme</option>
@@ -1149,6 +1122,21 @@ export function BuilderCMS() {
                      </div>
                    </div>
 
+                   <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                     <h5 className="text-xs font-bold text-amber-900 mb-1">Galerie de micrographies avec images intégrées</h5>
+                     <p className="text-[10px] text-amber-800 mb-2 leading-relaxed">
+                       Cette boucle répète automatiquement une section pour chaque image enregistrée dans les résultats d’analyse. Le tag image est spécial : il insère le fichier dans Word, pas une URL ni du texte.
+                     </p>
+                     <div className="bg-white p-2 rounded border border-amber-200 mb-2">
+                       <code className="text-[10px] block font-mono text-slate-700">{"{{#micrographies}}"}</code>
+                       <code className="text-[10px] block font-mono text-slate-700 ml-2">Image {"{{numero}}"} — {"{{nom}}"}</code>
+                       <code className="text-[10px] block font-mono text-blue-700 font-bold ml-2">{"{{%image}}"} <span className="font-normal text-slate-500">← insère la vraie image</span></code>
+                       <code className="text-[10px] block font-mono text-slate-700 ml-2">Commentaire : {"{{commentaire}}"}</code>
+                       <code className="text-[10px] block font-mono text-slate-700">{"{{/micrographies}}"}</code>
+                     </div>
+                     <p className="text-[9px] text-amber-900 italic">Placez chaque balise dans un paragraphe Word distinct si possible. Les images sont ajustées à la largeur disponible sans déformation.</p>
+                   </div>
+
                    <div className="mb-4 bg-teal-50 border border-teal-100 rounded-lg p-3">
                      <h5 className="text-xs font-bold text-teal-800 mb-1">Liste des échantillons</h5>
                      <p className="text-[10px] text-teal-600 mb-2 leading-relaxed">
@@ -1166,6 +1154,7 @@ export function BuilderCMS() {
                    <ul className="space-y-2 text-sm">
                       {[
                         { label: "ID Demande", tag: "{{demande.id}}" },
+                        { label: "Conclusion de la demande", tag: "{{demande.conclusion}}" },
                         { label: "Date de création", tag: "{{date.jour}}" },
                         { label: "Demandeur - Nom", tag: "{{demandeur.nom}}" },
                         { label: "Demandeur - Email", tag: "{{demandeur.email}}" },
@@ -1178,7 +1167,7 @@ export function BuilderCMS() {
                         { label: "Analyse - Norme", tag: "{{analyse.norme}}" },
                         { label: "Analyse - Technicien", tag: "{{analyse.technicien}}" },
                         { label: "Résultats - Tableau", tag: "{{resultats.tableau}}" },
-                        { label: "Images - Galerie", tag: "{{images.galerie}}" },
+                        { label: "Images - Nombre / indication galerie (texte)", tag: "{{images.galerie}}" },
                         { label: "Remarques", tag: "{{analyse.remarques}}" },
                         // Custom fields for Request
                         ...requestTemplates.flatMap(tpl => tpl.fields.map(f => ({

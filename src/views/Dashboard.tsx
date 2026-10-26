@@ -15,7 +15,7 @@
 import React from 'react';
 import { useLims } from '../store';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { Box, Activity, CheckCircle, Factory, FileText, AlertCircle } from 'lucide-react';
+import { Box, Activity, CheckCircle, Factory, FileText, AlertCircle,ClipboardClock } from 'lucide-react';
 import { RequestStatus } from '../types';
 
 export function Dashboard() {
@@ -30,15 +30,15 @@ export function Dashboard() {
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-slate-100 text-slate-800">Brouillon</span>;
       case 'soumise': 
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">Nouvelle Soumission</span>;
-      case 'en_revue': 
+      case 'En Revue': 
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-800">En Revue</span>;
       case 'validee': 
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-800">Validée</span>;
       case 'assignee': 
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-indigo-100 text-indigo-800">Assignée</span>;
-      case 'en_cours': 
+      case 'En Cours': 
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800">En Cours</span>;
-      case 'en_validation': 
+      case 'En Validation': 
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-orange-100 text-orange-800">En Validation finale</span>;
       case 'terminee': 
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-800">Terminée</span>;
@@ -53,10 +53,10 @@ export function Dashboard() {
   if (currentUser?.role === 'analyste') {
     // Dossiers en cours assignés à cet opérateur
     const assignedRequests = requests.filter(
-      r => r.assignedTo === currentUser.id && ['assignee', 'en_cours', 'en_validation'].includes(r.status)
+      r => r.assignedTo === currentUser.id && ['assignee', 'En Cours', 'En Validation'].includes(r.status)
     );
     const pendingSamples = samples.filter(s => s.status === 'receptionne' || s.status === 'en_preparation');
-    const myAnalyses = analyses.filter(a => a.technician === currentUser.name && a.status === 'en_cours');
+    const myAnalyses = analyses.filter(a => a.technician === currentUser.name && a.status === 'En Cours');
 
     return (
       <div className="space-y-6">
@@ -134,8 +134,9 @@ export function Dashboard() {
    * 2. TABLEAU DE BORD MANAGER (KPIs & ANALYTICS)
    * ========================================================================= */
   const totalSamples = samples.length;
-  const inProgressAnalyses = analyses.filter(a => a.status === 'en_cours' || a.status === 'a_valider').length;
-  const pendingRequests = requests.filter(r => ['soumise', 'en_revue'].includes(r.status)).length;
+  const inProgressAnalyses = analyses.filter(a => a.status === 'En Cours' || a.status === 'a_valider').length;
+  const pendingRequests = requests.filter(r => ['soumise', 'En Revue'].includes(r.status)).length;
+  const inProgressRequests = requests.filter(r => ['assignee', 'En Cours', 'En Validation'].includes(r.status)).length;
 
   // Répartition statistique par statut des demandes
   const requestStatusCount = requests.reduce((acc, req) => {
@@ -185,7 +186,7 @@ export function Dashboard() {
       </div>
 
       {/* Cartes d'indicateurs synthétiques */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <StatCard 
           title="Demandes à Revoir" 
           value={pendingRequests} 
@@ -198,6 +199,12 @@ export function Dashboard() {
           value={totalSamples} 
           icon={Box} 
           colorClass="bg-blue-100 text-blue-600" 
+        />
+        <StatCard 
+          title="Demandes en cours" 
+          value={inProgressRequests} 
+          icon={ClipboardClock} 
+          colorClass="bg-amber-100 text-amber-600" 
         />
         <StatCard 
           title="Analyses en cours" 

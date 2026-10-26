@@ -12,26 +12,33 @@ import React, { useState, useEffect } from 'react';
 import { X, Building2, Layers, CheckCircle2 } from 'lucide-react';
 import { useLims } from '../store';
 import { AnalysisRequest } from '../types';
+import { getLabColor } from '../utils/colors';
+import { generateUniqueLimsId } from '../utils/idGenerator';
 
 interface Props {
   /** État d'ouverture de la modale */
   isOpen: boolean;
   /** Fonction de fermeture */
   onClose: () => void;
+  /** Demande initiale (pour duplication) */
+  initialRequest?: Partial<AnalysisRequest>;
 }
 
-export function NewRequestModal({ isOpen, onClose }: Props) {
+export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
   const { 
     currentUser, 
     laboratories, 
     activeLabId, 
     allRequestTemplates, 
     allAnalysisTemplates, 
+    allMaterialTemplates,
+    allRequests,
     addRequest 
   } = useLims();
   
   // Laboratoire sélectionné pour la demande (par défaut le lab actif ou le premier disponible)
-  const [selectedLabId, setSelectedLabId] = useState<string>(activeLabId || 'lab-metallurgie');
+  const [selectedLabId, setSelectedLabId] = useState<string>(activeLabId || laboratories[0]?.id || '');
+  
   
   // Modèles de formulaires disponibles pour le laboratoire choisi
   const labTemplates = allRequestTemplates.filter(t => t.labId === selectedLabId && t.isActive !== false);
@@ -40,8 +47,34 @@ export function NewRequestModal({ isOpen, onClose }: Props) {
   const [title, setTitle] = useState('');
   const [customData, setCustomData] = useState<Record<string, any>>({});
 
-  // Synchronisation du modèle par défaut lors du changement de laboratoire
+  // Synchronisation des données initiales lors de l'ouverture ou du changement d'initialRequest
   useEffect(() => {
+    if (isOpen) {
+      if (initialRequest) {
+        if (initialRequest.labId) setSelectedLabId(initialRequest.labId);
+        if (initialRequest.templateId) setSelectedTemplateId(initialRequest.templateId);
+        if (initialRequest.title) setTitle("Copie de " + initialRequest.title);
+        if (initialRequest.customData) setCustomData(initialRequest.customData);
+      } else {
+        const defaultLabId = activeLabId || laboratories[0]?.id || '';
+        setSelectedLabId(defaultLabId);
+        const available = allRequestTemplates.filter(t => t.labId === defaultLabId && t.isActive !== false);
+        if (available.length > 0) {
+          setSelectedTemplateId(available[0].id);
+        } else {
+          setSelectedTemplateId('');
+        }
+        setTitle('');
+        setCustomData({});
+      }
+    }
+  }, [isOpen, initialRequest, activeLabId, laboratories, allRequestTemplates]);
+
+  // Synchronisation du modèle par défaut lors du changement de laboratoire (manuel)
+  useEffect(() => {
+    // Ne réinitialiser que s'il n'y a pas d'initialRequest en cours de chargement
+    if (!isOpen || initialRequest) return;
+    
     const available = allRequestTemplates.filter(t => t.labId === selectedLabId && t.isActive !== false);
     if (available.length > 0) {
       setSelectedTemplateId(available[0].id);
@@ -49,15 +82,16 @@ export function NewRequestModal({ isOpen, onClose }: Props) {
       setSelectedTemplateId('');
     }
     setCustomData({});
-  }, [selectedLabId, allRequestTemplates]);
+  }, [selectedLabId, allRequestTemplates, isOpen, initialRequest]);
 
   if (!isOpen) return null;
 
   const targetLab = laboratories.find(l => l.id === selectedLabId) || laboratories[0];
   const activeTemplate = labTemplates.find(t => t.id === selectedTemplateId) || labTemplates[0];
   
-  // Analyses disponibles configurées dans le CMS pour ce laboratoire spécifique
+// Analyses disponibles configurées dans le CMS pour ce laboratoire spécifique
   const availableAnalyses = allAnalysisTemplates.filter(a => a.labId === selectedLabId && a.isActive !== false);
+  const availableMaterials = allMaterialTemplates.filter(m => m.labId === selectedLabId && m.isActive !== false);
 
   /**
    * Enregistrement de la nouvelle demande avec assignation du laboratoire
@@ -66,9 +100,14 @@ export function NewRequestModal({ isOpen, onClose }: Props) {
     e.preventDefault();
     if (!currentUser || !activeTemplate) return;
 
-    const prefix = targetLab.settings?.idPrefixes?.request || (selectedLabId === 'lab-metallurgie' ? 'REQ-MET' : 'REQ-MEC');
+    const prefix = targetLab?.settings?.idPrefixes?.request || `REQ-${targetLab?.code || 'LAB'}`;
+    const uniqueRequestId = generateUniqueLimsId(
+      prefix,
+      allRequests.map(r => r.id)
+    );
+
     const newRequest: AnalysisRequest = {
-      id: `${prefix}-${new Date().getFullYear().toString().slice(2)}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`,
+      id: uniqueRequestId,
       labId: selectedLabId,
       requesterId: currentUser.id,
       templateId: activeTemplate.id,
@@ -82,6 +121,7 @@ export function NewRequestModal({ isOpen, onClose }: Props) {
     addRequest(newRequest);
     onClose();
   };
+  
 
   const handleCustomDataChange = (fieldId: string, value: any) => {
     setCustomData(prev => ({ ...prev, [fieldId]: value }));
@@ -116,29 +156,25 @@ export function NewRequestModal({ isOpen, onClose }: Props) {
                 1. Laboratoire Destinataire *
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {laboratories.map(lab => {
+                {laboratories.map((lab, index) => {
                   const isSelected = lab.id === selectedLabId;
-                  const isMet = lab.id === 'lab-metallurgie';
+                  const color = getLabColor(index);
                   return (
                     <div
                       key={lab.id}
                       onClick={() => setSelectedLabId(lab.id)}
                       className={`p-3.5 rounded-xl border-2 transition-all cursor-pointer flex flex-col justify-between ${
                         isSelected 
-                          ? isMet 
-                            ? 'border-blue-600 bg-blue-50/50 ring-2 ring-blue-100' 
-                            : 'border-emerald-600 bg-emerald-50/50 ring-2 ring-emerald-100'
+                          ? `${color.borderDark} ${color.bgFade} ${color.ring}`
                           : 'border-slate-200 bg-white hover:border-slate-300'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-1.5">
                         <div className="flex items-center gap-2">
-                          <Building2 className={`w-4 h-4 ${isMet ? 'text-blue-600' : 'text-emerald-600'}`} />
+                          <Building2 className={`w-4 h-4 ${color.main}`} />
                           <span className="font-bold text-sm text-slate-900">{lab.shortName}</span>
                         </div>
-                        <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                          isMet ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'
-                        }`}>
+                        <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${color.light} ${color.text}`}>
                           {lab.code}
                         </span>
                       </div>
@@ -244,6 +280,61 @@ export function NewRequestModal({ isOpen, onClose }: Props) {
                               >
                                 {tpl.name}
                               </button>
+                            );
+                          })}
+                        </div>
+                      ) : field.type === 'materials' ? (
+                        /* Catalogue des modèles de matériaux du laboratoire sélectionné */
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          {availableMaterials.map(tpl => {
+                            const currentValues = customData[field.id] || [];
+                            const isSelected = currentValues.includes(tpl.id);
+                            return (
+                              <button
+                                key={tpl.id}
+                                type="button"
+                                onClick={() => {
+                                  const newValues = isSelected
+                                    ? currentValues.filter((v: string) => v !== tpl.id)
+                                    : [...currentValues, tpl.id];
+                                  handleCustomDataChange(field.id, newValues);
+                                }}
+                                className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                                }`}
+                              >
+                                {tpl.name}
+                              </button>
+                            );
+                          })}
+                          {availableMaterials.length === 0 && <p className="text-xs text-slate-500">Aucun modèle de matériau actif pour ce laboratoire.</p>}
+                          {availableMaterials.filter(tpl => (customData[field.id] || []).includes(tpl.id)).map(tpl => {
+                            const propertiesKey = `${field.id}__material_properties`;
+                            const allProperties = customData[propertiesKey] || {};
+                            const materialProperties = allProperties[tpl.id] || {};
+                            const updateProperty = (propertyId: string, value: any) => {
+                              handleCustomDataChange(propertiesKey, {
+                                ...allProperties,
+                                [tpl.id]: { ...materialProperties, [propertyId]: value }
+                              });
+                            };
+                            return (
+                              <div key={`properties-${tpl.id}`} className="w-full mt-3 rounded-lg border border-emerald-200 bg-white p-3">
+                                <h4 className="text-sm font-semibold text-emerald-800 mb-3">Propriétés — {tpl.name}</h4>
+                                {tpl.fields.length === 0 ? <p className="text-xs text-slate-500">Ce modèle ne contient aucune propriété.</p> : (
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    {tpl.fields.map(property => <div key={property.id}>
+                                      <label className="block text-xs font-medium text-slate-600 mb-1">{property.name}{property.unit ? ` (${property.unit})` : ''}{property.required && <span className="text-red-500"> *</span>}</label>
+                                      {property.type === 'select' ? <select required={property.required} value={materialProperties[property.id] ?? ''} onChange={e => updateProperty(property.id, e.target.value)} className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm"><option value="">Sélectionner...</option>{property.options?.map(opt => <option key={opt} value={opt}>{opt}</option>)}</select>
+                                      : property.type === 'multiselect' ? <div className="flex flex-wrap gap-2">{property.options?.map(opt => { const values = materialProperties[property.id] || []; const checked = values.includes(opt); return <button key={opt} type="button" onClick={() => updateProperty(property.id, checked ? values.filter((v: string) => v !== opt) : [...values, opt])} className={`px-2 py-1 rounded border text-xs ${checked ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white border-slate-200'}`}>{opt}</button>; })}</div>
+                                      : property.type === 'boolean' ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!materialProperties[property.id]} onChange={e => updateProperty(property.id, e.target.checked)} />Oui</label>
+                                      : <input type={property.type === 'number' ? 'number' : property.type === 'date' ? 'date' : 'text'} required={property.required} value={materialProperties[property.id] ?? ''} onChange={e => updateProperty(property.id, property.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)} className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm" />}
+                                    </div>)}
+                                  </div>
+                                )}
+                              </div>
                             );
                           })}
                         </div>

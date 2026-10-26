@@ -12,8 +12,13 @@ export default defineConfig(() => {
       },
     },
     server: {
+      // Écoute sur toutes les interfaces réseau pour permettre l'accès externe
+      host: '0.0.0.0',
+      // Autorise explicitement votre nom de domaine (requis sur Vite 6+)
+      allowedHosts: ['lims.atomlab.fr'],
+      
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
+      // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},

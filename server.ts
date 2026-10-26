@@ -449,6 +449,7 @@ const ALLOWED_COLLECTIONS = new Set([
   'reportTemplates',
   'samples',
   'analyses',
+  'materials',
   'reports',
   'requests',
   'consumables'

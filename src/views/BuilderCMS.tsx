@@ -597,6 +597,7 @@ export function BuilderCMS() {
                           <option value="select">Liste déroulante</option>
                           <option value="multiselect">Sélection multiple</option>
                           <option value="boolean">Oui / Non</option>
+                          <option value="materials">Matériaux du modèle</option>
                         </select>
                       </div>
                       <div>

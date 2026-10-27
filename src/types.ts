@@ -130,7 +130,7 @@ export interface MaterialTemplate {
 export interface ExpectedResult {
   id: string;
   name: string;
-  type: 'number' | 'number_series' | 'text' | 'image' | 'micrography' | 'boolean' | 'select' | 'multiselect';
+  type: 'number' | 'number_series' | 'vertical_table' | 'text' | 'image' | 'micrography' | 'boolean' | 'select' | 'multiselect';
   options?: string[];
   unit?: string;
   required: boolean;

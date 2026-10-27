@@ -320,8 +320,11 @@ export function Analyses() {
     }
 
     if (resultTemplate.type === 'number_series') {
-      const currentValues = Array.isArray(currentValue) ? currentValue : (currentValue ? [currentValue] : []);
-      const numValues = currentValues.map(v => Number(v)).filter(v => !isNaN(v));
+      const currentValues = Array.isArray(currentValue) ? currentValue : (currentValue !== undefined && currentValue !== '' ? [currentValue] : []);
+      const numValues = currentValues
+        .filter(v => v !== '' && v !== null && v !== undefined && String(v).trim() !== '')
+        .map(v => Number(v))
+        .filter(v => !isNaN(v));
       const mean = numValues.length > 0 ? numValues.reduce((a, b) => a + b, 0) / numValues.length : null;
       const variance = numValues.length > 1
         ? numValues.reduce((a, b) => a + Math.pow(b - mean!, 2), 0) / (numValues.length - 1)

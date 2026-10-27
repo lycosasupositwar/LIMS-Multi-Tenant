@@ -4,7 +4,7 @@ import { Plus, Settings2, GripVertical, Database, Layers, TestTube2, Check, X, F
 import { MaterialTemplate, CustomField, AnalysisTemplate, ExpectedResult, RequestTemplate, ReportTemplate } from '../types';
 
 export function BuilderCMS() {
-  const { 
+  const {
     materialTemplates, analysisTemplates, requestTemplates, reportTemplates,
     updateMaterialTemplate, updateRequestTemplate, updateAnalysisTemplate, updateReportTemplate,
     addMaterialTemplate, addAnalysisTemplate, addRequestTemplate, addReportTemplate,
@@ -47,7 +47,7 @@ export function BuilderCMS() {
       return selected || reportTemplates?.[0] || null;
     });
   }, [activeLabId, reportTemplates]);
-  
+
   const [isAddingField, setIsAddingField] = useState(false);
   const [editingFieldId, setEditingFieldId] = useState<string | null>(null);
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
@@ -113,9 +113,9 @@ export function BuilderCMS() {
 
   const handleAddField = () => {
     if (!newFieldName) return;
-    
-    const parsedOptions = ['select', 'multiselect'].includes(newFieldType) && newFieldOptions.trim()
-      ? newFieldOptions.split(',').map(s => s.trim())
+
+    const parsedOptions = ['select', 'multiselect', 'vertical_table'].includes(newFieldType) && newFieldOptions.trim()
+      ? newFieldOptions.split(',').map(s => s.trim()).filter(Boolean)
       : undefined;
 
     const newFieldId = editingFieldId || `field_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
@@ -131,7 +131,7 @@ export function BuilderCMS() {
       };
       const updatedTemplate = {
         ...activeAnalysisTpl,
-        expectedResults: editingFieldId 
+        expectedResults: editingFieldId
           ? activeAnalysisTpl.expectedResults.map(f => f.id === editingFieldId ? newResult : f)
           : [...activeAnalysisTpl.expectedResults, newResult]
       };
@@ -146,11 +146,11 @@ export function BuilderCMS() {
         options: parsedOptions,
         required: newFieldRequired
       };
-      
+
       if (builderTab === 'materials' && activeMaterialTpl) {
         const updatedTemplate = {
           ...activeMaterialTpl,
-          fields: editingFieldId 
+          fields: editingFieldId
             ? activeMaterialTpl.fields.map(f => f.id === editingFieldId ? newField : f)
             : [...activeMaterialTpl.fields, newField]
         };
@@ -159,7 +159,7 @@ export function BuilderCMS() {
       } else if (builderTab === 'requests' && activeRequestTpl) {
         const updatedTemplate = {
           ...activeRequestTpl,
-          fields: editingFieldId 
+          fields: editingFieldId
             ? activeRequestTpl.fields.map(f => f.id === editingFieldId ? newField : f)
             : [...activeRequestTpl.fields, newField]
         };
@@ -167,7 +167,7 @@ export function BuilderCMS() {
         setActiveRequestTpl(updatedTemplate);
       }
     }
-    
+
     setIsAddingField(false);
     setEditingFieldId(null);
     setNewFieldName('');
@@ -176,7 +176,7 @@ export function BuilderCMS() {
     setNewFieldOptions('');
     setNewFieldRequired(false);
   };
-  
+
   const handleRemoveField = (idToRemove: string) => {
     if (builderTab === 'materials' && activeMaterialTpl) {
       const updatedTemplate = {
@@ -359,25 +359,25 @@ export function BuilderCMS() {
           <p className="text-sm text-slate-500 mt-1">Gérez les types de matériaux, les processus de préparation, et les formulaires de demande.</p>
         </div>
         <div className="flex bg-slate-100 p-1 rounded-lg">
-          <button 
+          <button
             onClick={() => setBuilderTab('materials')}
             className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${builderTab === 'materials' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
           >
             Modèles Matériaux
           </button>
-          <button 
+          <button
             onClick={() => setBuilderTab('analyses')}
             className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${builderTab === 'analyses' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
           >
             Modèles Analyses
           </button>
-          <button 
+          <button
             onClick={() => setBuilderTab('requests')}
             className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${builderTab === 'requests' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
           >
             Formulaires Client
           </button>
-          <button 
+          <button
             onClick={() => setBuilderTab('reports')}
             className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${builderTab === 'reports' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
           >
@@ -404,11 +404,10 @@ export function BuilderCMS() {
               <button
                 key={tpl.id}
                 onClick={() => setActiveMaterialTpl(tpl)}
-                className={`w-full text-left px-3 py-3 rounded-lg text-sm transition-colors border ${
-                  activeMaterialTpl?.id === tpl.id 
-                  ? 'bg-blue-50 border-blue-200 text-blue-800' 
-                  : 'bg-transparent border-transparent hover:bg-slate-50 text-slate-700'
-                } ${tpl.isActive === false ? 'opacity-50 grayscale' : ''}`}
+                className={`w-full text-left px-3 py-3 rounded-lg text-sm transition-colors border ${activeMaterialTpl?.id === tpl.id
+                    ? 'bg-blue-50 border-blue-200 text-blue-800'
+                    : 'bg-transparent border-transparent hover:bg-slate-50 text-slate-700'
+                  } ${tpl.isActive === false ? 'opacity-50 grayscale' : ''}`}
               >
                 <div className="font-medium flex justify-between">
                   <span>{tpl.name}</span>
@@ -421,11 +420,10 @@ export function BuilderCMS() {
               <button
                 key={tpl.id}
                 onClick={() => setActiveReportTpl(tpl)}
-                className={`w-full text-left px-3 py-3 rounded-lg text-sm transition-colors border ${
-                  activeReportTpl?.id === tpl.id 
-                  ? 'bg-blue-50 border-blue-200 text-blue-800' 
-                  : 'bg-transparent border-transparent hover:bg-slate-50 text-slate-700'
-                } ${tpl.isActive === false ? 'opacity-50 grayscale' : ''}`}
+                className={`w-full text-left px-3 py-3 rounded-lg text-sm transition-colors border ${activeReportTpl?.id === tpl.id
+                    ? 'bg-blue-50 border-blue-200 text-blue-800'
+                    : 'bg-transparent border-transparent hover:bg-slate-50 text-slate-700'
+                  } ${tpl.isActive === false ? 'opacity-50 grayscale' : ''}`}
               >
                 <div className="font-medium flex justify-between">
                   <span>{tpl.name}</span>
@@ -438,16 +436,15 @@ export function BuilderCMS() {
               </button>
             ))}
 
-            
+
             {builderTab === 'analyses' && analysisTemplates.map(tpl => (
               <button
                 key={tpl.id}
                 onClick={() => setActiveAnalysisTpl(tpl)}
-                className={`w-full text-left px-3 py-3 rounded-lg text-sm transition-colors border ${
-                  activeAnalysisTpl?.id === tpl.id 
-                  ? 'bg-blue-50 border-blue-200 text-blue-800' 
-                  : 'bg-transparent border-transparent hover:bg-slate-50 text-slate-700'
-                } ${tpl.isActive === false ? 'opacity-50 grayscale' : ''}`}
+                className={`w-full text-left px-3 py-3 rounded-lg text-sm transition-colors border ${activeAnalysisTpl?.id === tpl.id
+                    ? 'bg-blue-50 border-blue-200 text-blue-800'
+                    : 'bg-transparent border-transparent hover:bg-slate-50 text-slate-700'
+                  } ${tpl.isActive === false ? 'opacity-50 grayscale' : ''}`}
               >
                 <div className="font-medium flex justify-between">
                   <span>{tpl.name}</span>
@@ -461,11 +458,10 @@ export function BuilderCMS() {
               <button
                 key={tpl.id}
                 onClick={() => setActiveRequestTpl(tpl)}
-                className={`w-full text-left px-3 py-3 rounded-lg text-sm transition-colors border ${
-                  activeRequestTpl?.id === tpl.id 
-                  ? 'bg-blue-50 border-blue-200 text-blue-800' 
-                  : 'bg-transparent border-transparent hover:bg-slate-50 text-slate-700'
-                } ${tpl.isActive === false ? 'opacity-50 grayscale' : ''}`}
+                className={`w-full text-left px-3 py-3 rounded-lg text-sm transition-colors border ${activeRequestTpl?.id === tpl.id
+                    ? 'bg-blue-50 border-blue-200 text-blue-800'
+                    : 'bg-transparent border-transparent hover:bg-slate-50 text-slate-700'
+                  } ${tpl.isActive === false ? 'opacity-50 grayscale' : ''}`}
               >
                 <div className="font-medium flex justify-between">
                   <span>{tpl.name}</span>
@@ -482,7 +478,7 @@ export function BuilderCMS() {
             <>
               <div className="p-5 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
                 <div className="flex-1 mr-4">
-                  <input 
+                  <input
                     type="text"
                     value={activeMaterialTpl.name}
                     onChange={e => {
@@ -493,7 +489,7 @@ export function BuilderCMS() {
                     className="font-semibold text-lg text-slate-900 bg-transparent border-none focus:ring-0 p-0 w-full placeholder-slate-400"
                     placeholder="Nom du Modèle de Matériau"
                   />
-                  <input 
+                  <input
                     type="text"
                     value={activeMaterialTpl.description}
                     onChange={e => {
@@ -508,9 +504,9 @@ export function BuilderCMS() {
                 <div className="flex items-center gap-4">
                   <label className="flex items-center cursor-pointer">
                     <div className="relative">
-                      <input 
-                        type="checkbox" 
-                        className="sr-only" 
+                      <input
+                        type="checkbox"
+                        className="sr-only"
                         checked={activeMaterialTpl.isActive !== false}
                         onChange={e => {
                           const updated = { ...activeMaterialTpl, isActive: e.target.checked };
@@ -579,7 +575,7 @@ export function BuilderCMS() {
                     </div>
                   ))}
                 </div>
-                
+
                 {isAddingField ? (
                   <div className="mt-4 bg-blue-50 border border-blue-200 p-4 rounded-lg shadow-sm">
                     <h5 className="text-sm font-semibold text-blue-900 mb-3">{editingFieldId ? "Modifier la Propriété" : "Nouvelle Propriété"}</h5>
@@ -617,7 +613,7 @@ export function BuilderCMS() {
                       </label>
                       <div className="flex gap-2">
                         <button onClick={() => setIsAddingField(false)} className="px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-100 rounded font-medium">Annuler</button>
-                        <button onClick={handleAddField} className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded font-medium shadow-sm flex items-center"><Check className="w-4 h-4 mr-1"/> Ajouter</button>
+                        <button onClick={handleAddField} className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded font-medium shadow-sm flex items-center"><Check className="w-4 h-4 mr-1" /> Ajouter</button>
                       </div>
                     </div>
                   </div>
@@ -635,7 +631,7 @@ export function BuilderCMS() {
             <>
               <div className="p-5 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
                 <div className="flex-1 mr-4">
-                  <input 
+                  <input
                     type="text"
                     value={activeAnalysisTpl.name}
                     onChange={e => {
@@ -647,7 +643,7 @@ export function BuilderCMS() {
                     placeholder="Nom de l'Analyse"
                   />
                   <div className="text-xs text-slate-500 mt-0.5 flex gap-2 items-center">
-                    <input 
+                    <input
                       type="text"
                       value={activeAnalysisTpl.description}
                       onChange={e => {
@@ -666,9 +662,9 @@ export function BuilderCMS() {
                 <div className="flex items-center gap-4">
                   <label className="flex items-center cursor-pointer">
                     <div className="relative">
-                      <input 
-                        type="checkbox" 
-                        className="sr-only" 
+                      <input
+                        type="checkbox"
+                        className="sr-only"
                         checked={activeAnalysisTpl.isActive !== false}
                         onChange={e => {
                           const updated = { ...activeAnalysisTpl, isActive: e.target.checked };
@@ -736,7 +732,7 @@ export function BuilderCMS() {
                     </div>
                   ))}
                 </div>
-                
+
                 {isAddingField ? (
                   <div className="mt-4 bg-indigo-50 border border-indigo-200 p-4 rounded-lg shadow-sm">
                     <h5 className="text-sm font-semibold text-indigo-900 mb-3">{editingFieldId ? "Modifier le Résultat Attendu" : "Nouveau Résultat Attendu"}</h5>
@@ -751,6 +747,7 @@ export function BuilderCMS() {
                           <option value="text">Texte</option>
                           <option value="number">Nombre unique</option>
                           <option value="number_series">Série de nombres (Calcul Moyenne/Écart-type)</option>
+                          <option value="vertical_table">Tableau vertical (Ex: ICP multi-éléments)</option>
                           <option value="image">Image unique</option>
                           <option value="micrography">Micrographie (images multiples + commentaires)</option>
                           <option value="select">Liste déroulante</option>
@@ -759,13 +756,23 @@ export function BuilderCMS() {
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-indigo-800 mb-1">Unité (opt.)</label>
-                        <input type="text" value={newFieldUnit} onChange={e => setNewFieldUnit(e.target.value)} placeholder="Ex: HV, µm" className="w-full text-sm px-2 py-1.5 rounded border border-indigo-200" />
+                        <label className="block text-xs font-medium text-indigo-800 mb-1">Unité par défaut (opt.)</label>
+                        <input type="text" value={newFieldUnit} onChange={e => setNewFieldUnit(e.target.value)} placeholder="Ex: ppm, %, mg/L" className="w-full text-sm px-2 py-1.5 rounded border border-indigo-200" />
                       </div>
-                      {['select', 'multiselect'].includes(newFieldType) && (
+                      {['select', 'multiselect', 'vertical_table'].includes(newFieldType) && (
                         <div className="col-span-2 sm:col-span-4">
-                          <label className="block text-xs font-medium text-indigo-800 mb-1">Options (séparées par des virgules)</label>
-                          <input type="text" value={newFieldOptions} onChange={e => setNewFieldOptions(e.target.value)} placeholder="Ex: Option 1, Option 2, Option 3" className="w-full text-sm px-2 py-1.5 rounded border border-indigo-200" />
+                          <label className="block text-xs font-medium text-indigo-800 mb-1">
+                            {newFieldType === 'vertical_table'
+                              ? 'Éléments / Paramètres prédéfinis du tableau (séparés par des virgules)'
+                              : 'Options (séparées par des virgules)'}
+                          </label>
+                          <input
+                            type="text"
+                            value={newFieldOptions}
+                            onChange={e => setNewFieldOptions(e.target.value)}
+                            placeholder={newFieldType === 'vertical_table' ? "Ex: Fe,Si,Mn,P,S,Cr,Ni,Mo,Cu,Al,Ti,V,Co,W,Pb,Sn,Zn,As,Bi,Sb,B,Zr,Nb,Ca,Mg,Na,K,Li,Ba,Sr" : "Ex: Option 1, Option 2, Option 3"}
+                            className="w-full text-sm px-2 py-1.5 rounded border border-indigo-200"
+                          />
                         </div>
                       )}
                     </div>
@@ -776,7 +783,7 @@ export function BuilderCMS() {
                       </label>
                       <div className="flex gap-2">
                         <button onClick={() => { setIsAddingField(false); setEditingFieldId(null); }} className="px-3 py-1.5 text-sm text-indigo-600 hover:bg-indigo-100 rounded font-medium">Annuler</button>
-                        <button onClick={handleAddField} className="px-3 py-1.5 text-sm text-white bg-indigo-600 hover:bg-indigo-700 rounded font-medium shadow-sm flex items-center"><Check className="w-4 h-4 mr-1"/> {editingFieldId ? "Enregistrer" : "Ajouter"}</button>
+                        <button onClick={handleAddField} className="px-3 py-1.5 text-sm text-white bg-indigo-600 hover:bg-indigo-700 rounded font-medium shadow-sm flex items-center"><Check className="w-4 h-4 mr-1" /> {editingFieldId ? "Enregistrer" : "Ajouter"}</button>
                       </div>
                     </div>
                   </div>
@@ -793,7 +800,7 @@ export function BuilderCMS() {
             <>
               <div className="p-5 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
                 <div className="flex-1 mr-4">
-                  <input 
+                  <input
                     type="text"
                     value={activeRequestTpl.name}
                     onChange={e => {
@@ -804,7 +811,7 @@ export function BuilderCMS() {
                     className="font-semibold text-lg text-slate-900 bg-transparent border-none focus:ring-0 p-0 w-full placeholder-slate-400"
                     placeholder="Nom du Formulaire"
                   />
-                  <input 
+                  <input
                     type="text"
                     value={activeRequestTpl.description}
                     onChange={e => {
@@ -819,9 +826,9 @@ export function BuilderCMS() {
                 <div className="flex items-center gap-4">
                   <label className="flex items-center cursor-pointer">
                     <div className="relative">
-                      <input 
-                        type="checkbox" 
-                        className="sr-only" 
+                      <input
+                        type="checkbox"
+                        className="sr-only"
                         checked={activeRequestTpl.isActive !== false}
                         onChange={e => {
                           const updated = { ...activeRequestTpl, isActive: e.target.checked };
@@ -889,7 +896,7 @@ export function BuilderCMS() {
                     </div>
                   ))}
                 </div>
-                
+
                 {isAddingField ? (
                   <div className="mt-4 bg-blue-50 border border-blue-200 p-4 rounded-lg shadow-sm">
                     <h5 className="text-sm font-semibold text-blue-900 mb-3">{editingFieldId ? "Modifier la Propriété (Demande)" : "Nouvelle Propriété (Demande)"}</h5>
@@ -908,7 +915,7 @@ export function BuilderCMS() {
                           <option value="multiselect">Sélection multiple</option>
                           <option value="boolean">Oui / Non (Case à cocher)</option>
                           <option value="analyses">Analyses (Modèles actifs)</option>
-                          <option value="materials">Matériaux du modèle (avec propriétés)</option>
+                          <option value="materials">Matériaux (Modèles actifs)</option>
                         </select>
                       </div>
                       {['select', 'multiselect'].includes(newFieldType) && (
@@ -925,7 +932,7 @@ export function BuilderCMS() {
                       </label>
                       <div className="flex gap-2">
                         <button onClick={() => { setIsAddingField(false); setEditingFieldId(null); }} className="px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-100 rounded font-medium">Annuler</button>
-                        <button onClick={handleAddField} className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded font-medium shadow-sm flex items-center"><Check className="w-4 h-4 mr-1"/> {editingFieldId ? "Enregistrer" : "Ajouter"}</button>
+                        <button onClick={handleAddField} className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded font-medium shadow-sm flex items-center"><Check className="w-4 h-4 mr-1" /> {editingFieldId ? "Enregistrer" : "Ajouter"}</button>
                       </div>
                     </div>
                   </div>
@@ -938,12 +945,12 @@ export function BuilderCMS() {
               </div>
             </>
           )}
-          
+
           {builderTab === 'reports' && activeReportTpl && (
             <div className="flex flex-col h-full">
               <div className="p-5 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
                 <div className="flex-1 mr-4">
-                  <input 
+                  <input
                     type="text"
                     value={activeReportTpl.name}
                     onChange={e => {
@@ -954,7 +961,7 @@ export function BuilderCMS() {
                     className="font-semibold text-lg text-slate-900 bg-transparent border-none focus:ring-0 p-0 w-full placeholder-slate-400"
                     placeholder="Nom du Modèle de Rapport"
                   />
-                  <input 
+                  <input
                     type="text"
                     value={activeReportTpl.description}
                     onChange={e => {
@@ -982,15 +989,15 @@ export function BuilderCMS() {
                   </div>
                 </div>
                 <div className="flex space-x-2">
-                  <input 
-                    type="file" 
-                    accept=".docx" 
-                    ref={fileInputRef} 
-                    onChange={handleFileUpload} 
-                    className="hidden" 
+                  <input
+                    type="file"
+                    accept=".docx"
+                    ref={fileInputRef}
+                    onChange={handleFileUpload}
+                    className="hidden"
                   />
-                  <button 
-                    onClick={() => fileInputRef.current?.click()} 
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
                     className="flex items-center px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-md text-sm font-medium transition-colors border border-blue-200"
                     title="Importer un fichier Word (.docx)"
                   >
@@ -1007,205 +1014,216 @@ export function BuilderCMS() {
               </div>
               <div className="flex-1 flex overflow-hidden">
                 <div className="flex-1 p-8 overflow-y-auto bg-slate-50 border-r border-slate-200 flex flex-col items-center justify-center">
-                   {activeReportTpl.fileName ? (
-                     <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-200 text-center max-w-md w-full">
-                       <FileText className="w-16 h-16 text-blue-500 mx-auto mb-4" />
-                       <h3 className="text-xl font-semibold text-slate-800 mb-2">Modèle Word importé</h3>
-                       <p className="text-slate-600 mb-6 font-medium">{activeReportTpl.fileName}</p>
-                       <button 
-                         onClick={() => fileInputRef.current?.click()} 
-                         className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition-colors"
-                       >
-                         Remplacer le fichier
-                       </button>
-                     </div>
-                   ) : (
-                     <div className="bg-white p-10 rounded-xl shadow-sm border border-dashed border-slate-300 text-center max-w-md w-full">
-                       <UploadCloud className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-                       <h3 className="text-lg font-medium text-slate-700 mb-2">Aucun fichier modèle</h3>
-                       <p className="text-sm text-slate-500 mb-6">Importez un fichier Word (.docx) contenant vos variables pour générer vos futurs rapports.</p>
-                       <button 
-                         onClick={() => fileInputRef.current?.click()} 
-                         className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors shadow-sm"
-                       >
-                         Importer un modèle (.docx)
-                       </button>
-                     </div>
-                   )}
+                  {activeReportTpl.fileName ? (
+                    <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-200 text-center max-w-md w-full">
+                      <FileText className="w-16 h-16 text-blue-500 mx-auto mb-4" />
+                      <h3 className="text-xl font-semibold text-slate-800 mb-2">Modèle Word importé</h3>
+                      <p className="text-slate-600 mb-6 font-medium">{activeReportTpl.fileName}</p>
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition-colors"
+                      >
+                        Remplacer le fichier
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="bg-white p-10 rounded-xl shadow-sm border border-dashed border-slate-300 text-center max-w-md w-full">
+                      <UploadCloud className="w-16 h-16 text-slate-300 mx-auto mb-4" />
+                      <h3 className="text-lg font-medium text-slate-700 mb-2">Aucun fichier modèle</h3>
+                      <p className="text-sm text-slate-500 mb-6">Importez un fichier Word (.docx) contenant vos variables pour générer vos futurs rapports.</p>
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors shadow-sm"
+                      >
+                        Importer un modèle (.docx)
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="w-80 bg-slate-50 p-4 overflow-y-auto">
-                   <h4 className="font-semibold text-sm text-slate-800 mb-3">Variables disponibles (.docx)</h4>
-                   <p className="text-xs text-slate-500 mb-4">Insérez ces variables directement dans votre fichier Word.</p>
-                   
-                   <div className="mb-4 bg-emerald-50 border border-emerald-100 rounded-lg p-3">
-                     <h5 className="text-xs font-bold text-emerald-800 mb-1">Affichage Conditionnel (ex: Photos)</h5>
-                     <p className="text-[10px] text-emerald-600 mb-2 leading-relaxed">
-                       Affichez un contenu <strong>uniquement</strong> si l'analyse correspond à un certain type (ex: Métallographie). Le nom de l'analyse est converti en minuscules sans accents.
+                  <h4 className="font-semibold text-sm text-slate-800 mb-3">Variables disponibles (.docx)</h4>
+                  <p className="text-xs text-slate-500 mb-4">Insérez ces variables directement dans votre fichier Word.</p>
+
+                  <div className="mb-4 bg-emerald-50 border border-emerald-100 rounded-lg p-3">
+                    <h5 className="text-xs font-bold text-emerald-800 mb-1">Affichage Conditionnel (ex: Photos)</h5>
+                    <p className="text-[10px] text-emerald-600 mb-2 leading-relaxed">
+                      Affichez un contenu <strong>uniquement</strong> si l'analyse correspond à un certain type (ex: Métallographie). Le nom de l'analyse est converti en minuscules sans accents.
+                    </p>
+                    <div className="bg-white p-2 rounded border border-emerald-200 mb-2">
+                      <code className="text-[10px] block font-mono text-slate-700">{"{{#analyses}}"}</code>
+                      <code className="text-[10px] block font-mono text-emerald-700 font-bold ml-2">{"{{#is_metallographie}}"}</code>
+                      <code className="text-[10px] block font-mono text-slate-600 ml-4">Section réservée à la métallographie...</code>
+                      <code className="text-[10px] block font-mono text-emerald-700 font-bold ml-2">{"{{/is_metallographie}}"}</code>
+                      <code className="text-[10px] block font-mono text-slate-700 mt-1">{"{{/analyses}}"}</code>
+                    </div>
+                    <p className="text-[9px] text-slate-500 italic mt-1">Fonctionne avec n'importe quelle analyse : {"is_durete_vickers"}, {"is_granulometrie"}, etc.</p>
+                  </div>
+                  <div className="mb-4 bg-purple-50 border border-purple-100 rounded-lg p-3">
+                    <h5 className="text-xs font-bold text-purple-800 mb-1">Tableaux Auto-Générés (Séries de valeurs)</h5>
+                    <p className="text-[10px] text-purple-600 mb-2 leading-relaxed">
+                      Si le nombre de mesures varie (ex: 3 mesures parfois, 15 mesures d'autres fois), le système peut <strong>générer automatiquement le tableau complet</strong>.
+                    </p>
+                    <div className="bg-white p-2 rounded border border-purple-200 mb-2">
+                      <code className="text-[9px] block font-mono text-slate-700 mb-1">{"{{#tables_series}}"}</code>
+                      <code className="text-[9px] block font-mono text-slate-700 mb-1 ml-2">{"{{titre}}"}</code>
+                      <code className="text-[9px] block font-mono text-slate-700 mb-1 ml-2 font-bold text-blue-600">{"{{@xml}}"}</code>
+                      <code className="text-[9px] block font-mono text-slate-700 mt-1">{"{{/tables_series}}"}</code>
+                    </div>
+                    <p className="text-[9px] text-slate-500 italic mt-1">N'utilisez pas de tableaux Word. Écrivez juste ces balises à la suite, et le tableau natif s'insérera à la place de {"{{@xml}}"}.</p>
+                  </div>
+                  <div className="mb-4 bg-cyan-50 border border-cyan-200 rounded-lg p-3">
+                     <h5 className="text-xs font-bold text-cyan-900 mb-1">Tableaux Verticaux Auto-Générés (Ex: ICP 30 éléments)</h5>
+                     <p className="text-[10px] text-cyan-700 mb-2 leading-relaxed">
+                       Génère automatiquement un tableau vertical complet (Élément | Résultat | Unité) pour chaque analyse de type Tableau vertical :
                      </p>
-                     <div className="bg-white p-2 rounded border border-emerald-200 mb-2">
-                       <code className="text-[10px] block font-mono text-slate-700">{"{{#analyses}}"}</code>
-                       <code className="text-[10px] block font-mono text-emerald-700 font-bold ml-2">{"{{#is_metallographie}}"}</code>
-                       <code className="text-[10px] block font-mono text-slate-600 ml-4">Section réservée à la métallographie...</code>
-                       <code className="text-[10px] block font-mono text-emerald-700 font-bold ml-2">{"{{/is_metallographie}}"}</code>
-                       <code className="text-[10px] block font-mono text-slate-700 mt-1">{"{{/analyses}}"}</code>
-                     </div>
-                     <p className="text-[9px] text-slate-500 italic mt-1">Fonctionne avec n'importe quelle analyse : {"is_durete_vickers"}, {"is_granulometrie"}, etc.</p>
-                   </div>
-                   <div className="mb-4 bg-purple-50 border border-purple-100 rounded-lg p-3">
-                     <h5 className="text-xs font-bold text-purple-800 mb-1">Tableaux Auto-Générés (Séries de valeurs)</h5>
-                     <p className="text-[10px] text-purple-600 mb-2 leading-relaxed">
-                       Si le nombre de mesures varie (ex: 3 mesures parfois, 15 mesures d'autres fois), le système peut <strong>générer automatiquement le tableau complet</strong>.
-                     </p>
-                     <div className="bg-white p-2 rounded border border-purple-200 mb-2">
-                       <code className="text-[9px] block font-mono text-slate-700 mb-1">{"{{#tables_series}}"}</code>
-                       <code className="text-[9px] block font-mono text-slate-700 mb-1 ml-2">{"{{titre}}"}</code>
+                     <div className="bg-white p-2 rounded border border-cyan-200 mb-2">
+                       <code className="text-[9px] block font-mono text-slate-700 mb-1">{"{{#tables_verticales}}"}</code>
+                       <code className="text-[9px] block font-mono text-slate-700 mb-1 ml-2">{"{{titre}} ({{echantillon}})"}</code>
                        <code className="text-[9px] block font-mono text-slate-700 mb-1 ml-2 font-bold text-blue-600">{"{{@xml}}"}</code>
-                       <code className="text-[9px] block font-mono text-slate-700 mt-1">{"{{/tables_series}}"}</code>
+                       <code className="text-[9px] block font-mono text-slate-700 mt-1">{"{{/tables_verticales}}"}</code>
                      </div>
-                     <p className="text-[9px] text-slate-500 italic mt-1">N'utilisez pas de tableaux Word. Écrivez juste ces balises à la suite, et le tableau natif s'insérera à la place de {"{{@xml}}"}.</p>
                    </div>
-                   
-                   <div className="mb-4 bg-indigo-50 border border-indigo-100 rounded-lg p-3">
-                     <h5 className="text-xs font-bold text-indigo-800 mb-1">Tableaux Auto-Générés (Regroupement d'analyses)</h5>
-                     <p className="text-[10px] text-indigo-600 mb-2 leading-relaxed">
-                       Pour créer un tableau regroupant tous vos échantillons et lister les résultats (ex: D10, D50, D90) en colonnes :
-                     </p>
-                     <div className="bg-white p-2 rounded border border-indigo-200 mb-2">
-                       <code className="text-[9px] block font-mono text-slate-700 mb-1">{"{{#tables_analyses}}"}</code>
-                       <code className="text-[9px] block font-mono text-slate-700 mb-1 ml-2">{"{{titre}}"}</code>
-                       <code className="text-[9px] block font-mono text-slate-700 mb-1 ml-2 font-bold text-blue-600">{"{{@xml}}"}</code>
-                       <code className="text-[9px] block font-mono text-slate-700 mt-1">{"{{/tables_analyses}}"}</code>
-                     </div>
-                     <p className="text-[9px] text-slate-500 italic mt-1">Cette boucle rassemble tous les échantillons dans un tableau Word complet pour une analyse donnée.</p>
-                   </div>
-                   
-                   <div className="mb-4 bg-purple-50 border border-purple-100 rounded-lg p-3 hidden">
-                     <h5 className="text-xs font-bold text-purple-800 mb-1">Tableaux Horizontaux Dynamiques</h5>
-                     <p className="text-[10px] text-purple-600 mb-2 leading-relaxed">
-                       Pour afficher <strong>n'importe quelle série de mesures</strong> en colonnes, utilisez la boucle <code className="font-mono text-purple-800">{"{{#series_resultats}}"}</code>. Elle affichera un tableau générique pour tous les paramètres multi-valeurs de l'analyse, peu importe leur nom.
-                     </p>
-                     <div className="bg-white p-2 rounded border border-purple-200 mb-2 overflow-x-auto">
-                       <code className="text-[9px] block font-mono text-slate-700 mb-1">{"{{#analyses}}"}</code>
-                       <code className="text-[9px] block font-mono text-slate-700 mb-1 ml-2">{"{{#has_series}}"}</code>
-                       <table className="text-[9px] w-full border-collapse ml-2">
-                         <thead>
-                           <tr><th className="border p-1 text-left">Echantillon</th><th className="border p-1 text-left">Paramètre</th><th className="border p-1 text-left">Mesure 1</th><th className="border p-1 text-left">Mesure 2</th><th className="border p-1 text-left">Moyenne</th></tr>
-                         </thead>
-                         <tbody>
-                           <tr>
-                             <td className="border p-1 font-mono">{"{{#series_resultats}}{{ echantillon }}"}</td>
-                             <td className="border p-1 font-mono">{"{{nom_parametre}}"}</td>
-                             <td className="border p-1 font-mono">{"{{v1}}"}</td>
-                             <td className="border p-1 font-mono">{"{{v2}}"}</td>
-                             <td className="border p-1 font-mono">{"{{stats}}{{/series_resultats}}"}</td>
-                           </tr>
-                         </tbody>
-                       </table>
-                       <code className="text-[9px] block font-mono text-slate-700 mt-1 ml-2">{"{{/has_series}}"}</code>
-                       <code className="text-[9px] block font-mono text-slate-700 mt-1">{"{{/analyses}}"}</code>
-                     </div>
-                     <p className="text-[9px] text-slate-500 italic mt-1">Variables disp: {"{{v1}} à {{v10}}, {{moyenne}}, {{ecart_type}}, {{stats}}"}</p>
-                   </div>
+                  <div className="mb-4 bg-indigo-50 border border-indigo-100 rounded-lg p-3">
+                    <h5 className="text-xs font-bold text-indigo-800 mb-1">Tableaux Auto-Générés (Regroupement d'analyses)</h5>
+                    <p className="text-[10px] text-indigo-600 mb-2 leading-relaxed">
+                      Pour créer un tableau regroupant tous vos échantillons et lister les résultats (ex: D10, D50, D90) en colonnes :
+                    </p>
+                    <div className="bg-white p-2 rounded border border-indigo-200 mb-2">
+                      <code className="text-[9px] block font-mono text-slate-700 mb-1">{"{{#tables_analyses}}"}</code>
+                      <code className="text-[9px] block font-mono text-slate-700 mb-1 ml-2">{"{{titre}}"}</code>
+                      <code className="text-[9px] block font-mono text-slate-700 mb-1 ml-2 font-bold text-blue-600">{"{{@xml}}"}</code>
+                      <code className="text-[9px] block font-mono text-slate-700 mt-1">{"{{/tables_analyses}}"}</code>
+                    </div>
+                    <p className="text-[9px] text-slate-500 italic mt-1">Cette boucle rassemble tous les échantillons dans un tableau Word complet pour une analyse donnée.</p>
+                  </div>
 
-                   <div className="mb-4 bg-blue-50 border border-blue-100 rounded-lg p-3">
-                     <h5 className="text-xs font-bold text-blue-800 mb-1">Tableaux Verticaux (Boucles)</h5>
-                     <p className="text-[10px] text-blue-600 mb-2 leading-relaxed">
-                       Pour un tableau propre (ex: listes de résultats multiples), créez un tableau dans Word et encadrez la ligne avec ces balises spéciales :
-                     </p>
-                     <div className="bg-white p-2 rounded border border-blue-200 mb-2">
-                       <code className="text-[10px] block font-mono text-slate-700">{"{{#analyses}}"}</code>
-                       <code className="text-[10px] block font-mono text-slate-700 pl-2">Analyse: {"{{nom}}"} / {"{{technicien}}"}</code>
-                       <code className="text-[10px] block font-mono text-slate-700 pl-2">{"{{#valeurs}}"}</code>
-                       <code className="text-[10px] block font-mono text-slate-700 pl-4">- {"{{cle}}"} : {"{{valeur}}"}</code>
-                       <code className="text-[10px] block font-mono text-slate-700 pl-2">{"{{/valeurs}}"}</code>
-                       <code className="text-[10px] block font-mono text-slate-700">{"{{/analyses}}"}</code>
-                     </div>
-                   </div>
+                  <div className="mb-4 bg-purple-50 border border-purple-100 rounded-lg p-3 hidden">
+                    <h5 className="text-xs font-bold text-purple-800 mb-1">Tableaux Horizontaux Dynamiques</h5>
+                    <p className="text-[10px] text-purple-600 mb-2 leading-relaxed">
+                      Pour afficher <strong>n'importe quelle série de mesures</strong> en colonnes, utilisez la boucle <code className="font-mono text-purple-800">{"{{#series_resultats}}"}</code>. Elle affichera un tableau générique pour tous les paramètres multi-valeurs de l'analyse, peu importe leur nom.
+                    </p>
+                    <div className="bg-white p-2 rounded border border-purple-200 mb-2 overflow-x-auto">
+                      <code className="text-[9px] block font-mono text-slate-700 mb-1">{"{{#analyses}}"}</code>
+                      <code className="text-[9px] block font-mono text-slate-700 mb-1 ml-2">{"{{#has_series}}"}</code>
+                      <table className="text-[9px] w-full border-collapse ml-2">
+                        <thead>
+                          <tr><th className="border p-1 text-left">Echantillon</th><th className="border p-1 text-left">Paramètre</th><th className="border p-1 text-left">Mesure 1</th><th className="border p-1 text-left">Mesure 2</th><th className="border p-1 text-left">Moyenne</th></tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td className="border p-1 font-mono">{"{{#series_resultats}}{{ echantillon }}"}</td>
+                            <td className="border p-1 font-mono">{"{{nom_parametre}}"}</td>
+                            <td className="border p-1 font-mono">{"{{v1}}"}</td>
+                            <td className="border p-1 font-mono">{"{{v2}}"}</td>
+                            <td className="border p-1 font-mono">{"{{stats}}{{/series_resultats}}"}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                      <code className="text-[9px] block font-mono text-slate-700 mt-1 ml-2">{"{{/has_series}}"}</code>
+                      <code className="text-[9px] block font-mono text-slate-700 mt-1">{"{{/analyses}}"}</code>
+                    </div>
+                    <p className="text-[9px] text-slate-500 italic mt-1">Variables disp: {"{{v1}} à {{v10}}, {{moyenne}}, {{ecart_type}}, {{stats}}"}</p>
+                  </div>
 
-                   <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3">
-                     <h5 className="text-xs font-bold text-amber-900 mb-1">Galerie de micrographies avec images intégrées</h5>
-                     <p className="text-[10px] text-amber-800 mb-2 leading-relaxed">
-                       Cette boucle répète automatiquement une section pour chaque image enregistrée dans les résultats d’analyse. Le tag image est spécial : il insère le fichier dans Word, pas une URL ni du texte.
-                     </p>
-                     <div className="bg-white p-2 rounded border border-amber-200 mb-2">
-                       <code className="text-[10px] block font-mono text-slate-700">{"{{#micrographies}}"}</code>
-                       <code className="text-[10px] block font-mono text-slate-700 ml-2">Image {"{{numero}}"} — {"{{nom}}"}</code>
-                       <code className="text-[10px] block font-mono text-blue-700 font-bold ml-2">{"{{%image}}"} <span className="font-normal text-slate-500">← insère la vraie image</span></code>
-                       <code className="text-[10px] block font-mono text-slate-700 ml-2">Commentaire : {"{{commentaire}}"}</code>
-                       <code className="text-[10px] block font-mono text-slate-700">{"{{/micrographies}}"}</code>
-                     </div>
-                     <p className="text-[9px] text-amber-900 italic">Placez chaque balise dans un paragraphe Word distinct si possible. Les images sont ajustées à la largeur disponible sans déformation.</p>
-                   </div>
+                  <div className="mb-4 bg-blue-50 border border-blue-100 rounded-lg p-3">
+                    <h5 className="text-xs font-bold text-blue-800 mb-1">Tableaux Verticaux (Boucles)</h5>
+                    <p className="text-[10px] text-blue-600 mb-2 leading-relaxed">
+                      Pour un tableau propre (ex: listes de résultats multiples), créez un tableau dans Word et encadrez la ligne avec ces balises spéciales :
+                    </p>
+                    <div className="bg-white p-2 rounded border border-blue-200 mb-2">
+                      <code className="text-[10px] block font-mono text-slate-700">{"{{#analyses}}"}</code>
+                      <code className="text-[10px] block font-mono text-slate-700 pl-2">Analyse: {"{{nom}}"} / {"{{technicien}}"}</code>
+                      <code className="text-[10px] block font-mono text-slate-700 pl-2">{"{{#valeurs}}"}</code>
+                      <code className="text-[10px] block font-mono text-slate-700 pl-4">- {"{{cle}}"} : {"{{valeur}}"}</code>
+                      <code className="text-[10px] block font-mono text-slate-700 pl-2">{"{{/valeurs}}"}</code>
+                      <code className="text-[10px] block font-mono text-slate-700">{"{{/analyses}}"}</code>
+                    </div>
+                  </div>
 
-                   <div className="mb-4 bg-teal-50 border border-teal-100 rounded-lg p-3">
-                     <h5 className="text-xs font-bold text-teal-800 mb-1">Liste des échantillons</h5>
-                     <p className="text-[10px] text-teal-600 mb-2 leading-relaxed">
-                       Pour lister tous les échantillons de ce rapport, utilisez cette boucle :
-                     </p>
-                     <div className="bg-white p-2 rounded border border-teal-200 mb-2">
-                       <code className="text-[10px] block font-mono text-slate-700">{"{{#echantillons}}"}</code>
-                       <code className="text-[10px] block font-mono text-slate-700 pl-4">- {"{{id}} | {{barcode}} | {{materiau}} | {{projet}}"}</code>
-                       <code className="text-[10px] block font-mono text-slate-700">{"{{/echantillons}}"}</code>
-                     </div>
-                     <p className="text-[9px] text-slate-500 italic mt-1">N'oubliez pas les doubles accolades autour des variables internes !</p>
-                   </div>
+                  <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                    <h5 className="text-xs font-bold text-amber-900 mb-1">Galerie de micrographies avec images intégrées</h5>
+                    <p className="text-[10px] text-amber-800 mb-2 leading-relaxed">
+                      Cette boucle répète automatiquement une section pour chaque image enregistrée dans les résultats d’analyse. Le tag image est spécial : il insère le fichier dans Word, pas une URL ni du texte.
+                    </p>
+                    <div className="bg-white p-2 rounded border border-amber-200 mb-2">
+                      <code className="text-[10px] block font-mono text-slate-700">{"{{#micrographies}}"}</code>
+                      <code className="text-[10px] block font-mono text-slate-700 ml-2">Image {"{{numero}}"} — {"{{nom}}"}</code>
+                      <code className="text-[10px] block font-mono text-blue-700 font-bold ml-2">{"{{%image}}"} <span className="font-normal text-slate-500">← insère la vraie image</span></code>
+                      <code className="text-[10px] block font-mono text-slate-700 ml-2">Commentaire : {"{{commentaire}}"}</code>
+                      <code className="text-[10px] block font-mono text-slate-700">{"{{/micrographies}}"}</code>
+                    </div>
+                    <p className="text-[9px] text-amber-900 italic">Placez chaque balise dans un paragraphe Word distinct si possible. Les images sont ajustées à la largeur disponible sans déformation.</p>
+                  </div>
 
-                   <h5 className="font-semibold text-xs text-slate-800 mb-2 uppercase tracking-wide">Variables simples</h5>
-                   <ul className="space-y-2 text-sm">
-                      {[
-                        { label: "ID Demande", tag: "{{demande.id}}" },
-                        { label: "Conclusion de la demande", tag: "{{demande.conclusion}}" },
-                        { label: "Date de création", tag: "{{date.jour}}" },
-                        { label: "Demandeur - Nom", tag: "{{demandeur.nom}}" },
-                        { label: "Demandeur - Email", tag: "{{demandeur.email}}" },
-                        { label: "Demandeur - Entreprise", tag: "{{demandeur.entreprise}}" },
-                        { label: "Échantillon - ID", tag: "{{echantillon.id}}" },
-                        { label: "Échantillon - Code Barre", tag: "{{echantillon.barcode}}" },
-                        { label: "Échantillon - Matériau", tag: "{{echantillon.materiau}}" },
-                        { label: "Échantillon - Projet", tag: "{{echantillon.projet}}" },
-                        { label: "Analyse - Nom", tag: "{{analyse.nom}}" },
-                        { label: "Analyse - Norme", tag: "{{analyse.norme}}" },
-                        { label: "Analyse - Technicien", tag: "{{analyse.technicien}}" },
-                        { label: "Résultats - Tableau", tag: "{{resultats.tableau}}" },
-                        { label: "Images - Nombre / indication galerie (texte)", tag: "{{images.galerie}}" },
-                        { label: "Remarques", tag: "{{analyse.remarques}}" },
-                        // Custom fields for Request
-                        ...requestTemplates.flatMap(tpl => tpl.fields.map(f => ({
-                           label: `Demande: ${f.name}`,
-                           tag: `{{demande.custom.${f.id}}}`
-                        }))),
-                        // Custom fields for Material
-                        ...materialTemplates.flatMap(tpl => tpl.fields.map(f => ({
-                           label: `Échantillon: ${f.name}`,
-                           tag: `{{echantillon.custom.${f.id}}}`
-                        })))
-                      ].reduce((unique, o) => {
-                          if(!unique.some(obj => obj.tag === o.tag)) {
-                            unique.push(o);
-                          }
-                          return unique;
-                      }, [] as {label: string, tag: string}[]).map(v => (
-                         <li key={v.tag}>
-                           <button 
-                             onClick={() => handleCopyTag(v.tag)}
-                             className="w-full text-left px-3 py-2 bg-white border border-slate-200 rounded hover:border-blue-300 hover:text-blue-600 transition-colors flex justify-between items-center"
-                           >
-                              <div>
-                                <div className="font-mono text-xs font-bold">{v.tag}</div>
-                                <div className="text-[10px] text-slate-500 mt-0.5">{v.label}</div>
-                              </div>
-                              {copiedTag === v.tag ? (
-                                <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded text-[10px] font-medium flex items-center">
-                                  <Check className="w-3 h-3 mr-0.5" />
-                                  Copié
-                                </span>
-                              ) : (
-                                <Copy className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-500" />
-                              )}
-                           </button>
-                         </li>
-                      ))}
-                   </ul>
+                  <div className="mb-4 bg-teal-50 border border-teal-100 rounded-lg p-3">
+                    <h5 className="text-xs font-bold text-teal-800 mb-1">Liste des échantillons</h5>
+                    <p className="text-[10px] text-teal-600 mb-2 leading-relaxed">
+                      Pour lister tous les échantillons de ce rapport, utilisez cette boucle :
+                    </p>
+                    <div className="bg-white p-2 rounded border border-teal-200 mb-2">
+                      <code className="text-[10px] block font-mono text-slate-700">{"{{#echantillons}}"}</code>
+                      <code className="text-[10px] block font-mono text-slate-700 pl-4">- {"{{id}} | {{barcode}} | {{materiau}} | {{projet}}"}</code>
+                      <code className="text-[10px] block font-mono text-slate-700">{"{{/echantillons}}"}</code>
+                    </div>
+                    <p className="text-[9px] text-slate-500 italic mt-1">N'oubliez pas les doubles accolades autour des variables internes !</p>
+                  </div>
+
+                  <h5 className="font-semibold text-xs text-slate-800 mb-2 uppercase tracking-wide">Variables simples</h5>
+                  <ul className="space-y-2 text-sm">
+                    {[
+                      { label: "ID Demande", tag: "{{demande.id}}" },
+                      { label: "Conclusion de la demande", tag: "{{demande.conclusion}}" },
+                      { label: "Date de création", tag: "{{date.jour}}" },
+                      { label: "Demandeur - Nom", tag: "{{demandeur.nom}}" },
+                      { label: "Demandeur - Email", tag: "{{demandeur.email}}" },
+                      { label: "Demandeur - Entreprise", tag: "{{demandeur.entreprise}}" },
+                      { label: "Échantillon - ID", tag: "{{echantillon.id}}" },
+                      { label: "Échantillon - Code Barre", tag: "{{echantillon.barcode}}" },
+                      { label: "Échantillon - Matériau", tag: "{{echantillon.materiau}}" },
+                      { label: "Échantillon - Projet", tag: "{{echantillon.projet}}" },
+                      { label: "Analyse - Nom", tag: "{{analyse.nom}}" },
+                      { label: "Analyse - Norme", tag: "{{analyse.norme}}" },
+                      { label: "Analyse - Technicien", tag: "{{analyse.technicien}}" },
+                      { label: "Résultats - Tableau", tag: "{{resultats.tableau}}" },
+                      { label: "Images - Nombre / indication galerie (texte)", tag: "{{images.galerie}}" },
+                      { label: "Remarques", tag: "{{analyse.remarques}}" },
+                      // Custom fields for Request
+                      ...requestTemplates.flatMap(tpl => tpl.fields.map(f => ({
+                        label: `Demande: ${f.name}`,
+                        tag: `{{demande.custom.${f.id}}}`
+                      }))),
+                      // Custom fields for Material
+                      ...materialTemplates.flatMap(tpl => tpl.fields.map(f => ({
+                        label: `Échantillon: ${f.name}`,
+                        tag: `{{echantillon.custom.${f.id}}}`
+                      })))
+                    ].reduce((unique, o) => {
+                      if (!unique.some(obj => obj.tag === o.tag)) {
+                        unique.push(o);
+                      }
+                      return unique;
+                    }, [] as { label: string, tag: string }[]).map(v => (
+                      <li key={v.tag}>
+                        <button
+                          onClick={() => handleCopyTag(v.tag)}
+                          className="w-full text-left px-3 py-2 bg-white border border-slate-200 rounded hover:border-blue-300 hover:text-blue-600 transition-colors flex justify-between items-center"
+                        >
+                          <div>
+                            <div className="font-mono text-xs font-bold">{v.tag}</div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">{v.label}</div>
+                          </div>
+                          {copiedTag === v.tag ? (
+                            <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded text-[10px] font-medium flex items-center">
+                              <Check className="w-3 h-3 mr-0.5" />
+                              Copié
+                            </span>
+                          ) : (
+                            <Copy className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-500" />
+                          )}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               </div>
 
@@ -1213,7 +1231,7 @@ export function BuilderCMS() {
           )}
         </div>
       </div>
-      
+
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden">
@@ -1237,14 +1255,14 @@ export function BuilderCMS() {
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
             <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
               <h3 className="font-semibold text-slate-800">Options du Modèle</h3>
-              <button onClick={() => setIsOptionsOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5"/></button>
+              <button onClick={() => setIsOptionsOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-5 space-y-4">
               {builderTab === 'materials' && activeMaterialTpl && (
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Catégorie</label>
-                  <select 
-                    value={activeMaterialTpl.category} 
+                  <select
+                    value={activeMaterialTpl.category}
                     onChange={e => {
                       const updated = { ...activeMaterialTpl, category: e.target.value as any };
                       updateMaterialTemplate(activeMaterialTpl.id, updated);
@@ -1265,9 +1283,9 @@ export function BuilderCMS() {
                 <>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Catégorie</label>
-                    <input 
+                    <input
                       type="text"
-                      value={activeAnalysisTpl.category} 
+                      value={activeAnalysisTpl.category}
                       onChange={e => {
                         const updated = { ...activeAnalysisTpl, category: e.target.value };
                         updateAnalysisTemplate(activeAnalysisTpl.id, updated);
@@ -1278,9 +1296,9 @@ export function BuilderCMS() {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Norme / Référence (Optionnel)</label>
-                    <input 
+                    <input
                       type="text"
-                      value={activeAnalysisTpl.standardRef || ''} 
+                      value={activeAnalysisTpl.standardRef || ''}
                       onChange={e => {
                         const updated = { ...activeAnalysisTpl, standardRef: e.target.value };
                         updateAnalysisTemplate(activeAnalysisTpl.id, updated);
@@ -1293,9 +1311,9 @@ export function BuilderCMS() {
                 </>
               )}
               {builderTab === 'requests' && activeRequestTpl && (
-                 <div className="text-sm text-slate-500 italic p-3 bg-slate-50 rounded-lg border border-slate-100">
-                   Aucune option supplémentaire pour les formulaires de demande pour le moment.
-                 </div>
+                <div className="text-sm text-slate-500 italic p-3 bg-slate-50 rounded-lg border border-slate-100">
+                  Aucune option supplémentaire pour les formulaires de demande pour le moment.
+                </div>
               )}
             </div>
             <div className="p-4 border-t border-slate-200 bg-slate-50 flex justify-end">

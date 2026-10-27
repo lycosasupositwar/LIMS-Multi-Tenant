@@ -131,11 +131,11 @@ export function ReportPreviewModal({
   };
 
   /**
-     * Génère un PDF A4 multi-pages propre :
-     * - Répète l'en-tête et le pied de page sur chaque feuille
-     * - Ne coupe jamais un bloc d'analyse ou de texte en deux
-     * - Ajoute la numérotation des pages (Page X / Y)
-     */
+   * Génère un PDF A4 multi-pages propre :
+   * - Répète l'en-tête et le pied de page sur chaque feuille
+   * - Ne coupe jamais un bloc d'analyse ou de texte en deux
+   * - Ajoute la numérotation des pages (Page X / Y)
+   */
   const buildPdfFromHtmlPreview = async (): Promise<jsPDF | null> => {
     const container = pdfRef.current;
     if (!container) return null;
@@ -259,8 +259,32 @@ export function ReportPreviewModal({
   const getDocData = () => {
     const todayFormatted = new Intl.DateTimeFormat("fr-FR").format(new Date());
 
+    const sanitizeKey = (str: string) =>
+      str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
+
+    const filterNonEmptySeries = (arr: any[]): any[] =>
+      arr.filter(val => val !== '' && val !== null && val !== undefined && String(val).trim() !== '');
+
+    const parseValidNumbers = (arr: any[]): number[] =>
+      filterNonEmptySeries(arr).map(Number).filter((n: number) => !isNaN(n));
+
+    const formatResultValueAsText = (v: any, expected?: any): string => {
+      if (v && typeof v === 'object' && Array.isArray(v.images)) {
+        return `${v.images.length} image(s) de micrographie`;
+      }
+      if (expected?.type === 'vertical_table' && Array.isArray(v)) {
+        const filled = v.filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''));
+        return filled.map((r: any) => `${r.element || '-'}: ${r.value !== '' && r.value !== undefined ? r.value : '-'}${r.unit || expected?.unit ? ' ' + (r.unit || expected.unit) : ''}`).join(', ');
+      }
+      if (Array.isArray(v)) {
+        return filterNonEmptySeries(v).join(', ');
+      }
+      return v !== undefined && v !== null ? String(v) : '';
+    };
+
     const analysesData = reportAnalyses.map((a: any) => {
       const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
+      const safeAnalysisName = sanitizeKey(t?.name || "inconnu");
 
       const baseObj: any = {
         nom: t?.name || "Non défini",
@@ -271,18 +295,21 @@ export function ReportPreviewModal({
         remarques: a.notes || "Aucune",
         echantillon: a.sampleId,
         date: a.date ? new Intl.DateTimeFormat("fr-FR").format(new Date(a.date)) : todayFormatted,
-        valeurs: Object.entries(a.results || {}).map(([k, v]) => ({
-          cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k,
-          valeur: v && typeof v === 'object' && Array.isArray((v as any).images)
-            ? `${(v as any).images.length} image(s) de micrographie`
-            : Array.isArray(v) ? v.join(', ') : v
-        })),
+        valeurs: Object.entries(a.results || {}).map(([k, v]) => {
+          const expected = t?.expectedResults?.find((er: any) => er.id === k);
+          return {
+            cle: expected?.name || k,
+            valeur: formatResultValueAsText(v, expected)
+          };
+        }),
+        [`is_${safeAnalysisName}`]: true,
         micrographies: Object.entries(a.results || {}).flatMap(([k, v]) => {
           const expected = t?.expectedResults?.find((er: any) => er.id === k);
           const images = v && typeof v === 'object' && Array.isArray((v as any).images) ? (v as any).images : [];
           return images.map((img: any, index: number) => ({
             analyse: t?.name || 'Micrographie',
             champ: expected?.name || k,
+            echantillon: a.sampleId || '',
             numero: index + 1,
             nom: img.name || `Image ${index + 1}`,
             commentaire: img.comment || '',
@@ -291,21 +318,36 @@ export function ReportPreviewModal({
         })
       };
 
-      const sanitizeKey = (str: string) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
       const series_resultats: any[] = [];
+      const tableaux_verticaux: any[] = [];
 
       Object.entries(a.results || {}).forEach(([k, v]) => {
         const expected = t?.expectedResults?.find((er: any) => er.id === k);
         const fieldName = expected?.name || k;
         const safeName = sanitizeKey(fieldName);
 
-        baseObj[`res_${safeName}`] = v && typeof v === 'object' && Array.isArray((v as any).images) ? `${(v as any).images.length} image(s) de micrographie` : Array.isArray(v) ? v.join(', ') : v;
+        baseObj[`res_${safeName}`] = formatResultValueAsText(v, expected);
 
-        if (Array.isArray(v)) {
-          v.forEach((val, i) => {
+        if (expected?.type === 'vertical_table' && Array.isArray(v)) {
+          const filledRows = v
+            .filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''))
+            .map((r: any) => ({
+              element: r.element || '-',
+              valeur: r.value !== undefined && r.value !== '' ? String(r.value) : '-',
+              unite: r.unit || expected.unit || ''
+            }));
+          baseObj[`lignes_${safeName}`] = filledRows;
+          tableaux_verticaux.push({
+            nom_parametre: fieldName,
+            echantillon: a.sampleId,
+            lignes: filledRows
+          });
+        } else if (Array.isArray(v)) {
+          const cleanVals = filterNonEmptySeries(v);
+          cleanVals.forEach((val, i) => {
             baseObj[`res_${safeName}_v${i + 1}`] = val;
           });
-          const numVals = v.map(Number).filter((n: number) => !isNaN(n));
+          const numVals = parseValidNumbers(v);
           let mean: number | null = null;
           let stdDev: number | null = null;
           if (numVals.length > 0) {
@@ -323,16 +365,16 @@ export function ReportPreviewModal({
             series_resultats.push({
               nom_parametre: fieldName,
               echantillon: a.sampleId,
-              v1: v[0] !== undefined ? v[0] : "-",
-              v2: v[1] !== undefined ? v[1] : "-",
-              v3: v[2] !== undefined ? v[2] : "-",
-              v4: v[3] !== undefined ? v[3] : "-",
-              v5: v[4] !== undefined ? v[4] : "-",
-              v6: v[5] !== undefined ? v[5] : "-",
-              v7: v[6] !== undefined ? v[6] : "-",
-              v8: v[7] !== undefined ? v[7] : "-",
-              v9: v[8] !== undefined ? v[8] : "-",
-              v10: v[9] !== undefined ? v[9] : "-",
+              v1: cleanVals[0] !== undefined ? cleanVals[0] : "-",
+              v2: cleanVals[1] !== undefined ? cleanVals[1] : "-",
+              v3: cleanVals[2] !== undefined ? cleanVals[2] : "-",
+              v4: cleanVals[3] !== undefined ? cleanVals[3] : "-",
+              v5: cleanVals[4] !== undefined ? cleanVals[4] : "-",
+              v6: cleanVals[5] !== undefined ? cleanVals[5] : "-",
+              v7: cleanVals[6] !== undefined ? cleanVals[6] : "-",
+              v8: cleanVals[7] !== undefined ? cleanVals[7] : "-",
+              v9: cleanVals[8] !== undefined ? cleanVals[8] : "-",
+              v10: cleanVals[9] !== undefined ? cleanVals[9] : "-",
               stats: mean !== null && stdDev !== null ? `${mean.toFixed(2)} ± ${stdDev!.toFixed(2)}` : "-",
               moyenne: mean !== null ? mean.toFixed(2) : "-",
               ecart_type: stdDev !== null ? stdDev.toFixed(2) : "-"
@@ -343,6 +385,8 @@ export function ReportPreviewModal({
 
       baseObj.series_resultats = series_resultats;
       baseObj.has_series = series_resultats.length > 0;
+      baseObj.tableaux_verticaux = tableaux_verticaux;
+      baseObj.has_vertical_table = tableaux_verticaux.length > 0;
 
       return baseObj;
     });
@@ -359,9 +403,11 @@ export function ReportPreviewModal({
       if (!t) return;
       Object.entries(a.results || {}).forEach(([k, v]) => {
         const expected = t.expectedResults?.find((er: any) => er.id === k);
-        if (Array.isArray(v) && v.length > 0) {
+        if (expected?.type === 'number_series' && Array.isArray(v) && v.length > 0) {
+          const cleanVals = filterNonEmptySeries(v);
+          if (cleanVals.length === 0) return;
           if (!seriesGroups[k]) seriesGroups[k] = { paramName: expected?.name || k, rows: [] };
-          const numVals = v.map(Number).filter((n: number) => !isNaN(n));
+          const numVals = parseValidNumbers(v);
           let stats = "-";
           if (numVals.length > 0) {
             const mean = numVals.reduce((sum: number, n: number) => sum + n, 0) / numVals.length;
@@ -369,7 +415,7 @@ export function ReportPreviewModal({
             const stdDev = numVals.length > 1 ? Math.sqrt(variance) : 0;
             stats = `${mean.toFixed(2)} ± ${stdDev.toFixed(2)}`;
           }
-          seriesGroups[k].rows.push({ echantillon: a.sampleId, valeurs: v, stats: stats });
+          seriesGroups[k].rows.push({ echantillon: a.sampleId, valeurs: cleanVals, stats: stats });
         }
       });
     });
@@ -400,6 +446,59 @@ export function ReportPreviewModal({
       }
     });
 
+    // Génération des tableaux verticaux Word natifs (ex: ICP 30 éléments)
+    const tables_verticales: any[] = [];
+    reportAnalyses.forEach((a: any) => {
+      const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
+      if (!t) return;
+      Object.entries(a.results || {}).forEach(([k, v]) => {
+        const expected = t.expectedResults?.find((er: any) => er.id === k);
+        if (expected?.type === 'vertical_table' && Array.isArray(v) && v.length > 0) {
+          const filledRows = v.filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''));
+          if (filledRows.length === 0) return;
+
+          const tColor = labSettings?.tableStyles?.borderColor || "000000";
+          const tSize = labSettings?.tableStyles?.borderSize ?? 4;
+          const headerBg = labSettings?.tableStyles?.headerBgColor || "E2E8F0";
+
+          let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
+
+          const addHeaderCell = (text: string) => {
+            xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${headerBg}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`;
+          };
+          const addDataCell = (text: string, align: 'left' | 'center' = 'center', bold = false) => {
+            xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="${align}"/></w:pPr><w:r>${bold ? '<w:rPr><w:b/></w:rPr>' : ''}<w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`;
+          };
+
+          xml += `<w:tr><w:trPr><w:trHeight w:val="360"/></w:trPr>`;
+          addHeaderCell("Élément / Paramètre");
+          addHeaderCell("Résultat");
+          addHeaderCell("Unité");
+          xml += `</w:tr>`;
+
+          filledRows.forEach((row: any) => {
+            xml += `<w:tr><w:trPr><w:trHeight w:val="320"/></w:trPr>`;
+            addDataCell(row.element || "-", 'left', true);
+            addDataCell(row.value !== undefined && row.value !== "" ? String(row.value) : "-", 'center', false);
+            addDataCell(row.unit || expected.unit || "-", 'center', false);
+            xml += `</w:tr>`;
+          });
+
+          xml += `</w:tbl>`;
+          tables_verticales.push({
+            titre: expected.name,
+            echantillon: a.sampleId,
+            lignes: filledRows.map((r: any) => ({
+              element: r.element || '-',
+              valeur: r.value !== undefined && r.value !== '' ? String(r.value) : '-',
+              unite: r.unit || expected.unit || '-'
+            })),
+            xml
+          });
+        }
+      });
+    });
+
     const tables_analyses: any[] = [];
     const analysesGroups: Record<string, { templateName: string, columns: any[], rows: any[] }> = {};
 
@@ -408,10 +507,14 @@ export function ReportPreviewModal({
       if (!t) return;
 
       if (!analysesGroups[a.templateId]) {
-        const hasSeries = (t.expectedResults || []).some((er: any) => er.type === 'number_series');
-        if (hasSeries) return;
+        const hasSeriesOrVertical = (t.expectedResults || []).some(
+          (er: any) => er.type === 'number_series' || er.type === 'vertical_table'
+        );
+        if (hasSeriesOrVertical) return;
 
-        const columns = (t.expectedResults || []).filter((er: any) => er.type !== 'image');
+        const columns = (t.expectedResults || []).filter(
+          (er: any) => er.type !== 'image' && er.type !== 'micrography' && er.type !== 'vertical_table'
+        );
         if (columns.length === 0) return;
         analysesGroups[a.templateId] = { templateName: t.name, columns: columns, rows: [] };
       }
@@ -446,7 +549,7 @@ export function ReportPreviewModal({
             const v = (r.results || {})[col.id];
             let textVal = "-";
             if (v !== undefined && v !== null && v !== "") {
-              textVal = Array.isArray(v) ? v.join(", ") : String(v);
+              textVal = formatResultValueAsText(v, col) || "-";
             }
             addDataCell(textVal);
           });
@@ -461,6 +564,7 @@ export function ReportPreviewModal({
     return {
       "echantillons": reportSamples.map((s: any) => ({ ...s, materiau: s.materialState })),
       "tables_series": tables_series,
+      "tables_verticales": tables_verticales,
       "tables_analyses": tables_analyses,
       "demande.id": request?.id || "N/A",
       "demande.titre": request?.title || "",
@@ -481,8 +585,9 @@ export function ReportPreviewModal({
       "resultats.tableau": reportAnalyses.length > 0 ? reportAnalyses.map((a: any) => {
         const t = analysisTemplates.find(tpl => tpl.id === a.templateId);
         return Object.entries(a.results || {}).map(([k, v]) => {
-          const fieldName = t?.expectedResults?.find(er => er.id === k)?.name || k;
-          return `${fieldName}: ${v && typeof v === 'object' && Array.isArray((v as any).images) ? `${(v as any).images.length} image(s) de micrographie` : Array.isArray(v) ? v.join(', ') : v}`;
+          const expected = t?.expectedResults?.find(er => er.id === k);
+          const fieldName = expected?.name || k;
+          return `${fieldName}: ${formatResultValueAsText(v, expected)}`;
         }).join("\n");
       }).join("\n---\n") : "Aucun résultat",
 
@@ -963,8 +1068,8 @@ export function ReportPreviewModal({
                               <tbody>
                                 {tpl.expectedResults.map(expected => (
                                   <tr key={expected.id}>
-                                    <td className="border border-slate-200 p-2 text-slate-600 bg-slate-50 w-1/2">{expected.name}</td>
-                                    <td className="border border-slate-200 p-2 font-medium">
+                                    <td className="border border-slate-200 p-2 text-slate-600 bg-slate-50 w-1/3 align-top">{expected.name}</td>
+                                    <td className="border border-slate-200 p-2 font-medium w-2/3">
                                       {analysis.results[expected.id] !== undefined ? (
                                         expected.type === 'micrography'
                                           ? (() => {
@@ -983,15 +1088,43 @@ export function ReportPreviewModal({
                                               </div>
                                             );
                                           })()
+                                          : expected.type === 'vertical_table'
+                                            ? (() => {
+                                              const rows = Array.isArray(analysis.results[expected.id])
+                                                ? analysis.results[expected.id].filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''))
+                                                : [];
+                                              if (rows.length === 0) return '-';
+                                              return (
+                                                <table className="w-full text-xs border-collapse border border-slate-200 my-1">
+                                                  <thead>
+                                                    <tr className="bg-slate-100 text-slate-700">
+                                                      <th className="border border-slate-200 py-1 px-2 text-left font-semibold">Élément</th>
+                                                      <th className="border border-slate-200 py-1 px-2 text-center font-semibold">Résultat</th>
+                                                      <th className="border border-slate-200 py-1 px-2 text-center font-semibold">Unité</th>
+                                                    </tr>
+                                                  </thead>
+                                                  <tbody>
+                                                    {rows.map((r: any, idx: number) => (
+                                                      <tr key={idx}>
+                                                        <td className="border border-slate-200 py-1 px-2 font-semibold text-slate-800">{r.element || '-'}</td>
+                                                        <td className="border border-slate-200 py-1 px-2 text-center text-slate-900">{r.value !== '' && r.value !== undefined ? r.value : '-'}</td>
+                                                        <td className="border border-slate-200 py-1 px-2 text-center text-slate-500">{r.unit || expected.unit || '-'}</td>
+                                                      </tr>
+                                                    ))}
+                                                  </tbody>
+                                                </table>
+                                              );
+                                            })()
                                           : expected.type === 'number_series'
                                             ? (() => {
-                                              const vals = Array.isArray(analysis.results[expected.id]) ? analysis.results[expected.id] : [];
-                                              const numVals = vals.map((v: any) => Number(v)).filter((v: number) => !isNaN(v));
+                                              const rawVals = Array.isArray(analysis.results[expected.id]) ? analysis.results[expected.id] : [];
+                                              const validStrings = rawVals.filter((v: any) => v !== '' && v !== null && v !== undefined && String(v).trim() !== '');
+                                              const numVals = validStrings.map((v: any) => Number(v)).filter((v: number) => !isNaN(v));
                                               if (numVals.length === 0) return '-';
                                               const mean = numVals.reduce((a: number, b: number) => a + b, 0) / numVals.length;
                                               const variance = numVals.length > 1 ? numVals.reduce((a: number, b: number) => a + Math.pow(b - mean, 2), 0) / (numVals.length - 1) : null;
                                               const stdDev = variance !== null ? Math.sqrt(variance) : null;
-                                              return `Moy: ${mean.toFixed(2)} ${expected.unit || ''} (σ: ${stdDev ? stdDev.toFixed(2) : '-'}) [${vals.join(', ')}]`;
+                                              return `Moy: ${mean.toFixed(2)} ${expected.unit || ''} (σ: ${stdDev !== null ? stdDev.toFixed(2) : '-'}) [${validStrings.join(', ')}]`;
                                             })()
                                             : expected.type === 'boolean'
                                               ? (analysis.results[expected.id] ? 'Conforme / Oui' : 'Non Conforme / Non')

@@ -68,11 +68,32 @@ export function Reports() {
 
   const buildDocData = (req: any, cl: any, samps: any[], anals: any[], mgr: any) => {
     const formattedDate = new Intl.DateTimeFormat("fr-FR").format(new Date());
+
+    const sanitizeKey = (str: string) =>
+      str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
+
+    const filterNonEmptySeries = (arr: any[]): any[] =>
+      arr.filter(val => val !== '' && val !== null && val !== undefined && String(val).trim() !== '');
+
+    const parseValidNumbers = (arr: any[]): number[] =>
+      filterNonEmptySeries(arr).map(Number).filter((n: number) => !isNaN(n));
+
+    const formatResultValueAsText = (v: any, expected?: any): string => {
+      if (v && typeof v === 'object' && Array.isArray(v.images)) {
+        return `${v.images.length} image(s) de micrographie`;
+      }
+      if (expected?.type === 'vertical_table' && Array.isArray(v)) {
+        const filled = v.filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''));
+        return filled.map((r: any) => `${r.element || '-'}: ${r.value !== '' && r.value !== undefined ? r.value : '-'}${r.unit || expected?.unit ? ' ' + (r.unit || expected.unit) : ''}`).join(', ');
+      }
+      if (Array.isArray(v)) {
+        return filterNonEmptySeries(v).join(', ');
+      }
+      return v !== undefined && v !== null ? String(v) : '';
+    };
     
     const analysesData = anals.map((a: any) => {
       const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
-      
-      const sanitizeKey = (str: string) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
       const safeAnalysisName = sanitizeKey(t?.name || "inconnu");
       
       const analysisMicrographies = Object.entries(a.results || {}).flatMap(([k, v]) => {
@@ -88,6 +109,7 @@ export function Reports() {
           image: img.dataUrl || ''
         }));
       });
+
       const baseObj: any = {
         nom: t?.name || "Non défini",
         norme: t?.standardRef || "Non défini",
@@ -95,60 +117,84 @@ export function Reports() {
         remarques: a.notes || "Aucune",
         echantillon: a.sampleId,
         date: a.date ? new Intl.DateTimeFormat("fr-FR").format(new Date(a.date)) : formattedDate,
-        valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, valeur: v && typeof v === 'object' && Array.isArray((v as any).images) ? `${(v as any).images.length} image(s) de micrographie` : Array.isArray(v) ? v.join(', ') : v })),
+        valeurs: Object.entries(a.results || {}).map(([k, v]) => {
+          const expected = t?.expectedResults?.find((er: any) => er.id === k);
+          return {
+            cle: expected?.name || k,
+            valeur: formatResultValueAsText(v, expected)
+          };
+        }),
         [`is_${safeAnalysisName}`]: true,
         micrographies: analysisMicrographies
       };
       
       const series_resultats: any[] = [];
+      const tableaux_verticaux: any[] = [];
       
       Object.entries(a.results || {}).forEach(([k, v]) => {
-         const expected = t?.expectedResults?.find((er: any) => er.id === k);
-         const fieldName = expected?.name || k;
-         const safeName = sanitizeKey(fieldName);
-         
-         baseObj[`res_${safeName}`] = Array.isArray(v) ? v.join(', ') : v;
-         
-         if (Array.isArray(v)) {
-            v.forEach((val, i) => {
-               baseObj[`res_${safeName}_v${i+1}`] = val;
+        const expected = t?.expectedResults?.find((er: any) => er.id === k);
+        const fieldName = expected?.name || k;
+        const safeName = sanitizeKey(fieldName);
+        
+        baseObj[`res_${safeName}`] = formatResultValueAsText(v, expected);
+        
+        if (expected?.type === 'vertical_table' && Array.isArray(v)) {
+          const filledRows = v
+            .filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''))
+            .map((r: any) => ({
+              element: r.element || '-',
+              valeur: r.value !== undefined && r.value !== '' ? String(r.value) : '-',
+              unite: r.unit || expected.unit || ''
+            }));
+          baseObj[`lignes_${safeName}`] = filledRows;
+          tableaux_verticaux.push({
+            nom_parametre: fieldName,
+            echantillon: a.sampleId,
+            lignes: filledRows
+          });
+        } else if (Array.isArray(v)) {
+          const cleanVals = filterNonEmptySeries(v);
+          cleanVals.forEach((val, i) => {
+            baseObj[`res_${safeName}_v${i + 1}`] = val;
+          });
+          const numVals = parseValidNumbers(v);
+          let mean: number | null = null;
+          let stdDev: number | null = null;
+          if (numVals.length > 0) {
+            mean = numVals.reduce((sum: number, n: number) => sum + n, 0) / numVals.length;
+            baseObj[`res_${safeName}_moyenne`] = mean.toFixed(2);
+            const variance = numVals.length > 1 ? numVals.reduce((sum: number, n: number) => sum + Math.pow(n - mean!, 2), 0) / (numVals.length - 1) : 0;
+            stdDev = numVals.length > 1 ? Math.sqrt(variance) : 0;
+            baseObj[`res_${safeName}_ecart`] = stdDev.toFixed(2);
+            baseObj[`res_${safeName}_stats`] = `${mean.toFixed(2)} ± ${stdDev.toFixed(2)}`;
+          }
+          
+          if (expected?.type === 'number_series') {
+            series_resultats.push({
+              nom_parametre: fieldName,
+              echantillon: a.sampleId,
+              v1: cleanVals[0] !== undefined ? cleanVals[0] : "-",
+              v2: cleanVals[1] !== undefined ? cleanVals[1] : "-",
+              v3: cleanVals[2] !== undefined ? cleanVals[2] : "-",
+              v4: cleanVals[3] !== undefined ? cleanVals[3] : "-",
+              v5: cleanVals[4] !== undefined ? cleanVals[4] : "-",
+              v6: cleanVals[5] !== undefined ? cleanVals[5] : "-",
+              v7: cleanVals[6] !== undefined ? cleanVals[6] : "-",
+              v8: cleanVals[7] !== undefined ? cleanVals[7] : "-",
+              v9: cleanVals[8] !== undefined ? cleanVals[8] : "-",
+              v10: cleanVals[9] !== undefined ? cleanVals[9] : "-",
+              stats: mean !== null && stdDev !== null ? `${mean.toFixed(2)} ± ${stdDev!.toFixed(2)}` : "-",
+              moyenne: mean !== null ? mean.toFixed(2) : "-",
+              ecart_type: stdDev !== null ? stdDev.toFixed(2) : "-"
             });
-            const numVals = v.map(Number).filter((n: number) => !isNaN(n));
-            let mean: number | null = null;
-            let stdDev: number | null = null;
-            if (numVals.length > 0) {
-               mean = numVals.reduce((sum: number, n: number) => sum + n, 0) / numVals.length;
-               baseObj[`res_${safeName}_moyenne`] = mean.toFixed(2);
-               const variance = numVals.length > 1 ? numVals.reduce((sum: number, n: number) => sum + Math.pow(n - mean!, 2), 0) / (numVals.length - 1) : 0;
-               stdDev = numVals.length > 1 ? Math.sqrt(variance) : 0;
-               baseObj[`res_${safeName}_ecart`] = stdDev.toFixed(2);
-               baseObj[`res_${safeName}_stats`] = `${mean.toFixed(2)} ± ${stdDev.toFixed(2)}`;
-            }
-            
-            if (expected?.type === 'number_series') {
-               series_resultats.push({
-                  nom_parametre: fieldName,
-                  echantillon: a.sampleId,
-                  v1: v[0] !== undefined ? v[0] : "-",
-                  v2: v[1] !== undefined ? v[1] : "-",
-                  v3: v[2] !== undefined ? v[2] : "-",
-                  v4: v[3] !== undefined ? v[3] : "-",
-                  v5: v[4] !== undefined ? v[4] : "-",
-                  v6: v[5] !== undefined ? v[5] : "-",
-                  v7: v[6] !== undefined ? v[6] : "-",
-                  v8: v[7] !== undefined ? v[7] : "-",
-                  v9: v[8] !== undefined ? v[8] : "-",
-                  v10: v[9] !== undefined ? v[9] : "-",
-                  stats: mean !== null && stdDev !== null ? `${mean.toFixed(2)} ± ${stdDev!.toFixed(2)}` : "-",
-                  moyenne: mean !== null ? mean.toFixed(2) : "-",
-                  ecart_type: stdDev !== null ? stdDev.toFixed(2) : "-"
-               });
-            }
-         }
+          }
+        }
       });
       
       baseObj.series_resultats = series_resultats;
       baseObj.has_series = series_resultats.length > 0;
+      baseObj.tableaux_verticaux = tableaux_verticaux;
+      baseObj.has_vertical_table = tableaux_verticaux.length > 0;
       
       return baseObj;
     });
@@ -156,117 +202,177 @@ export function Reports() {
     const tables_series: any[] = [];
     const seriesGroups: Record<string, { paramName: string, rows: any[] }> = {};
     const escapeXML = (str: string) => {
-      if(str === null || str === undefined) return "";
+      if (str === null || str === undefined) return "";
       return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
     };
 
     anals.forEach((a: any) => {
-        const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
-        if (!t) return;
-        Object.entries(a.results || {}).forEach(([k, v]) => {
-            const expected = t.expectedResults?.find((er: any) => er.id === k);
-            if (Array.isArray(v) && v.length > 0) {
-                if (!seriesGroups[k]) seriesGroups[k] = { paramName: expected?.name || k, rows: [] };
-                const numVals = v.map(Number).filter((n: number) => !isNaN(n));
-                let stats = "-";
-                if (numVals.length > 0) {
-                   const mean = numVals.reduce((sum: number, n: number) => sum + n, 0) / numVals.length;
-                   const variance = numVals.length > 1 ? numVals.reduce((sum: number, n: number) => sum + Math.pow(n - mean, 2), 0) / (numVals.length - 1) : 0;
-                   const stdDev = numVals.length > 1 ? Math.sqrt(variance) : 0;
-                   stats = `${mean.toFixed(2)} ± ${stdDev.toFixed(2)}`;
-                }
-                seriesGroups[k].rows.push({ echantillon: a.sampleId, valeurs: v, stats: stats });
-            }
-        });
+      const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
+      if (!t) return;
+      Object.entries(a.results || {}).forEach(([k, v]) => {
+        const expected = t.expectedResults?.find((er: any) => er.id === k);
+        if (expected?.type === 'number_series' && Array.isArray(v) && v.length > 0) {
+          const cleanVals = filterNonEmptySeries(v);
+          if (cleanVals.length === 0) return;
+          if (!seriesGroups[k]) seriesGroups[k] = { paramName: expected?.name || k, rows: [] };
+          const numVals = parseValidNumbers(v);
+          let stats = "-";
+          if (numVals.length > 0) {
+            const mean = numVals.reduce((sum: number, n: number) => sum + n, 0) / numVals.length;
+            const variance = numVals.length > 1 ? numVals.reduce((sum: number, n: number) => sum + Math.pow(n - mean, 2), 0) / (numVals.length - 1) : 0;
+            const stdDev = numVals.length > 1 ? Math.sqrt(variance) : 0;
+            stats = `${mean.toFixed(2)} ± ${stdDev.toFixed(2)}`;
+          }
+          seriesGroups[k].rows.push({ echantillon: a.sampleId, valeurs: cleanVals, stats: stats });
+        }
+      });
     });
 
     Object.values(seriesGroups).forEach(group => {
-        let maxVals = 0;
-        group.rows.forEach(r => { if (r.valeurs.length > maxVals) maxVals = r.valeurs.length; });
-        if (maxVals > 0) {
-            const tColor = labSettings?.tableStyles?.borderColor || "000000";
-            const tSize = labSettings?.tableStyles?.borderSize ?? 4;
-            let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
-            xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-            const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${labSettings?.tableStyles?.headerBgColor || "E2E8F0"}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
-            addHeaderCell("Echantillon");
-            for (let i = 1; i <= maxVals; i++) addHeaderCell(`Mesure ${i}`);
-            addHeaderCell("Moyenne");
+      let maxVals = 0;
+      group.rows.forEach(r => { if (r.valeurs.length > maxVals) maxVals = r.valeurs.length; });
+      if (maxVals > 0) {
+        const tColor = labSettings?.tableStyles?.borderColor || "000000";
+        const tSize = labSettings?.tableStyles?.borderSize ?? 4;
+        let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
+        xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
+        const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${labSettings?.tableStyles?.headerBgColor || "E2E8F0"}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+        addHeaderCell("Echantillon");
+        for (let i = 1; i <= maxVals; i++) addHeaderCell(`Mesure ${i}`);
+        addHeaderCell("Moyenne");
+        xml += `</w:tr>`;
+        group.rows.forEach(r => {
+          xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
+          const addDataCell = (text: string) => { xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+          addDataCell(r.echantillon);
+          for (let i = 0; i < maxVals; i++) addDataCell(r.valeurs[i] !== undefined ? String(r.valeurs[i]) : "-");
+          addDataCell(r.stats);
+          xml += `</w:tr>`;
+        });
+        xml += `</w:tbl>`;
+        tables_series.push({ titre: group.paramName, xml: xml });
+      }
+    });
+
+    // Génération des tableaux verticaux Word natifs (ex: ICP 30 éléments)
+    const tables_verticales: any[] = [];
+    anals.forEach((a: any) => {
+      const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
+      if (!t) return;
+      Object.entries(a.results || {}).forEach(([k, v]) => {
+        const expected = t.expectedResults?.find((er: any) => er.id === k);
+        if (expected?.type === 'vertical_table' && Array.isArray(v) && v.length > 0) {
+          const filledRows = v.filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''));
+          if (filledRows.length === 0) return;
+
+          const tColor = labSettings?.tableStyles?.borderColor || "000000";
+          const tSize = labSettings?.tableStyles?.borderSize ?? 4;
+          const headerBg = labSettings?.tableStyles?.headerBgColor || "E2E8F0";
+
+          let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
+
+          const addHeaderCell = (text: string) => {
+            xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${headerBg}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`;
+          };
+          const addDataCell = (text: string, align: 'left' | 'center' = 'center', bold = false) => {
+            xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="${align}"/></w:pPr><w:r>${bold ? '<w:rPr><w:b/></w:rPr>' : ''}<w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`;
+          };
+
+          xml += `<w:tr><w:trPr><w:trHeight w:val="360"/></w:trPr>`;
+          addHeaderCell("Élément / Paramètre");
+          addHeaderCell("Résultat");
+          addHeaderCell("Unité");
+          xml += `</w:tr>`;
+
+          filledRows.forEach((row: any) => {
+            xml += `<w:tr><w:trPr><w:trHeight w:val="320"/></w:trPr>`;
+            addDataCell(row.element || "-", 'left', true);
+            addDataCell(row.value !== undefined && row.value !== "" ? String(row.value) : "-", 'center', false);
+            addDataCell(row.unit || expected.unit || "-", 'center', false);
             xml += `</w:tr>`;
-            group.rows.forEach(r => {
-                xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-                const addDataCell = (text: string) => { xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
-                addDataCell(r.echantillon);
-                for (let i = 0; i < maxVals; i++) addDataCell(r.valeurs[i] !== undefined ? String(r.valeurs[i]) : "-");
-                addDataCell(r.stats);
-                xml += `</w:tr>`;
-            });
-            xml += `</w:tbl>`;
-            tables_series.push({ titre: group.paramName, xml: xml });
+          });
+
+          xml += `</w:tbl>`;
+          tables_verticales.push({
+            titre: expected.name,
+            echantillon: a.sampleId,
+            lignes: filledRows.map((r: any) => ({
+              element: r.element || '-',
+              valeur: r.value !== undefined && r.value !== '' ? String(r.value) : '-',
+              unite: r.unit || expected.unit || '-'
+            })),
+            xml
+          });
         }
+      });
     });
 
     const tables_analyses: any[] = [];
     const analysesGroups: Record<string, { templateName: string, columns: any[], rows: any[] }> = {};
     
     anals.forEach((a: any) => {
-        const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
-        if (!t) return;
+      const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
+      if (!t) return;
+      
+      if (!analysesGroups[a.templateId]) {
+        const hasSeriesOrVertical = (t.expectedResults || []).some(
+          (er: any) => er.type === 'number_series' || er.type === 'vertical_table'
+        );
+        if (hasSeriesOrVertical) return; 
         
-        if (!analysesGroups[a.templateId]) {
-            const hasSeries = (t.expectedResults || []).some((er: any) => er.type === 'number_series');
-            if (hasSeries) return; 
-            
-            const columns = (t.expectedResults || []).filter((er: any) => er.type !== 'image');
-            if (columns.length === 0) return;
-            analysesGroups[a.templateId] = { templateName: t.name, columns: columns, rows: [] };
-        }
-        
-        analysesGroups[a.templateId].rows.push(a);
+        const columns = (t.expectedResults || []).filter(
+          (er: any) => er.type !== 'image' && er.type !== 'micrography' && er.type !== 'vertical_table'
+        );
+        if (columns.length === 0) return;
+        analysesGroups[a.templateId] = { templateName: t.name, columns: columns, rows: [] };
+      }
+      
+      analysesGroups[a.templateId].rows.push(a);
     });
 
     Object.values(analysesGroups).forEach(group => {
-        if (group.rows.length > 0 && group.columns.length > 0) {
-            const tColor = labSettings?.tableStyles?.borderColor || "000000";
-            const tSize = labSettings?.tableStyles?.borderSize ?? 4;
-            let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
-            xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-            const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${labSettings?.tableStyles?.headerBgColor || "E2E8F0"}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
-            const addDataCell = (text: string) => { xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
-            
-            addHeaderCell("Echantillon");
-            group.columns.forEach(col => addHeaderCell(col.name));
-            xml += `</w:tr>`;
-            
-            group.rows.forEach(r => {
-                xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-                let sampleStr = r.sampleId;
-                const sObj = samps.find((s: any) => s.id === r.sampleId);
-                if (sObj) {
-                    sampleStr = sObj.barcode || sObj.id;
-                }
-                
-                addDataCell(sampleStr);
-                
-                group.columns.forEach(col => {
-                    const v = (r.results || {})[col.id];
-                    let textVal = "-";
-                    if (v !== undefined && v !== null && v !== "") {
-                        textVal = Array.isArray(v) ? v.join(", ") : String(v);
-                    }
-                    addDataCell(textVal);
-                });
-                
-                xml += `</w:tr>`;
-            });
-            xml += `</w:tbl>`;
-            tables_analyses.push({ titre: group.templateName, xml: xml });
-        }
+      if (group.rows.length > 0 && group.columns.length > 0) {
+        const tColor = labSettings?.tableStyles?.borderColor || "000000";
+        const tSize = labSettings?.tableStyles?.borderSize ?? 4;
+        let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
+        xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
+        const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${labSettings?.tableStyles?.headerBgColor || "E2E8F0"}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+        const addDataCell = (text: string) => { xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+        
+        addHeaderCell("Echantillon");
+        group.columns.forEach(col => addHeaderCell(col.name));
+        xml += `</w:tr>`;
+        
+        group.rows.forEach(r => {
+          xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
+          let sampleStr = r.sampleId;
+          const sObj = samps.find((s: any) => s.id === r.sampleId);
+          if (sObj) {
+            sampleStr = sObj.barcode || sObj.id;
+          }
+          
+          addDataCell(sampleStr);
+          
+          group.columns.forEach(col => {
+            const v = (r.results || {})[col.id];
+            let textVal = "-";
+            if (v !== undefined && v !== null && v !== "") {
+              textVal = formatResultValueAsText(v, col) || "-";
+            }
+            addDataCell(textVal);
+          });
+          
+          xml += `</w:tr>`;
+        });
+        xml += `</w:tbl>`;
+        tables_analyses.push({ titre: group.templateName, xml: xml });
+      }
     });
 
     return {
       "echantillons": samps.map((s: any) => ({ ...s, materiau: s.materialState })),
       "tables_series": tables_series,
+      "tables_verticales": tables_verticales,
       "tables_analyses": tables_analyses,
       "demande.id": req?.id || "N/A",
       "date.jour": formattedDate,
@@ -285,8 +391,9 @@ export function Reports() {
       "resultats.tableau": anals.length > 0 ? anals.map((a: any) => {
         const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
         return Object.entries(a.results || {}).map(([k, v]) => {
-          const fieldName = t?.expectedResults?.find((er: any) => er.id === k)?.name || k;
-          return `${fieldName}: ${v}`;
+          const expected = t?.expectedResults?.find((er: any) => er.id === k);
+          const fieldName = expected?.name || k;
+          return `${fieldName}: ${formatResultValueAsText(v, expected)}`;
         }).join("\n");
       }).join("\n---\n") : "Aucun résultat",
       "images.galerie": `${analysesData.flatMap((a: any) => a.micrographies || []).length} image(s) de micrographie — utiliser la boucle micrographies pour les insérer`,
@@ -520,14 +627,26 @@ export function Reports() {
     
     analyses.forEach((a: any) => {
       const template = analysisTemplates.find((t: any) => t.id === a.templateId);
-      const resultsString = Object.entries(a.results || {}).map(([k, v]) => `${k}: ${v}`).join(' | ');
+      const resultsString = Object.entries(a.results || {}).map(([k, v]) => {
+        const expected = template?.expectedResults?.find((er: any) => er.id === k);
+        const label = expected?.name || k;
+        if (expected?.type === 'vertical_table' && Array.isArray(v)) {
+          const filled = v.filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''));
+          return `${label}: [${filled.map((r: any) => `${r.element}=${r.value}${r.unit || expected.unit || ''}`).join(', ')}]`;
+        }
+        if (Array.isArray(v)) {
+          const clean = v.filter((val: any) => val !== '' && val !== null && val !== undefined && String(val).trim() !== '');
+          return `${label}: [${clean.join(', ')}]`;
+        }
+        return `${label}: ${v}`;
+      }).join(' | ');
       const row = [
         a.id,
-        new Date(a.date).toLocaleDateString('fr-FR'),
+        new Date(a.date || a.updatedAt || Date.now()).toLocaleDateString('fr-FR'),
         a.sampleId,
         template?.name || "N/A",
         a.technician,
-        `"${resultsString}"`
+        `"${resultsString.replace(/"/g, '""')}"`
       ];
       csvContent += row.join(";") + "\n";
     });
@@ -561,8 +680,14 @@ export function Reports() {
       }
       
       const sampleAnalyses = analyses.filter((a: any) => a.sampleId === certSelectedSample);
+      const req = sample?.requestId ? requests.find((r: any) => r.id === sample.requestId) : null;
+      const client = req ? users.find((u: any) => u.id === req.requesterId) : null;
+      const manager = users.find((u: any) => u.role === "manager" || u.role === "admin");
+
+      const baseDocData = buildDocData(req, client, sample ? [sample] : [], sampleAnalyses, manager);
       
       const docData: any = {
+        ...baseDocData,
         date: new Date().toLocaleDateString('fr-FR'),
         echantillon: {
           id: sample?.id,
@@ -570,22 +695,27 @@ export function Reports() {
           projet: sample?.project,
           client: sample?.client,
           etat: sample?.materialState,
+          materiau: sample?.materialState,
         },
         resultats: sampleAnalyses.map((a: any) => {
           const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
           return {
             analyse: t?.name,
             norme: t?.standardRef,
-            valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, valeur: v && typeof v === 'object' && Array.isArray((v as any).images) ? `${(v as any).images.length} image(s) de micrographie` : Array.isArray(v) ? v.join(', ') : v }))
+            valeurs: Object.entries(a.results || {}).map(([k, v]) => {
+              const expected = t?.expectedResults?.find((er: any) => er.id === k);
+              let formattedVal: any = v;
+              if (v && typeof v === 'object' && Array.isArray((v as any).images)) {
+                formattedVal = `${(v as any).images.length} image(s) de micrographie`;
+              } else if (expected?.type === 'vertical_table' && Array.isArray(v)) {
+                const filled = v.filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''));
+                formattedVal = filled.map((r: any) => `${r.element || '-'}: ${r.value || '-'}${r.unit || expected?.unit ? ' ' + (r.unit || expected.unit) : ''}`).join(', ');
+              } else if (Array.isArray(v)) {
+                formattedVal = v.filter((val: any) => val !== '' && val !== null && val !== undefined && String(val).trim() !== '').join(', ');
+              }
+              return { cle: expected?.name || k, valeur: formattedVal };
+            })
           };
-        }),
-        micrographies: sampleAnalyses.flatMap((a: any) => {
-          const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
-          return Object.entries(a.results || {}).flatMap(([k, v]) => {
-            const expected = t?.expectedResults?.find((er: any) => er.id === k);
-            const images = v && typeof v === 'object' && Array.isArray((v as any).images) ? (v as any).images : [];
-            return images.map((img: any, index: number) => ({ analyse: t?.name || 'Micrographie', champ: expected?.name || k, echantillon: a.sampleId || '', numero: index + 1, nom: img.name || `Image ${index + 1}`, commentaire: img.comment || '', image: img.dataUrl || '' }));
-          });
         }),
       };
       

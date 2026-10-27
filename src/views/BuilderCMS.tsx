@@ -115,7 +115,7 @@ export function BuilderCMS() {
     if (!newFieldName) return;
 
     const parsedOptions = ['select', 'multiselect', 'vertical_table'].includes(newFieldType) && newFieldOptions.trim()
-      ? newFieldOptions.split(',').map(s => s.trim()).filter(Boolean)
+      ? newFieldOptions.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean)
       : undefined;
 
     const newFieldId = editingFieldId || `field_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;

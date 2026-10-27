@@ -384,7 +384,158 @@ export function Analyses() {
         </div>
       );
     }
+    if (resultTemplate.type === 'vertical_table') {
+      type VerticalRow = { element: string; value: string; unit: string };
+      const defaultUnit = resultTemplate.unit || '';
+      const templateElements = Array.isArray(resultTemplate.options)
+        ? resultTemplate.options.flatMap(opt => String(opt).split(/[,;\n]+/)).map(s => s.trim()).filter(Boolean)
+        : [];
 
+      // Vérifie si currentValue contient réellement des lignes non vides
+      const savedRows: VerticalRow[] = Array.isArray(currentValue)
+        ? currentValue.filter(r => r && typeof r === 'object')
+        : [];
+
+      const isOnlyEmptyPlaceholder =
+        savedRows.length === 1 &&
+        !String(savedRows[0].element || '').trim() &&
+        !String(savedRows[0].value || '').trim();
+
+      let rows: VerticalRow[];
+
+      if (savedRows.length > 0 && !isOnlyEmptyPlaceholder) {
+        // S'il y a des éléments dans le modèle qui ne sont pas encore dans les lignes sauvegardées, on les ajoute à la suite
+        const existingElements = new Set(savedRows.map(r => String(r.element || '').trim().toLowerCase()));
+        const missingFromTemplate = templateElements
+          .filter(el => !existingElements.has(el.toLowerCase()))
+          .map(el => ({ element: el, value: '', unit: defaultUnit }));
+        rows = [...savedRows, ...missingFromTemplate];
+      } else if (templateElements.length > 0) {
+        rows = templateElements.map(opt => ({ element: opt, value: '', unit: defaultUnit }));
+      } else {
+        rows = [{ element: '', value: '', unit: defaultUnit }];
+      }
+
+      const updateRows = (nextRows: VerticalRow[]) => {
+        updateAnalysisResult(analysisId, resultTemplate.id, nextRows);
+      };
+
+      return (
+        <div className="mt-2 sm:col-span-2">
+          <div className="max-h-96 overflow-y-auto border border-slate-200 rounded-lg bg-white shadow-xs">
+            <table className="w-full text-xs text-left border-collapse">
+              <thead className="bg-slate-100 text-slate-600 uppercase sticky top-0 z-10 border-b border-slate-200">
+                <tr>
+                  <th className="py-2 px-3 font-semibold w-2/5">Élément / Paramètre</th>
+                  <th className="py-2 px-3 font-semibold w-2/5">Résultat / Valeur</th>
+                  <th className="py-2 px-3 font-semibold w-1/5">Unité</th>
+                  {!disabled && <th className="py-2 px-2 w-8"></th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {rows.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50/80">
+                    <td className="p-1.5 px-2">
+                      <input
+                        type="text"
+                        value={row.element}
+                        disabled={disabled}
+                        onChange={(e) => {
+                          const next = rows.map((r, i) => i === idx ? { ...r, element: e.target.value } : r);
+                          updateRows(next);
+                        }}
+                        placeholder="Ex: Fe, Cr, Ni..."
+                        className="w-full px-2 py-1 border border-slate-200 rounded text-xs font-semibold text-slate-800 focus:border-blue-500 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </td>
+                    <td className="p-1.5 px-2">
+                      <input
+                        type="text"
+                        value={row.value}
+                        disabled={disabled}
+                        onChange={(e) => {
+                          const next = rows.map((r, i) => i === idx ? { ...r, value: e.target.value } : r);
+                          updateRows(next);
+                        }}
+                        placeholder="Ex: 12.4 ou < 0.01"
+                        className="w-full px-2 py-1 border border-slate-200 rounded text-xs text-slate-900 focus:border-blue-500 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </td>
+                    <td className="p-1.5 px-2">
+                      <input
+                        type="text"
+                        value={row.unit ?? defaultUnit}
+                        disabled={disabled}
+                        onChange={(e) => {
+                          const next = rows.map((r, i) => i === idx ? { ...r, unit: e.target.value } : r);
+                          updateRows(next);
+                        }}
+                        placeholder={defaultUnit || 'ppm, %'}
+                        className="w-full px-2 py-1 border border-slate-200 rounded text-xs text-slate-600 focus:border-blue-500 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </td>
+                    {!disabled && (
+                      <td className="p-1.5 text-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = rows.filter((_, i) => i !== idx);
+                            updateRows(next);
+                          }}
+                          className="text-slate-400 hover:text-red-600 p-1"
+                          title="Supprimer la ligne"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {!disabled && (
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => updateRows([...rows, { element: '', value: '', unit: defaultUnit }])}
+                  className="text-xs flex items-center text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2.5 py-1.5 rounded font-medium"
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1" /> Ajouter un élément
+                </button>
+                {templateElements.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const existingMap = new Map<string, VerticalRow>(
+                        rows.map(r => [String(r.element || '').trim().toLowerCase(), r] as [string, VerticalRow])
+                      );
+                      const resetRows = templateElements.map(el => {
+                        const prev = existingMap.get(el.toLowerCase());
+                        return {
+                          element: el,
+                          value: prev?.value || '',
+                          unit: prev?.unit || defaultUnit
+                        };
+                      });
+                      updateRows(resetRows);
+                    }}
+                    className="text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-2.5 py-1.5 rounded font-medium"
+                    title="Recharger les éléments définis dans le modèle d'analyse"
+                  >
+                    Charger la liste du modèle ({templateElements.length})
+                  </button>
+                )}
+              </div>
+              <span className="text-[11px] text-slate-400">
+                {rows.filter(r => String(r.value).trim() !== '').length} / {rows.length} élément(s) renseigné(s)
+              </span>
+            </div>
+          )}
+        </div>
+      );
+    }
     if (resultTemplate.type === 'boolean') {
       return (
         <div className="flex items-center gap-2 mt-2">
@@ -488,7 +639,7 @@ export function Analyses() {
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {template.expectedResults.map(expectedResult => (
-                      <div key={expectedResult.id} className={expectedResult.type === 'micrography' ? 'sm:col-span-2' : ''}>
+                      <div key={expectedResult.id} className={(expectedResult.type === 'micrography' || expectedResult.type === 'vertical_table') ? 'sm:col-span-2' : ''}>
                         <label className="text-xs font-semibold text-slate-700">
                           {expectedResult.name} {expectedResult.required && <span className="text-red-500">*</span>}
                         </label>

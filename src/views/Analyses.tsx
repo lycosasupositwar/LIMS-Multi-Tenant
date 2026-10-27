@@ -4,10 +4,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { useLims } from '../store';
-import { Search, Microscope, Check, UploadCloud, Image as ImageIcon, Plus, X, Lock } from 'lucide-react';
+import { Search, Microscope, Check, UploadCloud, Image as ImageIcon, Plus, X, Lock, ClipboardPaste } from 'lucide-react';
 import { AnalysisStatus, ExpectedResult } from '../types';
 
 type MicrographyImage = { id: string; name: string; dataUrl: string; comment: string };
+type VerticalRow = { element: string; value: string; unit: string };
 
 const readMicrographyImage = (file: File): Promise<MicrographyImage> => new Promise((resolve, reject) => {
   if (!file.type.startsWith('image/')) { reject(new Error('Le fichier sélectionné n’est pas une image.')); return; }
@@ -40,6 +41,98 @@ const readMicrographyImage = (file: File): Promise<MicrographyImage> => new Prom
   };
   reader.readAsDataURL(file);
 });
+
+/**
+ * Analyse un texte issu d'un fichier CSV/TXT ou d'un copier-coller Excel
+ * et fusionne les valeurs dans les lignes du tableau vertical.
+ */
+const parseAndMergeVerticalTableText = (
+  rawText: string,
+  currentRows: VerticalRow[],
+  defaultUnit: string,
+  startRowIndex = 0
+): VerticalRow[] => {
+  const lines = rawText
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) return currentRows;
+
+  const parseLineCells = (line: string): string[] => {
+    if (line.includes('\t')) return line.split('\t').map(c => c.trim().replace(/^"|"$/g, ''));
+    if (line.includes(';')) return line.split(';').map(c => c.trim().replace(/^"|"$/g, ''));
+    if (line.includes(',')) {
+      const parts = line.split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+      // Si la première colonne ressemble à un nom d'élément (contient des lettres) et non à un décimal type "12,4"
+      if (parts.length >= 2 && /[a-zA-Z]/.test(parts[0])) {
+        return parts;
+      }
+    }
+    return [line.replace(/^"|"$/g, '').trim()];
+  };
+
+  const parsedLines = lines.map(parseLineCells);
+
+  // Ignore une éventuelle première ligne d'en-tête (ex: "Élément;Valeur;Unité")
+  const firstLine = parsedLines[0];
+  const isHeader =
+    firstLine.length >= 2 &&
+    /^(el[eé]ment|param[eè]tre|symbole|analyte|nom)$/i.test(firstLine[0]) &&
+    /^(valeur|r[eé]sultat|concentration|mesure|teneur)$/i.test(firstLine[1]);
+
+  const dataLines = isHeader ? parsedLines.slice(1) : parsedLines;
+  if (dataLines.length === 0) return currentRows;
+
+  // Cas 1 : Une seule colonne de valeurs copiée depuis Excel -> remplit les valeurs à partir de startRowIndex
+  const isSingleValueColumn = dataLines.every(cells => cells.length === 1);
+  if (isSingleValueColumn) {
+    const nextRows = [...currentRows];
+    dataLines.forEach((cells, offset) => {
+      const targetIdx = startRowIndex + offset;
+      if (targetIdx < nextRows.length) {
+        nextRows[targetIdx] = { ...nextRows[targetIdx], value: cells[0] };
+      } else {
+        nextRows.push({ element: '', value: cells[0], unit: defaultUnit });
+      }
+    });
+    return nextRows;
+  }
+
+  // Cas 2 : Plusieurs colonnes (Élément | Valeur | [Unité]) -> associe par nom d'élément ou ajoute à la fin
+  const nextRows = currentRows.filter(
+    r => String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''
+  );
+
+  dataLines.forEach(cells => {
+    const elName = (cells[0] || '').trim();
+    const valStr = (cells[1] ?? '').trim();
+    const unitStr = (cells[2] ?? '').trim();
+    if (!elName && !valStr) return;
+
+    const existingIdx = nextRows.findIndex(
+      r => String(r.element || '').trim().toLowerCase() === elName.toLowerCase()
+    );
+
+    if (existingIdx !== -1) {
+      nextRows[existingIdx] = {
+        ...nextRows[existingIdx],
+        value: valStr,
+        unit: unitStr || nextRows[existingIdx].unit || defaultUnit
+      };
+    } else {
+      nextRows.push({
+        element: elName,
+        value: valStr,
+        unit: unitStr || defaultUnit
+      });
+    }
+  });
+
+  return nextRows.length > 0 ? nextRows : [{ element: '', value: '', unit: defaultUnit }];
+};
 
 export function Analyses() {
   const {
@@ -384,8 +477,8 @@ export function Analyses() {
         </div>
       );
     }
+
     if (resultTemplate.type === 'vertical_table') {
-      type VerticalRow = { element: string; value: string; unit: string };
       const defaultUnit = resultTemplate.unit || '';
       const templateElements = Array.isArray(resultTemplate.options)
         ? resultTemplate.options.flatMap(opt => String(opt).split(/[,;\n]+/)).map(s => s.trim()).filter(Boolean)
@@ -420,6 +513,37 @@ export function Analyses() {
         updateAnalysisResult(analysisId, resultTemplate.id, nextRows);
       };
 
+      const handleFileImport = (file: File | undefined) => {
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const content = String(ev.target?.result || '');
+          const merged = parseAndMergeVerticalTableText(content, rows, defaultUnit, 0);
+          updateRows(merged);
+        };
+        reader.readAsText(file);
+      };
+
+      const handleClipboardPasteButton = async () => {
+        try {
+          const text = await navigator.clipboard.readText();
+          if (text && text.trim()) {
+            const merged = parseAndMergeVerticalTableText(text, rows, defaultUnit, 0);
+            updateRows(merged);
+            return;
+          }
+        } catch {
+          // Si le navigateur bloque navigator.clipboard, on ouvre une boîte de saisie rapide
+        }
+        const manualText = window.prompt(
+          'Collez ici vos lignes copiées depuis Excel ou CSV (Format : Élément [Tab/;] Valeur [Tab/;] Unité, ou une colonne de valeurs) :'
+        );
+        if (manualText && manualText.trim()) {
+          const merged = parseAndMergeVerticalTableText(manualText, rows, defaultUnit, 0);
+          updateRows(merged);
+        }
+      };
+
       return (
         <div className="mt-2 sm:col-span-2">
           <div className="max-h-96 overflow-y-auto border border-slate-200 rounded-lg bg-white shadow-xs">
@@ -440,6 +564,13 @@ export function Analyses() {
                         type="text"
                         value={row.element}
                         disabled={disabled}
+                        onPaste={(e) => {
+                          const text = e.clipboardData.getData('text/plain');
+                          if (text && (text.includes('\n') || text.includes('\t'))) {
+                            e.preventDefault();
+                            updateRows(parseAndMergeVerticalTableText(text, rows, defaultUnit, idx));
+                          }
+                        }}
                         onChange={(e) => {
                           const next = rows.map((r, i) => i === idx ? { ...r, element: e.target.value } : r);
                           updateRows(next);
@@ -453,6 +584,13 @@ export function Analyses() {
                         type="text"
                         value={row.value}
                         disabled={disabled}
+                        onPaste={(e) => {
+                          const text = e.clipboardData.getData('text/plain');
+                          if (text && (text.includes('\n') || text.includes('\t'))) {
+                            e.preventDefault();
+                            updateRows(parseAndMergeVerticalTableText(text, rows, defaultUnit, idx));
+                          }
+                        }}
                         onChange={(e) => {
                           const next = rows.map((r, i) => i === idx ? { ...r, value: e.target.value } : r);
                           updateRows(next);
@@ -496,7 +634,7 @@ export function Analyses() {
           </div>
           {!disabled && (
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => updateRows([...rows, { element: '', value: '', unit: defaultUnit }])}
@@ -504,6 +642,32 @@ export function Analyses() {
                 >
                   <Plus className="w-3.5 h-3.5 mr-1" /> Ajouter un élément
                 </button>
+
+                <label
+                  className="text-xs flex items-center text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1.5 rounded font-medium cursor-pointer"
+                  title="Importer un fichier CSV ou TXT (colonnes : Élément ; Valeur ; Unité)"
+                >
+                  <UploadCloud className="w-3.5 h-3.5 mr-1" /> Importer CSV / TXT
+                  <input
+                    type="file"
+                    accept=".csv,.txt,.tsv"
+                    className="hidden"
+                    onChange={(e) => {
+                      handleFileImport(e.target.files?.[0]);
+                      e.currentTarget.value = '';
+                    }}
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={handleClipboardPasteButton}
+                  className="text-xs flex items-center text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1.5 rounded font-medium"
+                  title="Coller directement des colonnes copiées depuis Excel"
+                >
+                  <ClipboardPaste className="w-3.5 h-3.5 mr-1" /> Coller depuis Excel
+                </button>
+
                 {templateElements.length > 0 && (
                   <button
                     type="button"
@@ -536,6 +700,7 @@ export function Analyses() {
         </div>
       );
     }
+
     if (resultTemplate.type === 'boolean') {
       return (
         <div className="flex items-center gap-2 mt-2">

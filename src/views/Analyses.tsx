@@ -213,6 +213,7 @@ export function Analyses() {
       const q = globalSearchQuery.toLowerCase();
       if (!a.id.toLowerCase().includes(q) &&
         !a.sampleId?.toLowerCase().includes(q) &&
+        !sample?.barcode?.toLowerCase().includes(q) && //
         !template?.name.toLowerCase().includes(q)) {
         return false;
       }

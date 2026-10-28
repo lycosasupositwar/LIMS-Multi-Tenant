@@ -54,6 +54,7 @@ export function RequestsInternal() {
   const [sampleMaterialTemplateId, setSampleMaterialTemplateId] = useState(activeMaterialTemplates[0]?.id || '');
   const [sampleMaterialState, setSampleMaterialState] = useState<MaterialState>('Massif');
   const [samplePriority, setSamplePriority] = useState<'basse' | 'normale' | 'haute'>('normale');
+  const [sampleCustomData, setSampleCustomData] = useState<Record<string, any>>({});
   const [conclusionText, setConclusionText] = useState('');
   const [addingAnalysisForSample, setAddingAnalysisForSample] = useState<string | null>(null);
   const [selectedNewAnalysisTplId, setSelectedNewAnalysisTplId] = useState<string>('');
@@ -86,6 +87,22 @@ export function RequestsInternal() {
     if (currentUser?.role === 'analyste') return r.assignedTo === currentUser.id;
     return false;
   });
+
+  // Synchronise automatiquement les champs du Modèle Matériau sélectionné
+  React.useEffect(() => {
+    const matTpl = materialTemplates.find(t => t.id === sampleMaterialTemplateId);
+    if (!matTpl) {
+      setSampleCustomData({});
+      return;
+    }
+    const initialProps: Record<string, any> = {};
+    matTpl.fields.forEach(field => {
+      // Si la demande client contient déjà une info portant le même ID ou nom, on la récupère !
+      const fromReq = selectedRequest?.customData?.[field.id] ?? selectedRequest?.customData?.[field.name];
+      initialProps[field.name] = fromReq !== undefined ? fromReq : (field.type === 'boolean' ? false : '');
+    });
+    setSampleCustomData(initialProps);
+  }, [sampleMaterialTemplateId, selectedRequest, materialTemplates]);
 
   /**
    * Rendu graphique du badge de statut
@@ -240,7 +257,7 @@ export function RequestsInternal() {
         client: requester?.company || requester?.name || 'Inconnu',
         project: selectedRequest.title,
         priority: samplePriority,
-        customData: {},
+        customData: { ...sampleCustomData },
         images: [],
         notes: `Échantillon généré depuis la demande ${selectedRequest.id}`
       };
@@ -566,6 +583,54 @@ export function RequestsInternal() {
                         />
                       </div>
                     </div>
+                    {/* Champs dynamiques du Modèle Matériau sélectionné */}
+                    {(() => {
+                      const selectedMatTpl = materialTemplates.find(t => t.id === sampleMaterialTemplateId);
+                      if (!selectedMatTpl || selectedMatTpl.fields.length === 0) return null;
+                      return (
+                        <div className="mb-4 pt-3 border-t border-indigo-200/60">
+                          <span className="block text-xs font-bold text-indigo-900 uppercase tracking-wider mb-2">
+                            Propriétés du matériau ({selectedMatTpl.name})
+                          </span>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            {selectedMatTpl.fields.map(field => (
+                              <div key={field.id}>
+                                <label className="block text-xs font-medium text-indigo-800 mb-1">
+                                  {field.name} {field.unit ? `(${field.unit})` : ''}
+                                </label>
+                                {field.type === 'select' ? (
+                                  <select
+                                    value={sampleCustomData[field.name] || ''}
+                                    onChange={e => setSampleCustomData({ ...sampleCustomData, [field.name]: e.target.value })}
+                                    className="w-full text-sm border-indigo-200 rounded-md bg-white px-2 py-1.5"
+                                  >
+                                    <option value="">-- Sélectionner --</option>
+                                    {field.options?.map(opt => (
+                                      <option key={opt} value={opt}>{opt}</option>
+                                    ))}
+                                  </select>
+                                ) : field.type === 'boolean' ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(sampleCustomData[field.name])}
+                                    onChange={e => setSampleCustomData({ ...sampleCustomData, [field.name]: e.target.checked })}
+                                    className="rounded border-indigo-300 text-indigo-600"
+                                  />
+                                ) : (
+                                  <input
+                                    type={field.type === 'number' ? 'number' : 'text'}
+                                    value={sampleCustomData[field.name] || ''}
+                                    placeholder={field.unit ? `Valeur en ${field.unit}...` : 'Saisir...'}
+                                    onChange={e => setSampleCustomData({ ...sampleCustomData, [field.name]: e.target.value })}
+                                    className="w-full text-sm border-indigo-200 rounded-md bg-white px-2 py-1.5"
+                                  />
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
                     <button
                       onClick={handleGenerateSamples}
                       className="bg-indigo-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm flex items-center"

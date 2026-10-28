@@ -59,6 +59,7 @@ export function Samples() {
     if (globalSearchQuery) {
       const q = globalSearchQuery.toLowerCase();
       const matchesGlobal = s.id.toLowerCase().includes(q) ||
+      (s.barcode && s.barcode.toLowerCase().includes(q)) ||
         s.client.toLowerCase().includes(q) ||
         s.project.toLowerCase().includes(q) ||
         (s.requestId && s.requestId.toLowerCase().includes(q));
@@ -66,10 +67,12 @@ export function Samples() {
     }
 
     // Filtre textuel local
-    const matchesSearch = s.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      s.client.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      s.project.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (s.requestId && s.requestId.toLowerCase().includes(searchTerm.toLowerCase()));
+    const qLocal = searchTerm.toLowerCase();
+    const matchesSearch = s.id.toLowerCase().includes(qLocal) ||
+      (s.barcode && s.barcode.toLowerCase().includes(qLocal)) || // <-- Ajout ici
+      s.client.toLowerCase().includes(qLocal) ||
+      s.project.toLowerCase().includes(qLocal) ||
+      (s.requestId && s.requestId.toLowerCase().includes(qLocal));
 
     // Filtre par statut spécifique
     const matchesFilter = filterStatus === 'all' || s.status === filterStatus;
@@ -448,30 +451,68 @@ export function Samples() {
                 </div>
               </section>
 
-              {/* Attributs Métier Personnalisés (CMS) */}
+              {/* Attributs Métier Personnalisés (CMS) reliés au MaterialTemplate */}
               <section>
                 <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Propriétés Matériau</h4>
                 <div className="space-y-2">
-                  {Object.entries(selectedSample.customData).map(([key, value]) => (
-                    <div key={key} className="flex justify-between py-2 border-b border-slate-100 last:border-0 text-sm">
-                      <span className="text-slate-600 capitalize">{key.replace('_', ' ')}</span>
-                      <span className="font-medium text-slate-900 text-right">
-                        {Array.isArray(value) ? (
-                          <div className="flex flex-wrap gap-1.5 justify-end mt-1 sm:mt-0">
-                            {value.map(v => (
-                              <span key={v} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded text-xs font-medium">
-                                {v}
-                              </span>
-                            ))}
+                  {(() => {
+                    // 1. On récupère le modèle de matériau associé à l'échantillon
+                    const matTemplate = materialTemplates.find(t => t.id === selectedSample.templateId);
+                    const templateFields = matTemplate?.fields || [];
+                    const customData = selectedSample.customData || {};
+
+                    // 2. Si le modèle possède des champs définis, on les affiche tous
+                    if (templateFields.length > 0) {
+                      return templateFields.map((field) => {
+                        // On cherche la valeur par ID du champ ou par nom du champ
+                        const value = customData[field.id] !== undefined ? customData[field.id] : customData[field.name];
+
+                        return (
+                          <div key={field.id} className="flex justify-between py-2 border-b border-slate-100 last:border-0 text-sm">
+                            <span className="text-slate-600">
+                              {field.name} {field.unit ? <span className="text-xs text-slate-400">({field.unit})</span> : ''}
+                            </span>
+                            <span className="font-medium text-slate-900 text-right">
+                              {value === undefined || value === null || value === '' ? (
+                                <span className="text-slate-400 italic text-xs">Non renseigné</span>
+                              ) : Array.isArray(value) ? (
+                                <div className="flex flex-wrap gap-1.5 justify-end mt-1 sm:mt-0">
+                                  {value.map(v => (
+                                    <span key={v} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded text-xs font-medium">
+                                      {v}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : typeof value === 'boolean' ? (
+                                value ? 'Oui' : 'Non'
+                              ) : (
+                                `${value}${field.unit ? ` ${field.unit}` : ''}`
+                              )}
+                            </span>
                           </div>
-                        ) : typeof value === 'boolean' ? (
-                          value ? 'Oui' : 'Non'
-                        ) : (
-                          value
-                        )}
-                      </span>
-                    </div>
-                  ))}
+                        );
+                      });
+                    }
+
+                    // 3. Fallback : s'il n'y a pas de champs dans le modèle mais qu'il y a des données dans customData
+                    const entries = Object.entries(customData);
+                    if (entries.length === 0) {
+                      return (
+                        <div className="text-sm text-slate-500 italic bg-slate-50 p-3 rounded-lg border border-slate-100">
+                          Aucune propriété définie pour ce matériau.
+                        </div>
+                      );
+                    }
+
+                    return entries.map(([key, value]) => (
+                      <div key={key} className="flex justify-between py-2 border-b border-slate-100 last:border-0 text-sm">
+                        <span className="text-slate-600 capitalize">{key.replace('_', ' ')}</span>
+                        <span className="font-medium text-slate-900 text-right">
+                          {Array.isArray(value) ? value.join(', ') : typeof value === 'boolean' ? (value ? 'Oui' : 'Non') : value}
+                        </span>
+                      </div>
+                    ));
+                  })()}
                 </div>
               </section>
 

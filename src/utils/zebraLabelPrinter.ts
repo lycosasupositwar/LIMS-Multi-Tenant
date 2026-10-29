@@ -1,5 +1,5 @@
 /**
- * Utilitaire d'impression d'étiquettes Échantillons (Imprimantes Thermiques Zebra & ZPL)
+ * Utilitaire d'impression d'étiquettes Échantillons (Imprimantes Thermiques Zebra & ZPL) - Format 70x37mm
  */
 
 import { Sample } from '../types';
@@ -11,39 +11,39 @@ export interface LabelPrintData {
 }
 
 /**
- * 1. Génère le code natif ZPL II (Zebra Programming Language) pour étiquettes 50x30mm (203 dpi)
- * Commande ^BQN pour le QR Code contenant le barcode de l'échantillon
+ * 1. Génère le code natif ZPL II (Zebra Programming Language) pour étiquettes 70x37mm (203 dpi)
+ * Largeur 70mm (~560 dots) x Hauteur 37mm (~296 dots) à 203 dpi
  */
 export function generateZplForSamples(items: LabelPrintData[]): string {
   return items
     .map(({ sample, materialName, labCode }) => {
       const dateStr = new Date(sample.receivedAt).toLocaleDateString('fr-FR');
       const reqRef = sample.requestId || 'INDEPENDANT';
-      const cleanClient = (sample.client || '').substring(0, 22);
-      const cleanProject = (sample.project || '').substring(0, 24);
-      const cleanMat = `${materialName} (${sample.materialState})`.substring(0, 24);
+      const cleanClient = (sample.client || '').substring(0, 28);
+      const cleanProject = (sample.project || '').substring(0, 32);
+      const cleanMat = `${materialName} (${sample.materialState})`.substring(0, 32);
 
       return [
         '^XA',
         '^CI28', // Encodage UTF-8 pour les accents français
-        '^PW400', // Largeur 50mm à 203 dpi (8 dots/mm = 400 dots)
-        '^LL240', // Hauteur 30mm à 203 dpi (240 dots)
+        '^PW560', // Largeur 70mm à 203 dpi (8 dots/mm = 560 dots)
+        '^LL296', // Hauteur 37mm à 203 dpi (296 dots)
         '^LH0,0',
 
-        // QR Code à gauche (contient le barcode exact pour la recherche directe)
-        '^FO16,20^BQN,2,4^FDQA,' + sample.barcode + '^FS',
-        '^FO16,165^A0N,16,16^FD' + sample.barcode + '^FS',
+        // QR Code à gauche (agrandi pour un meilleur scan)
+        '^FO20,25^BQN,2,5^FDQA,' + sample.barcode + '^FS',
+        '^FO20,195^A0N,18,18^FD' + sample.barcode + '^FS',
 
         // Informations textuelles à droite du QR Code
-        '^FO145,18^A0N,24,24^FD' + sample.id + '^FS',
-        '^FO325,18^A0N,18,18^FD[' + (labCode || 'LIMS') + ']^FS',
-        '^FO145,46^GB240,1,1^FS', // Ligne de séparation
+        '^FO180,20^A0N,28,28^FD' + sample.id + '^FS',
+        '^FO460,20^A0N,22,22^FD[' + (labCode || 'LIMS') + ']^FS',
+        '^FO180,55^GB360,2,2^FS', // Ligne de séparation
 
-        '^FO145,55^A0N,18,18^FDDem: ' + reqRef + '^FS',
-        '^FO145,78^A0N,18,18^FDCli: ' + cleanClient + '^FS',
-        '^FO145,101^A0N,16,16^FDPrj: ' + cleanProject + '^FS',
-        '^FO145,122^A0N,16,16^FDMat: ' + cleanMat + '^FS',
-        '^FO145,145^A0N,15,15^FDRec: ' + dateStr + ' | Prio: ' + sample.priority.toUpperCase() + '^FS',
+        '^FO180,68^A0N,22,22^FDDem: ' + reqRef + '^FS',
+        '^FO180,98^A0N,22,22^FDCli: ' + cleanClient + '^FS',
+        '^FO180,128^A0N,20,20^FDPrj: ' + cleanProject + '^FS',
+        '^FO180,154^A0N,20,20^FDMat: ' + cleanMat + '^FS',
+        '^FO180,184^A0N,18,18^FDRec: ' + dateStr + ' | Prio: ' + sample.priority.toUpperCase() + '^FS',
 
         '^XZ'
       ].join('\n');
@@ -52,12 +52,12 @@ export function generateZplForSamples(items: LabelPrintData[]): string {
 }
 
 /**
- * 2. Ouvre une fenêtre d'impression calibrée pour rouleau d'étiquettes Zebra (ex: 50mm x 30mm)
+ * 2. Ouvre une fenêtre d'impression calibrée pour rouleau d'étiquettes Zebra 70mm x 37mm
  */
 export function printZebraLabelsWindow(items: LabelPrintData[]) {
   if (items.length === 0) return;
 
-  const printWin = window.open('', '_blank', 'width=600,height=500');
+  const printWin = window.open('', '_blank', 'width=700,height=600');
   if (!printWin) {
     alert('Veuillez autoriser les pop-ups pour imprimer les étiquettes.');
     return;
@@ -66,8 +66,8 @@ export function printZebraLabelsWindow(items: LabelPrintData[]) {
   const labelsHtml = items
     .map(({ sample, materialName, labCode }) => {
       const dateStr = new Date(sample.receivedAt).toLocaleDateString('fr-FR');
-      // Le QR code encode directement sample.barcode pour que le scan dans "Rechercher partout" trouve l'échantillon
-      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=140x140&margin=0&data=${encodeURIComponent(
+      // QR code dimensionné pour le format 70x37
+      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=0&data=${encodeURIComponent(
         sample.barcode
       )}`;
 
@@ -84,7 +84,7 @@ export function printZebraLabelsWindow(items: LabelPrintData[]) {
             </div>
             <div class="meta-line"><strong>Dem :</strong> ${sample.requestId || 'N/A'}</div>
             <div class="meta-line"><strong>Cli :</strong> ${sample.client}</div>
-            <div class="meta-line truncate">${sample.project}</div>
+            <div class="meta-line truncate"><strong>Prj :</strong> ${sample.project}</div>
             <div class="meta-line"><strong>Mat :</strong> ${materialName} (${sample.materialState})</div>
             <div class="footer-row">
               <span>Récep: ${dateStr}</span>
@@ -101,10 +101,10 @@ export function printZebraLabelsWindow(items: LabelPrintData[]) {
     <html lang="fr">
     <head>
       <meta charset="UTF-8" />
-      <title>Impression Étiquettes Zebra (${items.length})</title>
+      <title>Impression Étiquettes Zebra 70x37 (${items.length})</title>
       <style>
         @page {
-          size: 50mm 30mm;
+          size: 70mm 37mm;
           margin: 0;
         }
         * {
@@ -136,14 +136,14 @@ export function printZebraLabelsWindow(items: LabelPrintData[]) {
           cursor: pointer;
         }
         .zebra-label {
-          width: 50mm;
-          height: 30mm;
+          width: 70mm;
+          height: 37mm;
           background: #fff;
-          padding: 1.8mm;
+          padding: 2.5mm;
           display: flex;
           flex-direction: row;
           align-items: center;
-          gap: 2mm;
+          gap: 3mm;
           page-break-after: always;
           break-after: page;
           overflow: hidden;
@@ -151,7 +151,7 @@ export function printZebraLabelsWindow(items: LabelPrintData[]) {
           margin: 8px auto;
         }
         .qr-col {
-          width: 15mm;
+          width: 20mm;
           display: flex;
           flex-direction: column;
           align-items: center;
@@ -159,13 +159,13 @@ export function printZebraLabelsWindow(items: LabelPrintData[]) {
           flex-shrink: 0;
         }
         .qr-img {
-          width: 14mm;
-          height: 14mm;
+          width: 18mm;
+          height: 18mm;
           display: block;
         }
         .barcode-text {
           font-family: monospace;
-          font-size: 5.5pt;
+          font-size: 6pt;
           font-weight: bold;
           margin-top: 1mm;
           text-align: center;
@@ -183,24 +183,24 @@ export function printZebraLabelsWindow(items: LabelPrintData[]) {
           display: flex;
           justify-content: space-between;
           align-items: baseline;
-          border-bottom: 0.3mm solid #000;
-          padding-bottom: 0.4mm;
-          margin-bottom: 0.5mm;
+          border-bottom: 0.4mm solid #000;
+          padding-bottom: 0.6mm;
+          margin-bottom: 0.8mm;
         }
         .sample-id {
-          font-size: 7.5pt;
+          font-size: 9pt;
           font-weight: 900;
           font-family: monospace;
         }
         .lab-badge {
-          font-size: 5.5pt;
+          font-size: 6.5pt;
           font-weight: bold;
-          border: 0.2mm solid #000;
-          padding: 0 1mm;
+          border: 0.3mm solid #000;
+          padding: 0 1.2mm;
         }
         .meta-line {
-          font-size: 5.8pt;
-          line-height: 1.22;
+          font-size: 7.2pt;
+          line-height: 1.25;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -208,10 +208,10 @@ export function printZebraLabelsWindow(items: LabelPrintData[]) {
         .footer-row {
           display: flex;
           justify-content: space-between;
-          font-size: 5pt;
+          font-size: 6.2pt;
           font-weight: bold;
-          border-top: 0.2mm solid #000;
-          padding-top: 0.4mm;
+          border-top: 0.3mm solid #000;
+          padding-top: 0.6mm;
           margin-top: auto;
         }
         @media print {
@@ -226,7 +226,7 @@ export function printZebraLabelsWindow(items: LabelPrintData[]) {
     </head>
     <body>
       <div class="no-print-bar">
-        <span>Aperçu Zebra (Format 50 × 30 mm) — ${items.length} étiquette(s)</span>
+        <span>Aperçu Zebra (Format 70 × 37 mm) — ${items.length} étiquette(s)</span>
         <button onclick="window.print()">Lancer l'impression Zebra</button>
       </div>
       ${labelsHtml}

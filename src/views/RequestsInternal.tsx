@@ -34,9 +34,9 @@ export function RequestsInternal() {
     updateRequestData,
     samples,
     analyses,
-    allSamples,     // <-- Ajouté pour vérifier l'unicité sur tous les labos
-    allAnalyses,    // <-- Ajouté pour vérifier l'unicité sur tous les labos
-    labSettings,    // <-- Ajouté pour respecter les préfixes configurés
+    allSamples,
+    allAnalyses,
+    labSettings,
     globalSearchQuery,
     activeLabId
   } = useLims();
@@ -67,6 +67,36 @@ export function RequestsInternal() {
   );
 
   /**
+   * Extrait la valeur d'une propriété de matériau depuis le customData d'une demande
+   * (compatible avec la structure `${field.id}__material_properties` de NewRequestModal / EditRequestModal)
+   */
+  const getMaterialPropFromRequest = (
+    req: AnalysisRequest | null,
+    matTplId: string,
+    propFieldId: string,
+    propFieldName: string
+  ) => {
+    if (!req || !req.customData) return undefined;
+    const reqTpl = requestTemplates.find(t => t.id === req.templateId);
+    const matFields = reqTpl?.fields.filter(f => f.type === 'materials') || [];
+
+    for (const mf of matFields) {
+      const propsContainer = req.customData[`${mf.id}__material_properties`];
+      if (propsContainer && propsContainer[matTplId]) {
+        const val = propsContainer[matTplId][propFieldId] ?? propsContainer[matTplId][propFieldName];
+        if (val !== undefined) return val;
+      }
+    }
+
+    // Fallbacks si stocké à plat
+    return (
+      req.customData[`matprop_${matTplId}_${propFieldId}`] ??
+      req.customData[propFieldId] ??
+      req.customData[propFieldName]
+    );
+  };
+
+  /**
    * Filtrage des demandes visibles selon l'onglet (actives/terminées), la recherche et le rôle
    */
   const visibleRequests = requests.filter(r => {
@@ -78,6 +108,7 @@ export function RequestsInternal() {
       const template = requestTemplates.find(t => t.id === r.templateId);
       const requester = users.find(u => u.id === r.requesterId);
       const matchesSearch = r.id.toLowerCase().includes(q) ||
+        r.title.toLowerCase().includes(q) ||
         (template && template.name.toLowerCase().includes(q)) ||
         (requester && requester.name.toLowerCase().includes(q));
       if (!matchesSearch) return false;
@@ -88,7 +119,7 @@ export function RequestsInternal() {
     return false;
   });
 
-  // Synchronise automatiquement les champs du Modèle Matériau sélectionné
+  // Synchronise automatiquement les champs du Modèle Matériau sélectionné avec les valeurs saisies par le client
   React.useEffect(() => {
     const matTpl = materialTemplates.find(t => t.id === sampleMaterialTemplateId);
     if (!matTpl) {
@@ -97,12 +128,13 @@ export function RequestsInternal() {
     }
     const initialProps: Record<string, any> = {};
     matTpl.fields.forEach(field => {
-      // Si la demande client contient déjà une info portant le même ID ou nom, on la récupère !
-      const fromReq = selectedRequest?.customData?.[field.id] ?? selectedRequest?.customData?.[field.name];
-      initialProps[field.name] = fromReq !== undefined ? fromReq : (field.type === 'boolean' ? false : '');
+      const fromReq = getMaterialPropFromRequest(selectedRequest, matTpl.id, field.id, field.name);
+      initialProps[field.name] = fromReq !== undefined
+        ? fromReq
+        : (field.type === 'boolean' ? false : field.type === 'multiselect' ? [] : '');
     });
     setSampleCustomData(initialProps);
-  }, [sampleMaterialTemplateId, selectedRequest, materialTemplates]);
+  }, [sampleMaterialTemplateId, selectedRequest, materialTemplates, requestTemplates]);
 
   /**
    * Rendu graphique du badge de statut
@@ -161,7 +193,7 @@ export function RequestsInternal() {
             action: 'Changement',
             details: `Statut: ${newStatus}`
           },
-          ...prev.auditTrail
+          ...(prev.auditTrail || [])
         ]
       } : null);
     }
@@ -186,7 +218,7 @@ export function RequestsInternal() {
             action: 'Rejetée',
             details: `Refus: ${statusComment}`
           },
-          ...prev.auditTrail
+          ...(prev.auditTrail || [])
         ]
       } : null);
     }
@@ -240,7 +272,7 @@ export function RequestsInternal() {
     // Création de N échantillons avec leurs essais associés
     for (let i = 0; i < sampleQuantity; i++) {
       const sampleId = generateUniqueLimsId(samplePrefix, usedSampleIds);
-      usedSampleIds.add(sampleId); // Empêche tout doublon même lors d'une création en lot (ex: 50 échantillons d'un coup)
+      usedSampleIds.add(sampleId);
 
       const barcode = generateUniqueBarcode(usedBarcodes, 'BC');
       usedBarcodes.add(barcode);
@@ -257,6 +289,7 @@ export function RequestsInternal() {
         client: requester?.company || requester?.name || 'Inconnu',
         project: selectedRequest.title,
         priority: samplePriority,
+        // Utilise directement les valeurs pré-remplies et éventuellement ajustées par l'opérateur dans sampleCustomData
         customData: { ...sampleCustomData },
         images: [],
         notes: `Échantillon généré depuis la demande ${selectedRequest.id}`
@@ -339,6 +372,18 @@ export function RequestsInternal() {
                       setSamplePriority((req as any).priority || 'normale');
                       setConclusionText(req.conclusion || '');
                       setShowAudit(false);
+
+                      // Pré-sélectionne automatiquement le premier matériau choisi par le client dans le formulaire
+                      const reqTpl = requestTemplates.find(t => t.id === req.templateId);
+                      const matField = reqTpl?.fields.find(f => f.type === 'materials');
+                      if (matField && req.customData?.[matField.id]) {
+                        const rawVal = req.customData[matField.id];
+                        const firstMatId = Array.isArray(rawVal) ? rawVal[0] : rawVal;
+                        const matchedMat = materialTemplates.find(m => m.id === firstMatId || m.name === firstMatId);
+                        if (matchedMat) {
+                          setSampleMaterialTemplateId(matchedMat.id);
+                        }
+                      }
                     }}
                     className={`w-full text-left p-4 rounded-lg border transition-all ${isSelected ? 'bg-blue-50 border-blue-300 shadow-sm' : 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-sm'
                       }`}
@@ -583,6 +628,7 @@ export function RequestsInternal() {
                         />
                       </div>
                     </div>
+
                     {/* Champs dynamiques du Modèle Matériau sélectionné */}
                     {(() => {
                       const selectedMatTpl = materialTemplates.find(t => t.id === sampleMaterialTemplateId);
@@ -600,7 +646,7 @@ export function RequestsInternal() {
                                 </label>
                                 {field.type === 'select' ? (
                                   <select
-                                    value={sampleCustomData[field.name] || ''}
+                                    value={sampleCustomData[field.name] ?? ''}
                                     onChange={e => setSampleCustomData({ ...sampleCustomData, [field.name]: e.target.value })}
                                     className="w-full text-sm border-indigo-200 rounded-md bg-white px-2 py-1.5"
                                   >
@@ -609,19 +655,51 @@ export function RequestsInternal() {
                                       <option key={opt} value={opt}>{opt}</option>
                                     ))}
                                   </select>
+                                ) : field.type === 'multiselect' ? (
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {field.options?.map(opt => {
+                                      const currentVals = Array.isArray(sampleCustomData[field.name]) ? sampleCustomData[field.name] : [];
+                                      const isChecked = currentVals.includes(opt);
+                                      return (
+                                        <button
+                                          key={opt}
+                                          type="button"
+                                          onClick={() => {
+                                            const nextVals = isChecked
+                                              ? currentVals.filter((v: string) => v !== opt)
+                                              : [...currentVals, opt];
+                                            setSampleCustomData({ ...sampleCustomData, [field.name]: nextVals });
+                                          }}
+                                          className={`px-2 py-1 rounded text-xs font-medium border ${
+                                            isChecked
+                                              ? 'bg-indigo-600 text-white border-indigo-600'
+                                              : 'bg-white text-slate-700 border-indigo-200'
+                                          }`}
+                                        >
+                                          {opt}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
                                 ) : field.type === 'boolean' ? (
-                                  <input
-                                    type="checkbox"
-                                    checked={Boolean(sampleCustomData[field.name])}
-                                    onChange={e => setSampleCustomData({ ...sampleCustomData, [field.name]: e.target.checked })}
-                                    className="rounded border-indigo-300 text-indigo-600"
-                                  />
+                                  <label className="inline-flex items-center gap-2 text-sm text-indigo-900 mt-1">
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(sampleCustomData[field.name])}
+                                      onChange={e => setSampleCustomData({ ...sampleCustomData, [field.name]: e.target.checked })}
+                                      className="rounded border-indigo-300 text-indigo-600"
+                                    />
+                                    Oui
+                                  </label>
                                 ) : (
                                   <input
-                                    type={field.type === 'number' ? 'number' : 'text'}
-                                    value={sampleCustomData[field.name] || ''}
+                                    type={field.type === 'number' ? 'number' : field.type === 'date' ? 'date' : 'text'}
+                                    value={sampleCustomData[field.name] ?? ''}
                                     placeholder={field.unit ? `Valeur en ${field.unit}...` : 'Saisir...'}
-                                    onChange={e => setSampleCustomData({ ...sampleCustomData, [field.name]: e.target.value })}
+                                    onChange={e => setSampleCustomData({
+                                      ...sampleCustomData,
+                                      [field.name]: field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value
+                                    })}
                                     className="w-full text-sm border-indigo-200 rounded-md bg-white px-2 py-1.5"
                                   />
                                 )}
@@ -684,22 +762,48 @@ export function RequestsInternal() {
 
                     <dl className="space-y-4">
                       {Object.entries(selectedRequest.customData).map(([key, value]) => {
+                        // On masque les clés techniques de sous-propriétés matériaux car elles sont affichées directement sous le champ 'materials'
+                        if (key.endsWith('__material_properties') || key.startsWith('matprop_')) {
+                          return null;
+                        }
+
                         const template = requestTemplates.find(t => t.id === selectedRequest.templateId);
                         const field = template?.fields.find(f => f.id === key);
+
+                        // Helper pour résoudre le nom d'un matériau depuis son ID
+                        const resolveMaterialName = (idOrName: string) =>
+                          materialTemplates.find(m => m.id === idOrName || m.name === idOrName)?.name || idOrName;
+
                         let displayValue = value;
                         if (typeof value === 'boolean') {
                           displayValue = value ? 'Oui' : 'Non';
                         } else if (field?.type === 'analyses' && Array.isArray(value)) {
                           displayValue = value.map(id => analysisTemplates.find(a => a.id === id)?.name || id).join(', ');
+                        } else if (field?.type === 'materials') {
+                          displayValue = Array.isArray(value)
+                            ? value.map(resolveMaterialName).join(', ')
+                            : resolveMaterialName(String(value));
                         } else if (Array.isArray(value)) {
                           displayValue = value.join(', ');
                         }
+
+                        // Si c'est un champ de type 'materials', on récupère les modèles sélectionnés et leurs propriétés associées
+                        const selectedMatTemplates = field?.type === 'materials'
+                          ? (Array.isArray(value) ? value : [value])
+                              .map(v => materialTemplates.find(m => m.id === v || m.name === v))
+                              .filter(Boolean)
+                          : [];
+
+                        const propertiesKey = `${key}__material_properties`;
+                        const materialPropertiesContainer = isEditing
+                          ? (editedData[propertiesKey] || {})
+                          : (selectedRequest.customData[propertiesKey] || {});
 
                         return (
                           <div key={key} className="bg-slate-50 p-3 rounded-lg border border-slate-100">
                             <dt className="text-xs font-medium text-slate-500 mb-1">{field?.name || key}</dt>
                             <dd className="text-sm text-slate-900 font-medium">
-                              {isEditing ? (
+                              {isEditing && field?.type !== 'materials' && field?.type !== 'analyses' ? (
                                 typeof value === 'boolean' ? (
                                   <input
                                     type="checkbox"
@@ -724,18 +828,99 @@ export function RequestsInternal() {
                                     className="w-full text-sm border-slate-300 rounded px-2 py-1"
                                   />
                                 )
+                              ) : Array.isArray(value) ? (
+                                <div className="flex flex-wrap gap-1.5 mt-1">
+                                  {value.map(v => (
+                                    <span
+                                      key={v}
+                                      className={`px-2 py-0.5 rounded text-xs font-medium border ${
+                                        field?.type === 'materials'
+                                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                          : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                      }`}
+                                    >
+                                      {field?.type === 'analyses'
+                                        ? (analysisTemplates.find(a => a.id === v)?.name || v)
+                                        : field?.type === 'materials'
+                                          ? resolveMaterialName(v)
+                                          : v}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : field?.type === 'date' && displayValue ? (
+                                new Date(displayValue as string).toLocaleDateString('fr-FR')
                               ) : (
-                                field?.type === 'date' && displayValue ? new Date(displayValue as string).toLocaleDateString('fr-FR') : (
-                                  Array.isArray(value) ? (
-                                    <div className="flex flex-wrap gap-1.5 mt-1">
-                                      {value.map(v => (
-                                        <span key={v} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded text-xs font-medium">
-                                          {field?.type === 'analyses' ? (analysisTemplates.find(a => a.id === v)?.name || v) : v}
+                                displayValue
+                              )}
+
+                              {/* Affichage et édition des propriétés des matériaux sélectionnés */}
+                              {selectedMatTemplates.length > 0 && (
+                                <div className="mt-3 pt-2 border-t border-slate-200 space-y-2.5">
+                                  {selectedMatTemplates.map(matTpl => {
+                                    const matPropsForTpl = materialPropertiesContainer[matTpl!.id] || {};
+                                    return (
+                                      <div key={matTpl!.id} className="bg-white rounded-lg border border-emerald-200 p-2.5 text-xs space-y-1.5">
+                                        <span className="font-bold text-emerald-900 uppercase tracking-wider block">
+                                          Propriétés — {matTpl!.name}
                                         </span>
-                                      ))}
-                                    </div>
-                                  ) : displayValue
-                                )
+                                        {matTpl!.fields.length === 0 ? (
+                                          <span className="text-slate-400 italic">Aucune propriété configurée sur ce modèle.</span>
+                                        ) : (
+                                          <div className="space-y-1">
+                                            {matTpl!.fields.map(matField => {
+                                              const propVal =
+                                                matPropsForTpl[matField.id] ??
+                                                matPropsForTpl[matField.name] ??
+                                                getMaterialPropFromRequest(selectedRequest, matTpl!.id, matField.id, matField.name);
+
+                                              return (
+                                                <div key={matField.id} className="flex items-center justify-between bg-slate-50 px-2.5 py-1.5 rounded border border-slate-100 gap-2">
+                                                  <span className="text-slate-600">
+                                                    {matField.name} {matField.unit ? `(${matField.unit})` : ''}
+                                                  </span>
+                                                  {isEditing ? (
+                                                    <input
+                                                      type={matField.type === 'number' ? 'number' : 'text'}
+                                                      value={propVal !== undefined ? String(propVal) : ''}
+                                                      onChange={e => {
+                                                        const updatedVal = matField.type === 'number'
+                                                          ? (e.target.value === '' ? '' : Number(e.target.value))
+                                                          : e.target.value;
+                                                        setEditedData({
+                                                          ...editedData,
+                                                          [propertiesKey]: {
+                                                            ...materialPropertiesContainer,
+                                                            [matTpl!.id]: {
+                                                              ...matPropsForTpl,
+                                                              [matField.id]: updatedVal
+                                                            }
+                                                          }
+                                                        });
+                                                      }}
+                                                      className="w-36 text-xs border border-slate-300 rounded px-2 py-1 bg-white text-right"
+                                                    />
+                                                  ) : (
+                                                    <span className="font-semibold text-slate-900 text-right">
+                                                      {propVal !== undefined && propVal !== '' ? (
+                                                        Array.isArray(propVal)
+                                                          ? propVal.join(', ')
+                                                          : typeof propVal === 'boolean'
+                                                            ? (propVal ? 'Oui' : 'Non')
+                                                            : `${propVal}${matField.unit ? ` ${matField.unit}` : ''}`
+                                                      ) : (
+                                                        <span className="text-slate-400 italic font-normal">Non renseigné</span>
+                                                      )}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               )}
                             </dd>
                           </div>
@@ -785,6 +970,7 @@ export function RequestsInternal() {
                     )}
                   </div>
                 </div>
+
                 {/* Encart Conclusion Générale pour les Rapports */}
                 <div className="mt-8 border-t border-slate-200 pt-6">
                   <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-5">
@@ -941,8 +1127,8 @@ export function RequestsInternal() {
                                           <span className="ml-1.5 text-[10px] font-mono text-slate-400">({analysis.id})</span>
                                         </div>
                                         <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border ${analysis.status === 'rejete'
-                                            ? 'bg-red-50 border-red-200 text-red-700'
-                                            : 'bg-white border-slate-200 text-slate-500'
+                                          ? 'bg-red-50 border-red-200 text-red-700'
+                                          : 'bg-white border-slate-200 text-slate-500'
                                           }`}>
                                           {analysis.status}
                                         </span>

@@ -39,7 +39,8 @@ export function RequestsInternal() {
     allAnalyses,
     labSettings,
     globalSearchQuery,
-    activeLabId
+    activeLabId,
+    laboratories
   } = useLims();
 
   // États locaux de sélection et d'édition
@@ -1014,11 +1015,16 @@ export function RequestsInternal() {
                     const activeAnalysisTpls = analysisTemplates.filter(t => t.isActive !== false);
 
                     const buildLabelPayload = (targetSamples: Sample[]) =>
-                      targetSamples.map(s => ({
-                        sample: s,
-                        materialName: materialTemplates.find(m => m.id === s.templateId)?.name || s.templateId,
-                        labCode: s.labId?.toUpperCase()
-                      }));
+                      targetSamples.map(s => {
+                        // On cherche le laboratoire associé à l'échantillon
+                        const lab = laboratories.find(l => l.id === s.labId);
+                        return {
+                          sample: s,
+                          materialName: materialTemplates.find(m => m.id === s.templateId)?.name || s.templateId,
+                          // On passe lab.code (ex: 'MET') au lieu de s.labId
+                          labCode: lab?.code || s.labId?.toUpperCase() || 'LIMS'
+                        };
+                      });
 
                     return (
                       <>

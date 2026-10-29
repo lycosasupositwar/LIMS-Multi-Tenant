@@ -15,7 +15,7 @@
 
 import React, { useState } from 'react';
 import { useLims } from '../store';
-import { Search, Filter, MoreHorizontal, FlaskConical, Link as LinkIcon, Image as ImageIcon, X, Plus } from 'lucide-react';
+import { Search, Filter, FlaskConical, Link as LinkIcon, Image as ImageIcon, X, Plus } from 'lucide-react';
 import { Sample, SampleStatus } from '../types';
 
 export function Samples() {
@@ -39,7 +39,6 @@ export function Samples() {
   const [filterStatus, setFilterStatus] = useState<SampleStatus | 'all'>('all');
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
-  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
   // États d'édition métallographique et découpe
   const [isEditingMounting, setIsEditingMounting] = useState(false);
@@ -52,14 +51,15 @@ export function Samples() {
   const [activeMainTab, setActiveMainTab] = useState<'pending' | 'history'>('pending');
 
   /**
-   * Filtrage combiné : recherche globale, recherche locale, statut et statut d'archivage
+   * Filtrage combiné : recherche globale (incluant barcode), recherche locale (incluant barcode), statut et statut d'archivage
    */
   const filteredSamples = samples.filter(s => {
-    // Filtre global transverse
+    // Filtre global transverse ("Rechercher partout")
     if (globalSearchQuery) {
       const q = globalSearchQuery.toLowerCase();
-      const matchesGlobal = s.id.toLowerCase().includes(q) ||
-      (s.barcode && s.barcode.toLowerCase().includes(q)) ||
+      const matchesGlobal =
+        s.id.toLowerCase().includes(q) ||
+        (s.barcode && s.barcode.toLowerCase().includes(q)) ||
         s.client.toLowerCase().includes(q) ||
         s.project.toLowerCase().includes(q) ||
         (s.requestId && s.requestId.toLowerCase().includes(q));
@@ -68,8 +68,9 @@ export function Samples() {
 
     // Filtre textuel local
     const qLocal = searchTerm.toLowerCase();
-    const matchesSearch = s.id.toLowerCase().includes(qLocal) ||
-      (s.barcode && s.barcode.toLowerCase().includes(qLocal)) || // <-- Ajout ici
+    const matchesSearch =
+      s.id.toLowerCase().includes(qLocal) ||
+      (s.barcode && s.barcode.toLowerCase().includes(qLocal)) ||
       s.client.toLowerCase().includes(qLocal) ||
       s.project.toLowerCase().includes(qLocal) ||
       (s.requestId && s.requestId.toLowerCase().includes(qLocal));
@@ -186,7 +187,7 @@ export function Samples() {
               </div>
               <input
                 type="text"
-                placeholder="Rechercher (Nuance, Composition, Client)..."
+                placeholder="Rechercher (ID, Code-barres, Client, Projet)..."
                 className="block w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg leading-5 bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 sm:text-sm"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -325,7 +326,7 @@ export function Samples() {
                 <div>
                   <h3 className="font-display font-bold text-lg text-slate-900">Détails Échantillon</h3>
                   <p className="text-xs text-slate-500 font-mono mt-0.5">
-                    {selectedSample.id}
+                    {selectedSample.id} &bull; {selectedSample.barcode}
                     {selectedSample.parentSampleId && (
                       <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-800 text-[10px] rounded-md">
                         Découpé de {selectedSample.parentSampleId}
@@ -456,16 +457,34 @@ export function Samples() {
                 <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Propriétés Matériau</h4>
                 <div className="space-y-2">
                   {(() => {
-                    // 1. On récupère le modèle de matériau associé à l'échantillon
                     const matTemplate = materialTemplates.find(t => t.id === selectedSample.templateId);
                     const templateFields = matTemplate?.fields || [];
                     const customData = selectedSample.customData || {};
 
-                    // 2. Si le modèle possède des champs définis, on les affiche tous
+                    // Si l'échantillon est lié à une demande, on peut aussi récupérer en secours les propriétés dans la demande parente
+                    const parentRequest = selectedSample.requestId
+                      ? requests.find(r => r.id === selectedSample.requestId)
+                      : undefined;
+
                     if (templateFields.length > 0) {
-                      return templateFields.map((field) => {
-                        // On cherche la valeur par ID du champ ou par nom du champ
-                        const value = customData[field.id] !== undefined ? customData[field.id] : customData[field.name];
+                      return templateFields.map(field => {
+                        let value = customData[field.id] !== undefined ? customData[field.id] : customData[field.name];
+
+                        // Fallback automatique depuis la demande parente si l'échantillon avait été généré avec un customData vide
+                        if ((value === undefined || value === '') && parentRequest?.customData && matTemplate) {
+                          for (const [k, v] of Object.entries(parentRequest.customData)) {
+                            if (k.endsWith('__material_properties') && v && typeof v === 'object') {
+                              const propsForMat = (v as any)[matTemplate.id];
+                              if (propsForMat) {
+                                const candidate = propsForMat[field.id] ?? propsForMat[field.name];
+                                if (candidate !== undefined) {
+                                  value = candidate;
+                                  break;
+                                }
+                              }
+                            }
+                          }
+                        }
 
                         return (
                           <div key={field.id} className="flex justify-between py-2 border-b border-slate-100 last:border-0 text-sm">
@@ -494,7 +513,6 @@ export function Samples() {
                       });
                     }
 
-                    // 3. Fallback : s'il n'y a pas de champs dans le modèle mais qu'il y a des données dans customData
                     const entries = Object.entries(customData);
                     if (entries.length === 0) {
                       return (
@@ -508,7 +526,19 @@ export function Samples() {
                       <div key={key} className="flex justify-between py-2 border-b border-slate-100 last:border-0 text-sm">
                         <span className="text-slate-600 capitalize">{key.replace('_', ' ')}</span>
                         <span className="font-medium text-slate-900 text-right">
-                          {Array.isArray(value) ? value.join(', ') : typeof value === 'boolean' ? (value ? 'Oui' : 'Non') : value}
+                          {Array.isArray(value) ? (
+                            <div className="flex flex-wrap gap-1.5 justify-end mt-1 sm:mt-0">
+                              {value.map(v => (
+                                <span key={v} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded text-xs font-medium">
+                                  {v}
+                                </span>
+                              ))}
+                            </div>
+                          ) : typeof value === 'boolean' ? (
+                            value ? 'Oui' : 'Non'
+                          ) : (
+                            value
+                          )}
                         </span>
                       </div>
                     ));
@@ -533,7 +563,7 @@ export function Samples() {
                     </div>
                   ) : (
                     <button onClick={() => {
-                      setMountingData(selectedSample.mountingInfo || { method: 'A chaud', resinType: '', diameter: 30, polishingSteps: [], etching: '' });
+                      setMountingData(selectedSample.mountingInfo || { method: 'Enrobage à chaud' as any, resinType: '', diameter: 30, polishingSteps: [], etching: '' });
                       setIsEditingMounting(true);
                     }} className="text-xs text-blue-600 font-medium hover:underline">Modifier</button>
                   )}
@@ -677,8 +707,8 @@ export function Samples() {
                     {(() => {
                       const sampleAnalyses = analyses.filter(a => a.sampleId === selectedSample.id);
                       const displayed = activeAnalysisTab === 'pending'
-                        ? sampleAnalyses.filter(a => a.status !== 'terminee')
-                        : sampleAnalyses.filter(a => a.status === 'terminee');
+                        ? sampleAnalyses.filter(a => a.status !== 'termine' && a.status !== 'valide')
+                        : sampleAnalyses.filter(a => a.status === 'termine' || a.status === 'valide');
 
                       if (displayed.length === 0) {
                         return (
@@ -696,11 +726,11 @@ export function Samples() {
                           </div>
                           <div>
                             <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${analysis.status === 'valide' || analysis.status === 'termine' ? 'bg-emerald-100 text-emerald-800' :
-                                analysis.status === 'En Cours' || analysis.status === 'en_cours' ? 'bg-blue-100 text-blue-800' :
+                                analysis.status === 'En Cours' ? 'bg-blue-100 text-blue-800' :
                                   analysis.status === 'a_valider' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-800'
                               }`}>
                               {analysis.status === 'valide' || analysis.status === 'termine' ? 'Terminé' :
-                                analysis.status === 'En Cours' || analysis.status === 'en_cours' ? 'En cours' :
+                                analysis.status === 'En Cours' ? 'En cours' :
                                   analysis.status === 'a_valider' ? 'À valider' : 'Planifié'}
                             </span>
                           </div>

@@ -12,9 +12,10 @@
 
 import React, { useState } from 'react';
 import { useLims } from '../store';
-import { FileText, Clock, User, CheckCircle, Shield, AlertCircle, PlayCircle, History, Mail, XCircle, Plus, Box, Edit2, Save, Database, Layers, TestTube2, Trash2 } from 'lucide-react';
+import { FileText, Clock, User, CheckCircle, Shield, AlertCircle, PlayCircle, History, Mail, XCircle, Plus, Box, Edit2, Save, Database, Layers, TestTube2, Trash2, Printer, QrCode } from 'lucide-react';
 import { RequestStatus, AnalysisRequest, MaterialState, Sample } from '../types';
 import { generateUniqueLimsId, generateUniqueBarcode } from '../utils/idGenerator';
+import { printZebraLabelsWindow, generateZplForSamples } from '../utils/zebraLabelPrinter';
 
 export function RequestsInternal() {
   const {
@@ -1012,6 +1013,56 @@ export function RequestsInternal() {
                     <Database className="w-4 h-4 mr-2" />
                     Échantillons & Analyses Générés
                   </h4>
+                  {/* Échantillons et Essais Rattachés (avec Impression Zebra & ZPL) */}
+                <div className="mt-8 border-t border-slate-200 pt-6">
+                  {(() => {
+                    const isManager = currentUser?.role === 'manager' || currentUser?.role === 'admin';
+                    const reqSamples = samples.filter(s => s.requestId === selectedRequest.id);
+                    const activeAnalysisTpls = analysisTemplates.filter(t => t.isActive !== false);
+
+                    const buildLabelPayload = (targetSamples: Sample[]) =>
+                      targetSamples.map(s => ({
+                        sample: s,
+                        materialName: materialTemplates.find(m => m.id === s.templateId)?.name || s.templateId,
+                        labCode: s.labId?.toUpperCase()
+                      }));
+
+                    return (
+                      <>
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                          <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center">
+                            <Database className="w-4 h-4 mr-2" />
+                            Échantillons & Analyses Générés ({reqSamples.length})
+                          </h4>
+
+                          {reqSamples.length > 0 && (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => printZebraLabelsWindow(buildLabelPayload(reqSamples))}
+                                className="text-xs px-3 py-1.5 bg-slate-900 text-white hover:bg-slate-800 rounded-lg font-semibold flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                                title="Imprimer toutes les étiquettes de cette demande sur imprimante Zebra (50x30mm)"
+                              >
+                                <Printer className="w-3.5 h-3.5" />
+                                Imprimer Étiquettes Zebra ({reqSamples.length})
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const zpl = generateZplForSamples(buildLabelPayload(reqSamples));
+                                  navigator.clipboard?.writeText(zpl);
+                                  alert('Code ZPL copié dans le presse-papiers !\n\nAperçu :\n' + zpl.slice(0, 350) + '...');
+                                }}
+                                className="text-xs px-2.5 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-300 rounded-lg font-mono font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                                title="Copier le code ZPL II natif pour imprimante Zebra"
+                              >
+                                <QrCode className="w-3.5 h-3.5" />
+                                ZPL
+                              </button>
+                            </div>
+                          )}
+                        </div>
                   {(() => {
                     const isManager = currentUser?.role === 'manager' || currentUser?.role === 'admin';
                     const reqSamples = samples.filter(s => s.requestId === selectedRequest.id);
@@ -1037,6 +1088,14 @@ export function RequestsInternal() {
                                   <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full font-mono">
                                     {sample.barcode}
                                   </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => printZebraLabelsWindow(buildLabelPayload([sample]))}
+                                    className="text-xs px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded border border-slate-300 flex items-center gap-1 font-medium transition-colors"
+                                    title="Imprimer l'étiquette Zebra de cet échantillon"
+                                  >
+                                    <Printer className="w-3 h-3" /> Étiquette
+                                  </button>
                                 </div>
                                 {isManager && (
                                   <div className="flex items-center gap-2">

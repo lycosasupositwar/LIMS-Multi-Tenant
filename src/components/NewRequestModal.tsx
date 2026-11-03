@@ -6,6 +6,7 @@
  * 2. Chargement dynamique des formulaires configurés dans le CMS pour ce laboratoire
  * 3. Affichage et validation des champs personnalisés (textes, listes, sélecteurs d'analyses)
  * 4. Génération de l'identifiant selon le préfixe propre au laboratoire (ex: REQ-MET-26-XXX ou REQ-MEC-26-XXX)
+ * 5. Support de la duplication d'une demande existante via la propriété optionnelle `initialRequest`
  */
 
 import React, { useState, useEffect } from 'react';
@@ -15,6 +16,9 @@ import { AnalysisRequest } from '../types';
 import { getLabColor } from '../utils/colors';
 import { generateUniqueLimsId } from '../utils/idGenerator';
 
+/**
+ * Propriétés de la modale de création de demande d'analyse
+ */
 interface Props {
   /** État d'ouverture de la modale */
   isOpen: boolean;
@@ -24,7 +28,16 @@ interface Props {
   initialRequest?: Partial<AnalysisRequest>;
 }
 
+/**
+ * Composant modal de création ou de duplication d'une demande d'essai multi-laboratoires.
+ * Gère le basculement entre laboratoires, la sélection du gabarit de formulaire CMS
+ * et la saisie des paramètres dynamiques (dont les essais et propriétés matériaux imbriquées).
+ *
+ * @param {Props} props - Les propriétés du composant (`isOpen`, `onClose`, `initialRequest`).
+ * @returns {JSX.Element | null} Le rendu de la modale ou `null` lorsqu'elle est fermée.
+ */
 export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
+  // Récupération des référentiels globaux (tous laboratoires confondus) depuis le store LIMS
   const { 
     currentUser, 
     laboratories, 
@@ -40,22 +53,27 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
   const [selectedLabId, setSelectedLabId] = useState<string>(activeLabId || laboratories[0]?.id || '');
   
   
-  // Modèles de formulaires disponibles pour le laboratoire choisi
+  // Modèles de formulaires disponibles pour le laboratoire choisi (exclut les modèles désactivés)
   const labTemplates = allRequestTemplates.filter(t => t.labId === selectedLabId && t.isActive !== false);
+  // Identifiant du gabarit de formulaire CMS actuellement sélectionné
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   
+  // Intitulé principal du projet ou référence pièce renseigné par le demandeur
   const [title, setTitle] = useState('');
+  // Dictionnaire clé/valeur stockant les réponses aux champs dynamiques du formulaire CMS
   const [customData, setCustomData] = useState<Record<string, any>>({});
 
   // Synchronisation des données initiales lors de l'ouverture ou du changement d'initialRequest
   useEffect(() => {
     if (isOpen) {
       if (initialRequest) {
+        // Mode duplication : pré-remplissage à partir de la demande source
         if (initialRequest.labId) setSelectedLabId(initialRequest.labId);
         if (initialRequest.templateId) setSelectedTemplateId(initialRequest.templateId);
         if (initialRequest.title) setTitle("Copie de " + initialRequest.title);
         if (initialRequest.customData) setCustomData(initialRequest.customData);
       } else {
+        // Mode création vierge : initialisation sur le laboratoire actif et son premier gabarit disponible
         const defaultLabId = activeLabId || laboratories[0]?.id || '';
         setSelectedLabId(defaultLabId);
         const available = allRequestTemplates.filter(t => t.labId === defaultLabId && t.isActive !== false);
@@ -84,22 +102,30 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
     setCustomData({});
   }, [selectedLabId, allRequestTemplates, isOpen, initialRequest]);
 
+  // Ne rien afficher si la modale est fermée
   if (!isOpen) return null;
 
+  // Résolution de l'objet laboratoire cible et du gabarit de formulaire actif
   const targetLab = laboratories.find(l => l.id === selectedLabId) || laboratories[0];
   const activeTemplate = labTemplates.find(t => t.id === selectedTemplateId) || labTemplates[0];
   
 // Analyses disponibles configurées dans le CMS pour ce laboratoire spécifique
   const availableAnalyses = allAnalysisTemplates.filter(a => a.labId === selectedLabId && a.isActive !== false);
+  // Modèles de matériaux actifs configurés pour ce laboratoire spécifique
   const availableMaterials = allMaterialTemplates.filter(m => m.labId === selectedLabId && m.isActive !== false);
 
   /**
-   * Enregistrement de la nouvelle demande avec assignation du laboratoire
+   * Enregistrement de la nouvelle demande avec assignation du laboratoire.
+   * Génère un identifiant unique préfixé selon les paramètres du laboratoire destinataire
+   * et initialise la demande au statut `'soumise'`.
+   *
+   * @param {React.FormEvent} e - Événement de soumission du formulaire.
    */
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !activeTemplate) return;
 
+    // Détermination du préfixe d'ID (ex: REQ-MET) et génération sans collision
     const prefix = targetLab?.settings?.idPrefixes?.request || `REQ-${targetLab?.code || 'LAB'}`;
     const uniqueRequestId = generateUniqueLimsId(
       prefix,
@@ -123,6 +149,12 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
   };
   
 
+  /**
+   * Met à jour la valeur d'un champ dynamique dans l'état `customData`.
+   *
+   * @param {string} fieldId - Identifiant du champ dynamique ou clé de propriétés matériaux.
+   * @param {any} value - Nouvelle valeur saisie par l'opérateur ou le demandeur.
+   */
   const handleCustomDataChange = (fieldId: string, value: any) => {
     setCustomData(prev => ({ ...prev, [fieldId]: value }));
   };
@@ -215,6 +247,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                   value={selectedTemplateId} 
                   onChange={e => {
                     setSelectedTemplateId(e.target.value);
+                    // Réinitialise les données personnalisées lors du changement manuel de modèle de formulaire
                     setCustomData({});
                   }} 
                   className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-medium text-slate-900 bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -244,6 +277,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                         {field.name} {field.required && <span className="text-red-500">*</span>}
                       </label>
                       
+                      {/* Champ de type liste déroulante ('select') */}
                       {field.type === 'select' ? (
                         <select 
                           required={field.required}
@@ -310,6 +344,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                             );
                           })}
                           {availableMaterials.length === 0 && <p className="text-xs text-slate-500">Aucun modèle de matériau actif pour ce laboratoire.</p>}
+                          {/* Sous-formulaire dynamique de propriétés techniques pour chaque matériau sélectionné */}
                           {availableMaterials.filter(tpl => (customData[field.id] || []).includes(tpl.id)).map(tpl => {
                             const propertiesKey = `${field.id}__material_properties`;
                             const allProperties = customData[propertiesKey] || {};
@@ -339,6 +374,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                           })}
                         </div>
                       ) : field.type === 'multiselect' ? (
+                        /* Champ à choix multiples ('multiselect') */
                         <div className="flex flex-wrap gap-2 mt-2">
                           {field.options?.map(opt => {
                             const currentValues = customData[field.id] || [];
@@ -365,6 +401,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                           })}
                         </div>
                       ) : field.type === 'boolean' ? (
+                         /* Case à cocher booléenne ('boolean') */
                          <div className="flex items-center mt-1">
                            <input 
                             type="checkbox"
@@ -378,6 +415,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                            </label>
                          </div>
                       ) : field.type === 'date' ? (
+                        /* Champ de saisie de date ('date') */
                         <input 
                           type="date"
                           required={field.required}
@@ -386,6 +424,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                           className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:ring-blue-500 focus:border-blue-500"
                         />
                       ) : (
+                        /* Champ texte ou numérique standard ('text' | 'number') */
                         <input 
                           type={field.type === 'number' ? 'number' : 'text'} 
                           required={field.required}

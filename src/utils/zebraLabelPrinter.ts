@@ -1,27 +1,76 @@
 /**
- * Utilitaire d'impression d'étiquettes Échantillons (Imprimantes Thermiques Zebra & ZPL) - Format 70x37mm (Génération locale)
+ * Utilitaire d'Impression d'Étiquettes Échantillons (Imprimantes Thermiques Zebra & ZPL)
+ * Format physique cible : 70 × 37 mm (Génération 100% locale sans dépendance réseau externe)
+ *
+ * Ce module propose deux modes d'impression complémentaires :
+ * 1. `generateZplForSamples` : Génère un fichier de commandes natives ZPL II (203 dpi)
+ *    destiné aux imprimantes Zebra industrielles (GK420d, ZD420, ZD421, etc.).
+ * 2. `printZebraLabelsWindow` : Génère des QR codes PNG en Base64 via la bibliothèque
+ *    locale `qrcode` et ouvre une fenêtre d'impression HTML/CSS calibrée au millimètre
+ *    (`@page { size: 70mm 37mm; margin: 0; }`) utilisable avec n'importe quel pilote Windows/CUPS.
  */
 
 import { Sample } from '../types';
 import QRCode from 'qrcode'; // <-- Import de la bibliothèque locale
 
+/**
+ * Structure des données nécessaires à l'impression d'une étiquette d'échantillon
+ */
 export interface LabelPrintData {
+  /** Objet échantillon contenant l'ID, le code-barres, le client, le projet et la priorité */
   sample: Sample;
+  /** Nom lisible du modèle de matériau (ex: "Superalliage & Métal Fritté") */
   materialName: string;
+  /** Code court du laboratoire (ex: "MET", "MEC") affiché en badge en haut à droite */
   labCode?: string;
 }
 
 /**
+ * Nettoie une chaîne de caractères avant son injection dans une commande ZPL `^FD...^FS`
+ * afin d'empêcher les caractères de contrôle ZPL (`^` et `~`) de corrompre l'étiquette.
+ */
+function sanitizeZplField(value: string, maxLength: number): string {
+  return (value || '').replace(/[\^~]/g, ' ').substring(0, maxLength);
+}
+
+/**
+ * Échappe les caractères spéciaux HTML pour prévenir toute injection XSS dans la fenêtre d'aperçu.
+ */
+function escapeHtml(value: string): string {
+  return (value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
  * 1. Génère le code natif ZPL II (Zebra Programming Language) pour étiquettes 70x37mm (203 dpi)
+ *
+ * Détail des commandes ZPL utilisées :
+ * - `^XA` / `^XZ` : Début et fin du format d'étiquette
+ * - `^CI28` : Sélection de la table de caractères Unicode UTF-8 (accents français)
+ * - `^PW560` : Largeur d'impression = 70 mm × 8 dots/mm (203 dpi) = 560 dots
+ * - `^LL296` : Longueur d'étiquette = 37 mm × 8 dots/mm (203 dpi) = 296 dots
+ * - `^LH0,0` : Origine de l'étiquette en haut à gauche (0,0)
+ * - `^FOx,y` : Positionnement du champ (Field Origin) en dots
+ * - `^BQN,2,5` : QR Code normal, modèle 2, facteur de grossissement 5
+ *
+ * @param items Liste des échantillons et métadonnées à imprimer
+ * @returns Chaîne contenant les blocs ZPL séparés par un saut de ligne
  */
 export function generateZplForSamples(items: LabelPrintData[]): string {
   return items
     .map(({ sample, materialName, labCode }) => {
       const dateStr = new Date(sample.receivedAt).toLocaleDateString('fr-FR');
-      const reqRef = sample.requestId || 'INDEPENDANT';
-      const cleanClient = (sample.client || '').substring(0, 28);
-      const cleanProject = (sample.project || '').substring(0, 32);
-      const cleanMat = `${materialName} (${sample.materialState})`.substring(0, 32);
+      const reqRef = sanitizeZplField(sample.requestId || 'INDEPENDANT', 24);
+      const cleanClient = sanitizeZplField(sample.client || '', 28);
+      const cleanProject = sanitizeZplField(sample.project || '', 32);
+      const cleanMat = sanitizeZplField(`${materialName} (${sample.materialState})`, 32);
+      const safeBarcode = sanitizeZplField(sample.barcode, 32);
+      const safeId = sanitizeZplField(sample.id, 24);
+      const safeLabCode = sanitizeZplField(labCode || 'LIMS', 10);
 
       return [
         '^XA',
@@ -30,14 +79,14 @@ export function generateZplForSamples(items: LabelPrintData[]): string {
         '^LL296', // Hauteur 37mm à 203 dpi (296 dots)
         '^LH0,0',
 
-        // QR Code à gauche (contient le barcode exact pour la recherche directe)
-        '^FO20,25^BQN,2,5^FDQA,' + sample.barcode + '^FS',
-        '^FO20,195^A0N,18,18^FD' + sample.barcode + '^FS',
+        // QR Code à gauche (contient le barcode exact pour la recherche directe par douchette)
+        '^FO20,25^BQN,2,5^FDQA,' + safeBarcode + '^FS',
+        '^FO20,195^A0N,18,18^FD' + safeBarcode + '^FS',
 
         // Informations textuelles à droite du QR Code
-        '^FO180,20^A0N,28,28^FD' + sample.id + '^FS',
-        '^FO460,20^A0N,22,22^FD[' + (labCode || 'LIMS') + ']^FS',
-        '^FO180,55^GB360,2,2^FS', // Ligne de séparation
+        '^FO180,20^A0N,28,28^FD' + safeId + '^FS',
+        '^FO460,20^A0N,22,22^FD[' + safeLabCode + ']^FS',
+        '^FO180,55^GB360,2,2^FS', // Ligne horizontale de séparation (360 dots de large, 2 dots d'épaisseur)
 
         '^FO180,68^A0N,22,22^FDDem: ' + reqRef + '^FS',
         '^FO180,98^A0N,22,22^FDCli: ' + cleanClient + '^FS',
@@ -54,6 +103,8 @@ export function generateZplForSamples(items: LabelPrintData[]): string {
 /**
  * 2. Ouvre une fenêtre d'impression calibrée pour rouleau d'étiquettes Zebra 70mm x 37mm
  * Utilise la génération de QR code locale en base64 (Data URL)
+ *
+ * @param items Liste des échantillons à mettre en page pour l'impression thermique
  */
 export async function printZebraLabelsWindow(items: LabelPrintData[]) {
   if (items.length === 0) return;
@@ -77,21 +128,21 @@ export async function printZebraLabelsWindow(items: LabelPrintData[]) {
         return `
           <div class="zebra-label">
             <div class="qr-col">
-              <img src="${qrDataUrl}" alt="QR ${sample.barcode}" class="qr-img" />
-              <div class="barcode-text">${sample.barcode}</div>
+              <img src="${qrDataUrl}" alt="QR ${escapeHtml(sample.barcode)}" class="qr-img" />
+              <div class="barcode-text">${escapeHtml(sample.barcode)}</div>
             </div>
             <div class="info-col">
               <div class="header-row">
-                <span class="sample-id">${sample.id}</span>
-                <span class="lab-badge">${labCode || 'LIMS'}</span>
+                <span class="sample-id">${escapeHtml(sample.id)}</span>
+                <span class="lab-badge">${escapeHtml(labCode || 'LIMS')}</span>
               </div>
-              <div class="meta-line"><strong>Dem :</strong> ${sample.requestId || 'N/A'}</div>
-              <div class="meta-line"><strong>Cli :</strong> ${sample.client}</div>
-              <div class="meta-line truncate"><strong>Prj :</strong> ${sample.project}</div>
-              <div class="meta-line"><strong>Mat :</strong> ${materialName} (${sample.materialState})</div>
+              <div class="meta-line"><strong>Dem :</strong> ${escapeHtml(sample.requestId || 'N/A')}</div>
+              <div class="meta-line"><strong>Cli :</strong> ${escapeHtml(sample.client)}</div>
+              <div class="meta-line truncate"><strong>Prj :</strong> ${escapeHtml(sample.project)}</div>
+              <div class="meta-line"><strong>Mat :</strong> ${escapeHtml(materialName)} (${escapeHtml(sample.materialState)})</div>
               <div class="footer-row">
-                <span>Récep: ${dateStr}</span>
-                <span class="prio">${sample.priority.toUpperCase()}</span>
+                <span>Récep: ${escapeHtml(dateStr)}</span>
+                <span class="prio">${escapeHtml(sample.priority.toUpperCase())}</span>
               </div>
             </div>
           </div>
@@ -197,7 +248,6 @@ export async function printZebraLabelsWindow(items: LabelPrintData[]) {
             margin-bottom: 0.8mm;
           }
           .sample-id {
-            Internet Explorer specific ...
             font-size: 9pt;
             font-weight: 900;
             font-family: monospace;

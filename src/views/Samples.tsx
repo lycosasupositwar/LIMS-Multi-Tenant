@@ -8,7 +8,7 @@
  *    - Stepper interactif d'avancement (Réceptionné -> Préparation -> En essai -> Terminé)
  *    - Filiation et traçabilité (lien vers la demande parente et échantillons découpés)
  *    - Paramètres de métallographie (enrobage à chaud/froid, résine, polissage, attaque chimique Nital/Kalling)
- *    - Sous-échantillonnage et découpe (génération automatisée d'enrobages ENR-xx)
+ *    - Sous-échantillonnage et découpe (génération automatisée d'enrobages ENR-xx avec codes-barres Zebra dérivés)
  *    - Galerie micrographique et macrographique rattachée
  *    - Suivi des essais rattachés à l'échantillon
  */
@@ -18,7 +18,13 @@ import { useLims } from '../store';
 import { Search, Filter, FlaskConical, Link as LinkIcon, Image as ImageIcon, X, Plus } from 'lucide-react';
 import { Sample, SampleStatus } from '../types';
 
+/**
+ * Composant principal de la vue de gestion des échantillons et de leur préparation métallographique.
+ * Gère l'état d'affichage de la liste, l'inspection détaillée d'un échantillon sélectionné,
+ * l'édition de la fiche d'enrobage/polissage et la découpe en sous-échantillons.
+ */
 export function Samples() {
+  // Extraction des données et actions métier depuis le store global LIMS
   const {
     samples,
     requests,
@@ -35,26 +41,37 @@ export function Samples() {
   } = useLims();
 
   // États locaux de recherche et de navigation
+  /** Terme de recherche locale saisi dans la barre de filtre de la vue */
   const [searchTerm, setSearchTerm] = useState('');
+  /** Filtre sur le statut d'avancement de l'échantillon ('all' pour tous les statuts) */
   const [filterStatus, setFilterStatus] = useState<SampleStatus | 'all'>('all');
+  /** Contrôle l'ouverture du menu déroulant de filtrage par statut */
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  /** Échantillon actuellement sélectionné pour affichage dans le volet latéral d'inspection */
   const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
 
   // États d'édition métallographique et découpe
+  /** Indique si le formulaire d'édition des paramètres d'enrobage est actif */
   const [isEditingMounting, setIsEditingMounting] = useState(false);
+  /** Données temporaires du formulaire de préparation métallographique (méthode, résine, diamètre, attaque) */
   const [mountingData, setMountingData] = useState<Sample['mountingInfo']>();
+  /** Contrôle l'affichage du mini-formulaire de création de sous-échantillons (découpe / enrobages) */
   const [isCreatingEnrobage, setIsCreatingEnrobage] = useState(false);
+  /** Nombre de sous-échantillons (enrobages) à générer lors d'une opération de découpe */
   const [enrobageCount, setEnrobageCount] = useState(2);
 
   // Onglets actifs
+  /** Onglet actif dans le sous-panneau des analyses de l'échantillon ('pending' = en cours, 'history' = terminés) */
   const [activeAnalysisTab, setActiveAnalysisTab] = useState<'pending' | 'history'>('pending');
+  /** Onglet principal du tableau des échantillons ('pending' = actifs, 'history' = archivés/clôturés) */
   const [activeMainTab, setActiveMainTab] = useState<'pending' | 'history'>('pending');
 
   /**
-   * Filtrage combiné : recherche globale (incluant barcode), recherche locale (incluant barcode), statut et statut d'archivage
+   * Filtrage combiné : recherche globale (incluant barcode), recherche locale (incluant barcode), statut et statut d'archivage.
+   * Permet de croiser la barre de recherche globale de l'application avec les filtres locaux de la vue.
    */
   const filteredSamples = samples.filter(s => {
-    // Filtre global transverse ("Rechercher partout")
+    // Filtre global transverse ("Rechercher partout" depuis le Header)
     if (globalSearchQuery) {
       const q = globalSearchQuery.toLowerCase();
       const matchesGlobal =
@@ -66,7 +83,7 @@ export function Samples() {
       if (!matchesGlobal) return false;
     }
 
-    // Filtre textuel local
+    // Filtre textuel local (ID, code-barres Zebra, client, projet, ID de demande)
     const qLocal = searchTerm.toLowerCase();
     const matchesSearch =
       s.id.toLowerCase().includes(qLocal) ||
@@ -78,7 +95,7 @@ export function Samples() {
     // Filtre par statut spécifique
     const matchesFilter = filterStatus === 'all' || s.status === filterStatus;
 
-    // Séparation en-cours / historique
+    // Séparation en-cours / historique (les échantillons 'termine' ou 'non_conforme' basculent dans l'historique)
     const isHistory = s.status === 'termine' || s.status === 'non_conforme';
     const matchesMainTab = activeMainTab === 'pending' ? !isHistory : isHistory;
 
@@ -86,7 +103,9 @@ export function Samples() {
   });
 
   /**
-   * Ajout d'une micrographie de démonstration pour illustrer le raccordement optique
+   * Ajout d'une micrographie de démonstration pour illustrer le raccordement optique.
+   * Met à jour à la fois le store global et la copie locale `selectedSample` pour un rafraîchissement immédiat.
+   * @param sampleId Identifiant de l'échantillon cible
    */
   const handleMockImageAdd = (sampleId: string) => {
     const mockImages = [
@@ -97,13 +116,15 @@ export function Samples() {
     const randomImg = mockImages[Math.floor(Math.random() * mockImages.length)];
     addSampleImage(sampleId, randomImg);
 
+    // Synchronisation de l'état local du panneau latéral s'il affiche cet échantillon
     if (selectedSample && selectedSample.id === sampleId) {
       setSelectedSample({ ...selectedSample, images: [...selectedSample.images, randomImg] });
     }
   };
 
   /**
-   * Rendu visuel du badge de statut d'échantillon
+   * Rendu visuel du badge de statut d'échantillon selon son étape dans le workflow métallographique.
+   * @param status Statut actuel de l'échantillon
    */
   const getStatusBadge = (status: SampleStatus) => {
     switch (status) {
@@ -121,7 +142,8 @@ export function Samples() {
   };
 
   /**
-   * Rendu du badge de priorité
+   * Rendu du badge de priorité (Urgente, Basse, Normale).
+   * @param priority Niveau de priorité de l'échantillon
    */
   const getPriorityBadge = (priority: string) => {
     if (priority === 'haute') return <span className="text-red-600 font-medium text-xs">Urgente</span>;
@@ -130,7 +152,8 @@ export function Samples() {
   };
 
   /**
-   * Formatage standard de date
+   * Formatage standard de date au format français (ex: 15 avr. 2026).
+   * @param dateString Chaîne ISO de la date à formater
    */
   const formatDate = (dateString: string) => {
     const d = new Date(dateString);
@@ -138,14 +161,16 @@ export function Samples() {
   };
 
   /**
-   * Résolution du libellé d'un modèle d'essai
+   * Résolution du libellé d'un modèle d'essai à partir de son identifiant.
+   * @param templateId Identifiant du modèle d'analyse (AnalysisTemplate)
    */
   const getAnalysisName = (templateId: string) => {
     return analysisTemplates.find(t => t.id === templateId)?.name || templateId;
   };
 
   /**
-   * Résolution du libellé d'un modèle de matériau
+   * Résolution du libellé d'un modèle de matériau à partir de son identifiant.
+   * @param templateId Identifiant du modèle de matériau (MaterialTemplate)
    */
   const getTemplateName = (templateId: string) => {
     return materialTemplates.find(t => t.id === templateId)?.name || templateId;
@@ -342,7 +367,7 @@ export function Samples() {
                 </button>
               </div>
 
-              {/* Stepper de progression normé */}
+              {/* Stepper de progression normé : permet de faire avancer ou reculer le statut de l'échantillon */}
               <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
                 <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Progression / Statut</h4>
                 <div className="flex items-center gap-1">
@@ -359,18 +384,23 @@ export function Samples() {
                     let stateClass = "bg-slate-200 text-slate-500 border border-slate-300";
                     let isClickable = false;
 
+                    // Détermination du style et de l'interactivité selon la position par rapport à l'étape courante
                     if (selectedSample.status === 'non_conforme') {
                       stateClass = "bg-red-50 border border-red-200 text-red-500";
                     } else if (index < currentIndex) {
+                      // Étapes passées : cliquables pour revenir en arrière
                       stateClass = "bg-blue-100 border border-blue-200 text-blue-700";
                       isClickable = true;
                     } else if (index === currentIndex) {
+                      // Étape actuelle
                       stateClass = "bg-blue-600 border border-blue-600 text-white font-bold shadow-sm";
                     } else if (index === currentIndex + 1) {
+                      // Prochaine étape logique : mise en évidence en pointillés
                       stateClass = "bg-white border border-blue-300 text-blue-600 hover:bg-blue-50 cursor-pointer border-dashed";
                       isClickable = true;
                     }
 
+                    // Les responsables (manager / admin) peuvent sauter directement à n'importe quelle étape
                     if ((currentUser?.role === 'manager' || currentUser?.role === 'admin') && index !== currentIndex) {
                       isClickable = true;
                       if (!stateClass.includes('hover:')) {
@@ -397,6 +427,7 @@ export function Samples() {
                     );
                   })}
                 </div>
+                {/* Action rapide pour déclarer une non-conformité à réception ou en cours de préparation */}
                 {selectedSample.status !== 'non_conforme' && selectedSample.status !== 'termine' && (
                   <div className="mt-2 text-right">
                     <button
@@ -410,6 +441,7 @@ export function Samples() {
                     </button>
                   </div>
                 )}
+                {/* Réhabilitation d'un échantillon non conforme vers l'état initial 'receptionne' */}
                 {selectedSample.status === 'non_conforme' && (
                   <div className="mt-2 text-right">
                     <button
@@ -513,6 +545,7 @@ export function Samples() {
                       });
                     }
 
+                    // Cas où le MaterialTemplate ne définit pas de champs mais que customData possède des clés libres
                     const entries = Object.entries(customData);
                     if (entries.length === 0) {
                       return (
@@ -546,7 +579,7 @@ export function Samples() {
                 </div>
               </section>
 
-              {/* Fiche de Préparation Métallographique */}
+              {/* Fiche de Préparation Métallographique : saisie et affichage des paramètres d'enrobage, polissage et attaque chimique */}
               <section>
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Préparation Métallographique</h4>
@@ -563,6 +596,7 @@ export function Samples() {
                     </div>
                   ) : (
                     <button onClick={() => {
+                      // Initialisation des valeurs par défaut lors de l'ouverture du mode édition
                       setMountingData(selectedSample.mountingInfo || { method: 'Enrobage à chaud' as any, resinType: '', diameter: 30, polishingSteps: [], etching: '' });
                       setIsEditingMounting(true);
                     }} className="text-xs text-blue-600 font-medium hover:underline">Modifier</button>
@@ -629,7 +663,7 @@ export function Samples() {
               </section>
             </div>
 
-            {/* Pied de panneau : Découpe en sous-échantillons et Essais rattachés */}
+            {/* Pied de panneau : Découpe en sous-échantillons (génération de plots enrobés ENR-xx) et Essais rattachés */}
             <div className="p-4 border-t border-slate-200 bg-slate-50 space-y-3">
               {isCreatingEnrobage ? (
                 <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100">
@@ -647,10 +681,12 @@ export function Samples() {
                       onClick={() => {
                         const num = enrobageCount;
                         if (num > 0) {
+                          // Préfixe configurable dans labSettings (par défaut 'ENR') pour les sous-échantillons
                           const prefix = labSettings?.idPrefixes?.subSample || 'ENR';
                           const parentIdBase = selectedSample.id.split('-').slice(1).join('-');
                           for (let i = 1; i <= num; i++) {
                             const newId = `${prefix}-${parentIdBase}-${i}`;
+                            // Création du sous-échantillon avec filiation (parentSampleId) et code-barres Zebra dérivé
                             const subSample = {
                               ...selectedSample,
                               id: newId,
@@ -687,6 +723,7 @@ export function Samples() {
                 </button>
               )}
 
+              {/* Liste des essais rattachés à l'échantillon (affichée dès que l'échantillon est en essai ou terminé) */}
               {(selectedSample.status === 'en_essai' || selectedSample.status === 'termine') && (
                 <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden flex flex-col mt-4">
                   <div className="flex border-b border-slate-200">

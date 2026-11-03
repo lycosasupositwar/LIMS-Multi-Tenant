@@ -1,5 +1,17 @@
 /**
  * Vue Rapports d'Expertise & Certification (Reports)
+ *
+ * Ce module orchestre la génération documentaire, la certification matière et l'archivage :
+ * 1. Génération de Rapports d'Expertise Consolidés par dossier/demande :
+ *    - Via un modèle Word personnalisé (`.docx`) motorisé par `Docxtemplater` + `PizZip` + module d'images personnalisées,
+ *      suivi d'une conversion serveur en PDF (`/api/convert-pdf`) et d'un archivage physique (`/api/reports/upload`).
+ *    - Ou via le moteur de rendu A4 natif (`ReportPreviewModal`) produisant un PDF standardisé fidèle à l'aperçu écran.
+ * 2. Génération de Certificats de Conformité par échantillon à partir de modèles Word de type `certificate`.
+ * 3. Export CSV brut (`;`) de l'ensemble des analyses pour exploitation statistique externe (Excel, Minitab, R).
+ * 4. Construction dynamique de tableaux OpenXML (`<w:tbl>`) injectables dans les modèles Word pour :
+ *    - Les séries de mesures numériques (`tables_series`),
+ *    - Les compositions chimiques verticales (`tables_verticales`),
+ *    - Les matrices synthétiques d'essais (`tables_analyses`).
  */
 
 import React, { useState } from "react";
@@ -14,6 +26,9 @@ import PizZip from "pizzip";
 import { saveAs } from "file-saver";
 import { createDocxImageModule } from "../utils/docxImageModule";
 
+/**
+ * Composant principal de la vue de génération, prévisualisation et téléchargement des rapports et certificats.
+ */
 export function Reports() {
   const { 
     reports, 
@@ -28,21 +43,37 @@ export function Reports() {
     deleteReport 
   } = useLims() as any;
 
+  /** ID du modèle Word (.docx) sélectionné pour le rapport consolidé (vide = PDF Générique) */
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  /** Contrôle l'ouverture de la modale de création d'un nouveau rapport consolidé */
   const [isModalOpen, setIsModalOpen] = useState(false);
+  /** ID de la demande d'analyse sélectionnée pour le rapport consolidé */
   const [selectedRequestId, setSelectedRequestId] = useState('');
+  /** Rapport actuellement ouvert dans la modale d'aperçu A4 (`ReportPreviewModal`) */
   const [previewReport, setPreviewReport] = useState<Report | null>(null);
+  /** Déclenche automatiquement l'export et le téléchargement PDF dès l'ouverture de `ReportPreviewModal` */
   const [autoDownloadPdf, setAutoDownloadPdf] = useState(false);
+  /** Terme de recherche pour filtrer la table d'archives des rapports */
   const [searchQuery, setSearchQuery] = useState("");
+  /** ID du rapport dont la conversion/téléchargement PDF est en cours (affiche l'animation sur l'icône) */
   const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
 
+  /** Contrôle l'ouverture de la modale de génération d'un Certificat de Conformité */
   const [isCertModalOpen, setIsCertModalOpen] = useState(false);
+  /** ID de l'échantillon sélectionné pour le certificat de conformité */
   const [certSelectedSample, setCertSelectedSample] = useState("");
+  /** ID du modèle Word de certificat (`type === 'certificate'`) sélectionné */
   const [certSelectedTemplate, setCertSelectedTemplate] = useState("");
+  /** Indique si la génération/conversion PDF du certificat est en cours */
   const [isGeneratingCert, setIsGeneratingCert] = useState(false);
 
   /**
    * Envoie et stocke physiquement un rapport Word/PDF dans le dossier sécurisé du serveur (storage/reports/)
+   * @param reportId Identifiant du rapport généré
+   * @param requestId Identifiant de la demande associée
+   * @param fileBase64 Contenu du fichier encodé en Base64
+   * @param format Format du fichier ('PDF' ou 'Word')
+   * @returns Nom du fichier stocké sur le serveur ou `undefined` en cas d'échec
    */
   const uploadReportToStorage = async (
     reportId: string,
@@ -66,18 +97,30 @@ export function Reports() {
     return undefined;
   };
 
+  /**
+   * Construit le dictionnaire complet de données (`docData`) injecté dans `Docxtemplater` lors du rendu d'un modèle Word.
+   * Prépare à la fois :
+   * - Les variables plates et imbriquées (`demande`, `demandeur`, `echantillon`, `manager`, `analyses`),
+   * - Les statistiques de séries numériques (moyenne, écart-type, valeurs individuelles `v1..v10`),
+   * - Les listes de micrographies pour le module d'images,
+   * - Les fragments XML natifs Word (`<w:tbl>`) pour l'insertion de tableaux dynamiques (`tables_series`, `tables_verticales`, `tables_analyses`).
+   */
   const buildDocData = (req: any, cl: any, samps: any[], anals: any[], mgr: any) => {
     const formattedDate = new Intl.DateTimeFormat("fr-FR").format(new Date());
 
+    /** Normalise un libellé en clé alphanumérique snake_case sans accents pour les balises Word */
     const sanitizeKey = (str: string) =>
       str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
 
+    /** Filtre les entrées vides d'un tableau de mesures */
     const filterNonEmptySeries = (arr: any[]): any[] =>
       arr.filter(val => val !== '' && val !== null && val !== undefined && String(val).trim() !== '');
 
+    /** Extrait uniquement les nombres valides d'une série pour les calculs statistiques */
     const parseValidNumbers = (arr: any[]): number[] =>
       filterNonEmptySeries(arr).map(Number).filter((n: number) => !isNaN(n));
 
+    /** Formate une valeur de résultat (scalaire, tableau vertical, série ou micrographie) en chaîne lisible */
     const formatResultValueAsText = (v: any, expected?: any): string => {
       if (v && typeof v === 'object' && Array.isArray(v.images)) {
         return `${v.images.length} image(s) de micrographie`;
@@ -92,10 +135,12 @@ export function Reports() {
       return v !== undefined && v !== null ? String(v) : '';
     };
     
+    // Construction des objets de résultats par analyse
     const analysesData = anals.map((a: any) => {
       const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
       const safeAnalysisName = sanitizeKey(t?.name || "inconnu");
       
+      // Extraction à plat de toutes les micrographies rattachées aux résultats de cette analyse
       const analysisMicrographies = Object.entries(a.results || {}).flatMap(([k, v]) => {
         const expected = t?.expectedResults?.find((er: any) => er.id === k);
         const images = v && typeof v === 'object' && Array.isArray((v as any).images) ? (v as any).images : [];
@@ -199,8 +244,10 @@ export function Reports() {
       return baseObj;
     });
 
+    // Génération des tableaux OpenXML natifs (<w:tbl>) pour les séries numériques
     const tables_series: any[] = [];
     const seriesGroups: Record<string, { paramName: string, rows: any[] }> = {};
+    /** Échappe les caractères spéciaux XML (&, <, >, ", ') avant injection dans le flux OpenXML Word */
     const escapeXML = (str: string) => {
       if (str === null || str === undefined) return "";
       return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
@@ -307,6 +354,7 @@ export function Reports() {
       });
     });
 
+    // Génération des tableaux récapitulatifs d'analyses standards (hors séries et tableaux verticaux)
     const tables_analyses: any[] = [];
     const analysesGroups: Record<string, { templateName: string, columns: any[], rows: any[] }> = {};
     
@@ -425,6 +473,10 @@ export function Reports() {
     };
   };
 
+  /**
+   * Formate une date ISO en format long français (ex: 15 avril 2026).
+   * @param dateString Date au format ISO
+   */
   const formatDate = (dateString: string) => {
     const d = new Date(dateString);
     return new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' }).format(d);
@@ -621,6 +673,10 @@ export function Reports() {
     }
   };
 
+  /**
+   * Génère et déclenche le téléchargement côté client d'un fichier CSV (`;`) contenant
+   * l'intégralité des résultats d'analyses bruts (y compris les séries et tableaux verticaux aplatis).
+   */
   const handleGenerateCSV = () => {
     const headers = ["ID Analyse", "Date", "Echantillon ID", "Type", "Technicien", "Resultats Bruts"];
     let csvContent = headers.join(";") + "\n";
@@ -662,6 +718,10 @@ export function Reports() {
     setTimeout(() => URL.revokeObjectURL(url), 100);
   };
 
+  /**
+   * Génère un Certificat de Conformité PDF pour un échantillon spécifique en fusionnant
+   * ses résultats d'analyses dans un modèle Word de type `certificate`, puis en le convertissant via `/api/convert-pdf`.
+   */
   const handleGenerateCertificate = async () => {
     if (!certSelectedSample || !certSelectedTemplate) {
       alert("Veuillez sélectionner un échantillon et un modèle.");
@@ -773,12 +833,14 @@ export function Reports() {
     }
   };
 
+  /** Liste des rapports archivés filtrés par identifiant, titre ou format */
   const filteredReports = reports.filter((r: any) => 
     (r.id?.toLowerCase().includes(searchQuery.toLowerCase())) || 
     (r.title?.toLowerCase().includes(searchQuery.toLowerCase())) ||
     (r.format?.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
+  /** Liste des demandes éligibles à la génération d'un rapport consolidé */
   const completedRequests = requests.filter((r: any) => r.status === 'terminee' || r.status === 'En Validation' || r.status === 'validee' || r.status === 'En Cours' || r.status === 'assignee');
 
   return (

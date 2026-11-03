@@ -77,6 +77,10 @@ interface DashboardProps {
  * - Les graphiques natifs Excel (xl/charts/chart1..3.xml)
  */
 
+/**
+ * Table de précalcul CRC-32 (polynôme IEEE 802.3 `0xEDB88320`) utilisée pour signer chaque entrée
+ * du conteneur ZIP OpenXML (.xlsx).
+ */
 const CRC32_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {
@@ -89,6 +93,12 @@ const CRC32_TABLE = (() => {
   return table;
 })();
 
+/**
+ * Calcule la somme de contrôle CRC-32 non signée d'un tableau d'octets UTF-8.
+ *
+ * @param bytes Contenu binaire du fichier à archiver
+ * @returns Entier 32 bits non signé représentant le CRC-32
+ */
 function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
   for (let i = 0; i < bytes.length; i++) {
@@ -97,6 +107,13 @@ function crc32(bytes: Uint8Array): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
+/**
+ * Construit en mémoire une archive ZIP valide non compressée (méthode STORE = 0)
+ * conforme à la spécification PKZIP / OpenXML et la retourne sous forme de `Blob` Excel `.xlsx`.
+ *
+ * @param files Liste des chemins internes XML (`[Content_Types].xml`, `xl/workbook.xml`, etc.) et leur contenu texte
+ * @returns Blob MIME `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+ */
 function createZipArchive(files: { path: string; content: string }[]): Blob {
   const encoder = new TextEncoder();
   const fileEntries = files.map(f => {
@@ -178,6 +195,11 @@ function createZipArchive(files: { path: string; content: string }[]): Blob {
   });
 }
 
+/**
+ * Échappe les caractères spéciaux XML et supprime les caractères de contrôle ASCII invalides en XML 1.0.
+ *
+ * @param val Valeur quelconque à sérialiser dans une balise XML
+ */
 function xmlEscape(val: any): string {
   return String(val ?? '')
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
@@ -188,6 +210,11 @@ function xmlEscape(val: any): string {
     .replace(/'/g, '&apos;');
 }
 
+/**
+ * Convertit un indice de colonne base 0 en référence alphabétique Excel (0 -> 'A', 25 -> 'Z', 26 -> 'AA').
+ *
+ * @param colIndex0 Index de colonne commençant à 0
+ */
 function colLetter(colIndex0: number): string {
   let n = colIndex0 + 1;
   let str = '';
@@ -199,11 +226,23 @@ function colLetter(colIndex0: number): string {
   return str;
 }
 
+/**
+ * Représente une cellule enrichie pour le générateur Excel natif.
+ */
 interface XlsxCell {
+  /** Valeur textuelle ou numérique de la cellule */
   v: string | number;
+  /** Index du style dans `styles.xml` (0: normal, 1: titre principal, 2: en-tête de section/tableau, 3: gras, 4: alerte rouge, 5: conforme vert) */
   s?: number; // style index (0: normal, 1: title, 2: section/table header, 3: bold, 4: alert, 5: ok)
 }
 
+/**
+ * Génère le contenu XML complet d'une feuille de calcul OpenXML (`xl/worksheets/sheetN.xml`).
+ *
+ * @param rows Matrice 2D des lignes et cellules à écrire
+ * @param colWidths Largeurs personnalisées des colonnes (en unités de caractères Excel)
+ * @param hasDrawing Si `true`, attache la référence `<drawing r:id="rId1"/>` pour afficher les graphiques natifs
+ */
 function buildWorksheetXml(
   rows: (string | number | XlsxCell | null | undefined)[][],
   colWidths: number[],
@@ -249,6 +288,19 @@ function buildWorksheetXml(
 </worksheet>`;
 }
 
+/**
+ * Génère le fichier XML DrawingML d'un graphique en histogramme vertical (`<c:barChart>`) natif Excel.
+ * Inclut à la fois les formules de plages (`catFormula`, `valFormula`) et le cache de valeurs (`strCache`, `numCache`)
+ * pour un affichage immédiat à l'ouverture dans Excel / LibreOffice Calc.
+ *
+ * @param title Titre affiché en haut du graphique
+ * @param seriesName Nom de la série de données
+ * @param catFormula Formule Excel pointant vers les étiquettes d'axe X (ex: `Dashboard!$A$20:$A$25`)
+ * @param valFormula Formule Excel pointant vers les valeurs numériques d'axe Y (ex: `Dashboard!$B$20:$B$25`)
+ * @param categories Tableau des libellés de catégories mis en cache
+ * @param values Tableau des valeurs numériques mises en cache
+ * @param accentHex Couleur hexadécimale RGB sans `#` pour le remplissage des barres
+ */
 function buildBarChartXml(
   title: string,
   seriesName: string,
@@ -326,6 +378,16 @@ function buildBarChartXml(
 </c:chartSpace>`;
 }
 
+/**
+ * Génère le fichier XML DrawingML d'un graphique en anneau (`<c:doughnutChart>`) natif Excel.
+ *
+ * @param title Titre du graphique
+ * @param seriesName Nom de la série
+ * @param catFormula Plage Excel des catégories
+ * @param valFormula Plage Excel des valeurs
+ * @param categories Libellés mis en cache
+ * @param values Valeurs numériques mises en cache
+ */
 function buildDoughnutChartXml(
   title: string,
   seriesName: string,
@@ -385,12 +447,24 @@ function buildDoughnutChartXml(
  * FONCTIONS UTILITAIRES MÉTIER (DATES, RETARDS, PÉRIMÈTRE)
  * ============================================================================ */
 
+/**
+ * Retourne le délai cible (SLA en jours calendaires) associé au niveau de priorité d'une demande.
+ * - `'haute'` : 7 jours
+ * - `'normale'` (défaut) : 14 jours
+ * - `'basse'` : 30 jours
+ */
 function getTargetDaysForPriority(priority?: string): number {
   if (priority === 'haute') return 7;
   if (priority === 'basse') return 30;
   return 14; // normale par défaut
 }
 
+/**
+ * Calcule l'ancienneté en jours pleins d'une demande depuis sa date de création (`createdAt`).
+ *
+ * @param req Demande d'analyse à évaluer
+ * @param refDate Date de référence (par défaut maintenant)
+ */
 function getRequestAgeDays(req: AnalysisRequest, refDate = new Date()): number {
   if (!req.createdAt) return 0;
   const created = new Date(req.createdAt);
@@ -398,6 +472,12 @@ function getRequestAgeDays(req: AnalysisRequest, refDate = new Date()): number {
   return Math.max(0, Math.floor((refDate.getTime() - created.getTime()) / (1000 * 60 * 60 * 24)));
 }
 
+/**
+ * Détermine si une demande d'analyse ouverte est en retard :
+ * - Ignore les demandes déjà clôturées (`'terminee'`, `'rejetee'`) ou en `'brouillon'`
+ * - Vérifie d'abord si une date d'échéance explicite existe dans `customData` (`dueDate`, `dateEcheance`, `deadline`)
+ * - Sinon, compare l'ancienneté du dossier au SLA défini par `getTargetDaysForPriority(req.priority)`
+ */
 function isRequestOverdue(req: AnalysisRequest, refDate = new Date()): boolean {
   if (['terminee', 'rejetee', 'brouillon'].includes(req.status)) return false;
   const customDue = req.customData?.dueDate || req.customData?.dateEcheance || req.customData?.deadline;
@@ -411,6 +491,14 @@ function isRequestOverdue(req: AnalysisRequest, refDate = new Date()): boolean {
   return ageDays > getTargetDaysForPriority(req.priority);
 }
 
+/**
+ * Vérifie si une date ISO appartient à la période sélectionnée dans les filtres du Dashboard.
+ *
+ * @param isoDate Date ISO de l'entité (création demande, réception échantillon, mise à jour analyse)
+ * @param period Type de période (`'all'`, `'7d'`, `'30d'`, `'90d'`, `'year'`, `'custom'`)
+ * @param customStart Date de début (`YYYY-MM-DD`) si `period === 'custom'`
+ * @param customEnd Date de fin (`YYYY-MM-DD`) si `period === 'custom'`
+ */
 function isDateWithinPeriod(
   isoDate: string | undefined,
   period: PeriodFilter,
@@ -455,6 +543,14 @@ function isDateWithinPeriod(
   return true;
 }
 
+/**
+ * Composant principal du Tableau de Bord LIMS.
+ * Affiche dynamiquement deux vues distinctes selon le rôle de l'utilisateur connecté :
+ * - Rôle `'analyste'` : cockpit opérationnel (tâches assignées, échantillons à préparer, raccourcis de saisie)
+ * - Rôle `'manager'` / `'admin'` : cockpit de direction (filtres multi-labo et temporels, KPI, indicateurs ISO 17025, graphiques Recharts, exports PDF & Excel OpenXML natif)
+ *
+ * @param props.onNavigate Callback optionnel de navigation vers un onglet applicatif avec pré-filtrage
+ */
 export function Dashboard({ onNavigate }: DashboardProps = {}) {
   const {
     currentUser,
@@ -482,6 +578,7 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
   const [selectedAnalystRequest, setSelectedAnalystRequest] = useState<AnalysisRequest | null>(null);
 
   // États des filtres du Dashboard & de la modale "Générer Bilan"
+  // Les administrateurs et utilisateurs transverses (labId === 'all') peuvent consolider tous les laboratoires
   const canFilterAllLabs =
     currentUser?.role === 'admin' || !currentUser?.labId || currentUser?.labId === 'all';
 
@@ -500,6 +597,8 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
 
   /**
    * Génère le badge visuel coloré correspondant à un statut de demande
+   *
+   * @param status Statut du dossier (`RequestStatus`)
    */
   const getStatusBadge = (status: RequestStatus) => {
     switch (status) {
@@ -564,18 +663,25 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
    * 1. TABLEAU DE BORD OPÉRATEUR (ANALYSTE / LABORANTIN)
    * ========================================================================= */
   if (currentUser?.role === 'analyste') {
+    // Filtrage des demandes assignées à l'analyste connecté et actuellement actives
     const assignedRequests = requests.filter(
       r =>
         r.assignedTo === currentUser.id &&
         ['assignee', 'En Cours', 'En Validation'].includes(r.status)
     );
+    // Échantillons du laboratoire en attente de préparation ou d'usinage/attaque
     const pendingSamples = samples.filter(
       s => s.status === 'receptionne' || s.status === 'en_preparation'
     );
+    // Essais en cours attribués nominativement à l'opérateur
     const myAnalyses = analyses.filter(
       a => a.technician === currentUser.name && a.status === 'En Cours'
     );
 
+    /**
+     * Redirige l'analyste vers un onglet cible ('requests', 'samples', 'analyses')
+     * en pré-remplissant la barre de recherche globale avec l'identifiant du dossier.
+     */
     const handleGoToTab = (tab: string, targetId?: string) => {
       if (targetId && setGlobalSearchQuery) {
         setGlobalSearchQuery(targetId);
@@ -590,6 +696,7 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
       setSelectedAnalystRequest(null);
     };
 
+    // Résolution des échantillons et essais rattachés au dossier ouvert dans la modale rapide
     const requestSamples = selectedAnalystRequest
       ? samples.filter(s => s.requestId === selectedAnalystRequest.id)
       : [];

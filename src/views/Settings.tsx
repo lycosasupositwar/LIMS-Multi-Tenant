@@ -47,7 +47,13 @@ import {
   subscribeFrontendLogs
 } from '../utils/logger';
 
+/**
+ * Composant principal de la vue Paramètres & Administration Système.
+ *
+ * @param props.onBack - Callback optionnel permettant aux demandeurs (clients) de revenir à leur portail
+ */
 export function Settings({ onBack }: { onBack?: () => void }) {
+  // Extraction de l'état global et des actions d'administration depuis le store LIMS
   const {
     labSettings,
     updateLabSettings,
@@ -66,13 +72,14 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     deleteLaboratory
   } = useLims();
 
+  // États de gestion de la modale de création/édition de laboratoire (architecture multi-laboratoires)
   const [labModalOpen, setLabModalOpen] = useState(false);
   const [editingLabData, setEditingLabData] = useState<any>({});
 
   // Navigation par onglets ('smtp' et 'logs' sont réservés aux admins)
   const [activeTab, setActiveTab] = useState<'profile' | 'lab' | 'users' | 'system' | 'smtp' | 'logs'>('profile');
 
-  // Options de la zone de purge
+  // Options de la zone de purge (sélection granulaire des entités métier à réinitialiser)
   const [purgeOptions, setPurgeOptions] = useState({
     requests: false,
     samples: false,
@@ -82,21 +89,22 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     consumables: false
   });
   const [purgeMsg, setPurgeMsg] = useState({ type: '', text: '' });
+  // Double confirmation requise avant l'exécution irréversible de la purge
   const [confirmPurge, setConfirmPurge] = useState(false);
 
-  // Écoute de l'événement d'ouverture directe de l'onglet utilisateurs
+  // Écoute de l'événement d'ouverture directe de l'onglet utilisateurs (déclenché depuis les notifications)
   useEffect(() => {
     const handleOpenUsers = () => setActiveTab('users');
     window.addEventListener('open-users-tab', handleOpenUsers);
     return () => window.removeEventListener('open-users-tab', handleOpenUsers);
   }, []);
 
-  // États de mise à jour du mot de passe
+  // États de mise à jour du mot de passe de l'utilisateur connecté
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [pwdMsg, setPwdMsg] = useState({ type: '', text: '' });
 
-  // États de création d'utilisateurs et approbation
+  // États de création d'utilisateurs et approbation des demandes d'accès externes
   const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'demandeur', company: '', labId: '' });
   const [userMsg, setUserMsg] = useState({ type: '', text: '' });
   const [accountRequests, setAccountRequests] = useState<any[]>([]);
@@ -119,6 +127,10 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   const [testEmailAddress, setTestEmailAddress] = useState('');
   const [isTestingSmtp, setIsTestingSmtp] = useState(false);
 
+  /**
+   * Charge la configuration SMTP actuelle depuis le serveur API (`/api/admin/smtp`).
+   * Accessible uniquement aux utilisateurs ayant le rôle `admin`.
+   */
   const fetchSmtpConfig = async () => {
     if (currentUser?.role !== 'admin') return;
     try {
@@ -144,12 +156,18 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
+  // Chargement automatique de la configuration SMTP à l'ouverture de l'onglet dédié
   useEffect(() => {
     if (activeTab === 'smtp' && currentUser?.role === 'admin') {
       fetchSmtpConfig();
     }
   }, [activeTab, currentUser]);
 
+  /**
+   * Enregistre les paramètres du serveur SMTP sur le backend (`/api/admin/smtp`).
+   *
+   * @param e - Événement de soumission du formulaire SMTP
+   */
   const handleSaveSmtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setSmtpMsg({ type: '', text: '' });
@@ -171,6 +189,10 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
+  /**
+   * Sauvegarde la configuration SMTP courante puis déclenche l'envoi d'un e-mail de test
+   * via `/api/admin/smtp/test` afin de vérifier la connectivité et l'authentification du serveur mail.
+   */
   const handleTestSmtp = async () => {
     setSmtpMsg({ type: '', text: '' });
     setIsTestingSmtp(true);
@@ -208,12 +230,16 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   const [logSourceFilter, setLogSourceFilter] = useState<'all' | 'frontend' | 'backend'>('all');
   const [logSearchQuery, setLogSearchQuery] = useState('');
 
+  // Abonnement réactif aux nouveaux logs capturés côté navigateur (UI)
   useEffect(() => {
     return subscribeFrontendLogs(() => {
       setFrontendLogs([...getFrontendLogs()]);
     });
   }, []);
 
+  /**
+   * Récupère les journaux d'événements du serveur backend (`/api/admin/logs`).
+   */
   const fetchBackendLogs = async () => {
     if (currentUser?.role !== 'admin') return;
     setIsLoadingLogs(true);
@@ -230,6 +256,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
+  // Rafraîchissement automatique (polling toutes les 4s) des logs serveur lorsque la console est ouverte
   useEffect(() => {
     if (activeTab === 'logs' && currentUser?.role === 'admin') {
       fetchBackendLogs();
@@ -240,6 +267,9 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   }, [activeTab, currentUser, autoRefreshLogs]);
 
+  /**
+   * Vide simultanément les logs mémoire du frontend et les logs du serveur backend (`DELETE /api/admin/logs`).
+   */
   const handleClearAllLogs = async () => {
     clearFrontendLogs();
     if (currentUser?.role === 'admin') {
@@ -252,6 +282,10 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
+  /**
+   * Exporte l'intégralité des logs (frontend + backend fusionnés et triés par date décroissante)
+   * dans un fichier JSON horodaté téléchargeable pour diagnostic technique.
+   */
   const exportLogsJson = () => {
     const combined = [...frontendLogs, ...backendLogs].sort(
       (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
@@ -267,6 +301,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     URL.revokeObjectURL(url);
   };
 
+  // Fusion, tri chronologique inversé et filtrage multi-critères (niveau, source, recherche texte) des logs
   const filteredLogs = useMemo(() => {
     const merged = [...frontendLogs, ...backendLogs].sort(
       (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
@@ -285,6 +320,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     });
   }, [frontendLogs, backendLogs, logLevelFilter, logSourceFilter, logSearchQuery]);
 
+  // Compteurs mémorisés d'erreurs et d'avertissements pour les badges d'alerte
   const errorCount = useMemo(
     () => [...frontendLogs, ...backendLogs].filter((l) => l.level === 'error').length,
     [frontendLogs, backendLogs]
@@ -296,7 +332,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   );
 
   /**
-   * Récupération des demandes de création de compte en attente
+   * Récupération des demandes de création de compte en attente (`/api/users/requests`)
    */
   const fetchRequests = async () => {
     if (currentUser?.role === 'manager' || currentUser?.role === 'admin') {
@@ -309,6 +345,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
+  // Chargement de la liste des utilisateurs et des demandes d'accès à l'ouverture de l'onglet 'users'
   useEffect(() => {
     if (activeTab === 'users') {
       fetchRequests();
@@ -316,6 +353,13 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   }, [activeTab, currentUser]);
 
+  /**
+   * Approuve une demande d'ouverture de compte client :
+   * génère un mot de passe temporaire aléatoire, crée l'utilisateur avec le rôle `demandeur`,
+   * puis supprime la demande en attente et affiche le mot de passe généré.
+   *
+   * @param req - Objet représentant la demande de compte à approuver
+   */
   const handleApproveRequest = async (req: any) => {
     try {
       const tempPassword = Math.random().toString(36).slice(-8);
@@ -342,6 +386,11 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
+  /**
+   * Supprime définitivement un compte utilisateur après confirmation.
+   *
+   * @param id - Identifiant de l'utilisateur à supprimer
+   */
   const handleDeleteUser = async (id: string) => {
     if (!window.confirm("Êtes-vous sûr de vouloir supprimer cet utilisateur ? Cette action est irréversible.")) return;
 
@@ -357,6 +406,11 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
+  /**
+   * Refuse et supprime une demande de création de compte en attente.
+   *
+   * @param id - Identifiant de la demande à supprimer
+   */
   const deleteRequest = async (id: string) => {
     try {
       await fetch(`/api/users/requests/${id}`, { method: 'DELETE' });
@@ -368,6 +422,10 @@ export function Settings({ onBack }: { onBack?: () => void }) {
 
   const [patchMsg, setPatchMsg] = useState({ type: '', text: '' });
 
+  /**
+   * Exporte la configuration structurelle du laboratoire (modèles de matériaux, d'analyses,
+   * de formulaires, de rapports et paramètres du laboratoire) sous forme de fichier JSON téléchargeable.
+   */
   const exportPatch = () => {
     const patchData = {
       version: '1.0',
@@ -389,6 +447,12 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     URL.revokeObjectURL(url);
   };
 
+  /**
+   * Importe et applique à chaud un fichier JSON de configuration (`applyPatch`)
+   * sans altérer les données opérationnelles existantes (demandes, échantillons, analyses).
+   *
+   * @param e - Événement de sélection du fichier JSON
+   */
   const importPatch = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -413,13 +477,18 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     reader.readAsText(file);
   };
 
+  // État local du formulaire d'identité et de paramétrage du laboratoire actif
   const [formData, setFormData] = useState(labSettings);
   const [saved, setSaved] = useState(false);
 
+  // Synchronisation du formulaire lorsque les paramètres du laboratoire actif changent dans le store
   useEffect(() => {
     setFormData(labSettings);
   }, [labSettings]);
 
+  /**
+   * Soumet le changement de mot de passe de l'utilisateur courant à l'API (`/api/auth/change-password`).
+   */
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
     setPwdMsg({ type: '', text: '' });
@@ -439,6 +508,10 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
+  /**
+   * Crée manuellement un nouvel utilisateur (Demandeur, Analyste, Manager ou Admin)
+   * avec son rattachement éventuel à une entreprise et à un laboratoire (`labId`).
+   */
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setUserMsg({ type: '', text: '' });
@@ -458,18 +531,28 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
+  /**
+   * Met à jour la liste des certifications ISO (séparées par des virgules) dans l'état local du formulaire.
+   */
   const handleIsoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const certs = e.target.value.split(',').map(s => s.trim());
     setFormData({ ...formData, isoCertifications: certs });
     setSaved(false);
   };
 
+  /**
+   * Gestionnaire générique de modification des champs texte de l'identité du laboratoire.
+   */
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData({ ...formData, [name]: value });
     setSaved(false);
   };
 
+  /**
+   * Met à jour et sauvegarde immédiatement le style visuel des tableaux générés dans les rapports Word/PDF
+   * (couleur d'en-tête Hex, couleur et épaisseur des bordures).
+   */
   const handleTableStyleChange = (field: string, value: string | number) => {
     const newSettings = {
       ...formData,
@@ -484,6 +567,9 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     setTimeout(() => setSaved(false), 3000);
   };
 
+  /**
+   * Enregistre les modifications des paramètres généraux du laboratoire actif dans le store.
+   */
   const handleSave = () => {
     updateLabSettings(formData);
     setSaved(true);
@@ -996,6 +1082,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
             </div>
           </div>
 
+          {/* Zone de danger : Purge sélective et irréversible des données opérationnelles */}
           <div className="bg-red-50 rounded-xl shadow-sm border border-red-200 overflow-hidden mt-8">
             <div className="p-6 border-b border-red-200">
               <h3 className="text-lg font-semibold text-red-800 flex items-center">
@@ -1078,7 +1165,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
         </div>
       )}
 
-      {/* SECTION ADMIN: GESTION DES LABORATOIRES */}
+      {/* SECTION ADMIN : GESTION MULTI-LABORATOIRES (Création, édition et suppression d'entités labo) */}
       {activeTab === 'lab' && currentUser?.role === 'admin' && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mt-6">
           <div className="p-6 border-b border-slate-200">
@@ -1130,6 +1217,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
               <Plus className="w-4 h-4 mr-2" /> Créer un laboratoire
             </button>
 
+            {/* Modale de création / édition d'un laboratoire (Multi-Tenant) */}
             {labModalOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
                 <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">

@@ -6,16 +6,24 @@
  * 2. Procédure de mot de passe oublié avec génération et vérification d'un code OTP à 6 chiffres
  * 3. Formulaire de demande d'accès pour les nouveaux clients ou collaborateurs
  * 4. Présentation des comptes de démonstration pour les deux instances de laboratoire
+ *
+ * @module views/Login
  */
 
 import React, { useState } from 'react';
 import { useLims } from '../store';
 import { Lock, Shield, TestTube, Users, Mail, Building2 } from 'lucide-react';
 
+/**
+ * Composant principal d'authentification et de gestion des accès pré-connexion.
+ * Bascule dynamiquement entre quatre modes ('login', 'forgot', 'reset', 'request')
+ * au sein d'une même carte interactive.
+ */
 export function Login() {
+  // Extraction de l'action `login` depuis le contexte global LIMS pour hydrater la session utilisateur
   const { login } = useLims();
   
-  // États de saisie des identifiants
+  // États de saisie des identifiants et retours d'API (erreurs / confirmations / chargement)
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -24,10 +32,12 @@ export function Login() {
   
   // Mode d'affichage : 'login' (connexion), 'forgot' (demande code), 'reset' (saisie nouveau mdp), 'request' (demande de compte)
   const [mode, setMode] = useState<'login' | 'forgot' | 'reset' | 'request'>('login');
+  // Code OTP à 6 chiffres saisi par l'utilisateur lors de la réinitialisation
   const [resetCode, setResetCode] = useState('');
+  // Code OTP retourné en environnement de développement/test si aucun serveur SMTP n'est configuré
   const [devCode, setDevCode] = useState('');
   
-  // États spécifiques au formulaire de demande de création de compte
+  // États spécifiques au formulaire de demande de création de compte (prospect / nouveau demandeur)
   const [reqName, setReqName] = useState('');
   const [reqCompany, setReqCompany] = useState('');
   const [reqMessage, setReqMessage] = useState('');
@@ -35,6 +45,8 @@ export function Login() {
   /**
    * Traitement de la connexion utilisateur
    * Envoie les identifiants au serveur backend (/api/auth/login) et charge le profil dans le store
+   *
+   * @param e Événement de soumission du formulaire HTML
    */
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,6 +54,7 @@ export function Login() {
     setLoading(true);
 
     try {
+      // Appel REST d'authentification ; le serveur vérifie le hash du mot de passe et retourne l'objet User
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -50,6 +63,7 @@ export function Login() {
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erreur de connexion');
+      // Déclenche la mise à jour du state global et la persistance dans localStorage
       login(data.user);
     } catch (err: any) {
       setError(err.message);
@@ -61,6 +75,8 @@ export function Login() {
   /**
    * Envoi de la demande de réinitialisation de mot de passe
    * Génère un code OTP côté serveur et bascule sur l'écran de réinitialisation
+   *
+   * @param e Événement de soumission du formulaire HTML
    */
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,6 +85,7 @@ export function Login() {
     setLoading(true);
 
     try {
+      // Demande au backend de générer un code temporaire à 6 chiffres et de l'envoyer par email
       const res = await fetch('/api/auth/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -79,7 +96,9 @@ export function Login() {
       if (!res.ok) throw new Error(data.error || 'Erreur système');
       
       setSuccessMsg(data.message);
+      // En mode bac à sable / démo, le backend peut renvoyer `_devCode` pour faciliter les tests sans SMTP
       if (data._devCode) setDevCode(data._devCode);
+      // Passage automatique à l'étape 2 : saisie du code OTP et du nouveau mot de passe
       setMode('reset');
     } catch (err: any) {
       setError(err.message);
@@ -90,6 +109,8 @@ export function Login() {
 
   /**
    * Validation du code OTP et mise à jour du mot de passe
+   *
+   * @param e Événement de soumission du formulaire HTML
    */
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,6 +119,7 @@ export function Login() {
     setLoading(true);
 
     try {
+      // Vérifie la correspondance (email + code OTP non expiré) et enregistre le nouveau mot de passe
       const res = await fetch('/api/auth/reset-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -107,6 +129,7 @@ export function Login() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erreur lors de la réinitialisation');
       
+      // Nettoyage des données sensibles en mémoire et retour à l'écran de login
       setSuccessMsg('Mot de passe mis à jour avec succès. Vous pouvez vous connecter.');
       setMode('login');
       setPassword('');
@@ -122,6 +145,8 @@ export function Login() {
   /**
    * Soumission d'une demande de création de compte par un demandeur externe
    * Notifie les managers du laboratoire pour validation
+   *
+   * @param e Événement de soumission du formulaire HTML
    */
   const handleAccountRequest = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -130,6 +155,7 @@ export function Login() {
     setLoading(true);
 
     try {
+      // Crée une entrée d'approbation de compte et envoie une notification interne aux administrateurs/managers
       const res = await fetch('/api/auth/request-account', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -139,6 +165,7 @@ export function Login() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erreur lors de la demande');
       
+      // Réinitialisation complète du formulaire après envoi réussi
       setSuccessMsg(data.message);
       setMode('login');
       setEmail('');

@@ -1,5 +1,12 @@
 /**
  * Gabarit Principal de l'Interface Laboratoire (Layout LIMS)
+ *
+ * Ce composant structure l'application interne des opérateurs de laboratoire (Analystes, Managers, Admins) :
+ * - Barre latérale de navigation (Sidebar) avec indicateur visuel du laboratoire actif et profil utilisateur
+ * - En-tête (Header) comprenant la barre de recherche globale, le sélecteur multi-tenant d'instances
+ *   de laboratoires et le centre de notifications avec routage contextuel intelligent
+ * - Surveillance périodique (polling) des demandes de création de comptes en attente pour les managers
+ * - Zone de contenu principal animée avec `motion/react-client` lors des transitions d'onglets
  */
 
 import React, { ReactNode, useState } from 'react';
@@ -9,13 +16,26 @@ import { useLims } from '../store';
 import { getLabColor } from '../utils/colors';
 import { Notification } from '../types';
 
+/**
+ * Propriétés du gabarit de mise en page principal
+ */
 interface LayoutProps {
+  /** Contenu de la vue active injecté dans la zone centrale (`<main>`) */
   children: ReactNode;
+  /** Identifiant de l'onglet de navigation actuellement sélectionné */
   activeTab: string;
+  /** Fonction permettant de changer l'onglet actif */
   setActiveTab: (tab: string) => void;
 }
 
+/**
+ * Composant d'enveloppe générale (Shell) pour l'interface interne multi-laboratoires du LIMS.
+ *
+ * @param {LayoutProps} props - Les propriétés incluant `children`, `activeTab` et `setActiveTab`.
+ * @returns {JSX.Element} L'interface complète avec barre latérale, barre supérieure et contenu animé.
+ */
 export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
+  // Extraction du contexte global multi-tenant (utilisateur connecté, notifications, laboratoires, données transverses)
   const {
     currentUser,
     logout,
@@ -35,14 +55,18 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
     allReports
   } = useLims();
 
+  // État d'ouverture du menu déroulant de sélection d'instance de laboratoire
   const [isLabMenuOpen, setIsLabMenuOpen] = useState(false);
+  // Compteur de demandes d'ouverture de compte en attente (affiché en badge rouge sur l'onglet Paramètres)
   const [pendingRequestsCount, setPendingRequestsCount] = React.useState(0);
+  // Référence mutable mémorisant le dernier nombre de demandes notifiées pour éviter les notifications en doublon
   const notifiedCountRef = React.useRef(0);
 
   /**
    * Polling périodique (toutes les 15s) pour alerter le manager des nouvelles demandes d'accès
    */
   React.useEffect(() => {
+    // Seuls les utilisateurs ayant le rôle 'manager' contrôlent les inscriptions en attente
     if (currentUser?.role !== 'manager') return;
 
     const checkRequests = async () => {
@@ -52,6 +76,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
           const data = await res.json();
           setPendingRequestsCount(data.length);
 
+          // Si de nouvelles demandes sont arrivées depuis la dernière vérification, émettre une notification système
           if (data.length > notifiedCountRef.current) {
             const newCount = data.length - notifiedCountRef.current;
             addNotification(
@@ -69,6 +94,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
       }
     };
 
+    // Vérification immédiate au montage puis planification toutes les 15 secondes
     checkRequests();
     const interval = setInterval(checkRequests, 15000);
     return () => clearInterval(interval);
@@ -77,11 +103,14 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
   /**
    * Navigation intelligente au clic sur une notification :
    * Bascule sur le bon laboratoire, ouvre l'onglet correspondant et filtre sur l'élément précis.
+   *
+   * @param {Notification} notif - L'objet notification cliqué par l'utilisateur.
    */
   const handleNotificationClick = (notif: Notification) => {
     markNotificationAsRead(notif.id);
 
     // 1. Cas particulier : Demande de création de compte
+    // Bascule sur l'onglet Paramètres et déclenche un événement DOM personnalisé pour ouvrir le sous-onglet Utilisateurs
     if (notif.title === 'Demande de compte') {
       setActiveTab('settings');
       setTimeout(() => window.dispatchEvent(new CustomEvent('open-users-tab')), 50);
@@ -167,6 +196,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
     }
   };
 
+  // Définition des entrées principales du menu de navigation latéral
   let navItems = [
     { id: 'dashboard', label: 'Tableau de bord', icon: LayoutDashboard },
     { id: 'requests', label: 'Demandes & Workflow', icon: FileText },
@@ -176,6 +206,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
     { id: 'inventory', label: 'Consommables', icon: Archive },
   ];
 
+  // L'accès au configurateur de gabarits (CMS Builder) est réservé aux managers
   if (currentUser?.role === 'manager') {
     navItems.push({ id: 'builder', label: 'Config. CMS', icon: Blocks });
   }
@@ -186,6 +217,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
     <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
       {/* 1. Barre Latérale de Navigation (Sidebar) */}
       <aside className="w-64 bg-white border-r border-slate-200 flex flex-col hidden md:flex">
+        {/* Identité visuelle de la plateforme LIMS */}
         <div className="h-16 flex items-center px-6 border-b border-slate-200">
           <div className="w-8 h-8 bg-blue-700 rounded-lg flex items-center justify-center mr-3 shadow-sm">
             <Blocks className="text-white w-5 h-5" />
@@ -195,6 +227,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
           </h1>
         </div>
 
+        {/* Bandeau de rappel du laboratoire actif avec sa couleur thématique */}
         <div className="px-4 py-2.5 border-b border-slate-200 bg-slate-50">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 overflow-hidden">
@@ -209,6 +242,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
           </div>
         </div>
 
+        {/* Liste des rubriques de navigation */}
         <nav className="flex-1 py-6 px-4 space-y-1 overflow-y-auto">
           {navItems.map((item) => {
             const isActive = activeTab === item.id;
@@ -226,6 +260,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
                   <Icon className={`w-5 h-5 mr-3 flex-shrink-0 ${isActive ? 'text-blue-600' : 'text-slate-400'}`} />
                   <span className="text-left leading-tight">{item.label}</span>
                 </div>
+                {/* Pastille d'alerte indiquant le nombre de demandes de compte en attente */}
                 {item.id === 'settings' && pendingRequestsCount > 0 && (
                   <span className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
                     {pendingRequestsCount}
@@ -236,6 +271,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
           })}
         </nav>
 
+        {/* Pied de barre latérale : Informations de l'opérateur connecté et bouton de déconnexion */}
         <div className="p-4 border-t border-slate-200">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
@@ -261,6 +297,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
       {/* 2. Zone de Contenu Principal */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 lg:px-8">
+          {/* Barre de recherche transversale (filtre temps réel sur la vue courante) */}
           <div className="flex-1 flex items-center">
             <div className="max-w-md w-full relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -286,7 +323,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
             </div>
           </div>
 
-          {/* Sélecteur d'Instance de Laboratoire */}
+          {/* Sélecteur d'Instance de Laboratoire (Multi-Tenant Switcher) */}
           <div className="relative mr-3">
             <button
               type="button"
@@ -304,6 +341,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
 
             {isLabMenuOpen && (
               <>
+                {/* Calque invisible plein écran permettant de fermer le menu au clic extérieur */}
                 <div className="fixed inset-0 z-30" onClick={() => setIsLabMenuOpen(false)} />
                 <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-40">
                   <div className="px-3 py-2 border-b border-slate-100 mb-1">
@@ -311,6 +349,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
                     <p className="text-[11px] text-slate-500">Chaque laboratoire dispose de son espace dédié, ses essais, son personnel et ses consommables.</p>
                   </div>
                   <div className="space-y-1">
+                    {/* Filtrage des laboratoires accessibles selon les droits d'affectation de l'opérateur */}
                     {laboratories.filter(lab => {
                       if (!currentUser) return true;
                       if (currentUser.role === 'admin') return true;
@@ -351,6 +390,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
 
           {/* Menu déroulant des notifications */}
           {(() => {
+            // Filtrage des notifications non lues destinées à l'utilisateur connecté
             const unreadNotifications = notifications.filter(
               n => !n.read && n.userId === currentUser?.id
             );
@@ -364,6 +404,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
                   )}
                 </button>
 
+                {/* Panneau flottant affiché au survol CSS (group-hover) de la cloche */}
                 <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-xl border border-slate-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 overflow-hidden flex flex-col max-h-96">
                   <div className="p-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
                     <span className="font-semibold text-slate-700 text-sm">
@@ -426,6 +467,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
           })()}
         </header>
 
+        {/* Conteneur principal scrollable avec animation d'apparition fluide à chaque changement d'onglet */}
         <main className="flex-1 overflow-y-auto p-6 lg:p-8">
           <motion.div
             key={activeTab}

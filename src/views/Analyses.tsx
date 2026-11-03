@@ -1,5 +1,16 @@
 /**
  * Vue Suivi des Analyses & Essais Métallurgiques (Analyses)
+ *
+ * Cette vue gère le cycle de vie opérationnel des essais et contrôles de laboratoire :
+ * 1. Filtrage par onglet ("En cours" incluant les essais rejetés à reprendre vs "Historique" pour les essais validés/terminés).
+ * 2. Groupement dynamique (par analyse individuelle ou regroupé par dossier/demande client).
+ * 3. Saisie multimodale des résultats selon le modèle d'essai (`AnalysisTemplate`) :
+ *    - Valeurs simples (texte, nombre, booléen, liste déroulante, sélection multiple).
+ *    - Séries numériques (`number_series`) avec calcul automatique en temps réel de la moyenne et de l'écart-type d'échantillon (ex: filiations de dureté Vickers/Rockwell).
+ *    - Tableaux verticaux (`vertical_table`, ex: spectrométrie ICP / OES multi-éléments) avec import CSV/TXT et collage intelligent depuis Excel.
+ *    - Galerie micrographique annotée (`micrography`) avec compression/redimensionnement automatique côté client sur Canvas HTML5.
+ * 4. Workflow de validation et traçabilité (Audit Trail) :
+ *    - Démarrage de l'essai (`planifie` -> `En Cours`), soumission par le technicien (`a_valider`), validation (`valide`) ou rejet motivé (`rejete`) par un Manager/Admin.
  */
 
 import React, { useState, useEffect } from 'react';
@@ -7,9 +18,17 @@ import { useLims } from '../store';
 import { Search, Microscope, Check, UploadCloud, Image as ImageIcon, Plus, X, Lock, ClipboardPaste } from 'lucide-react';
 import { AnalysisStatus, ExpectedResult } from '../types';
 
+/** Structure d'une image de micrographie stockée dans un résultat d'analyse */
 type MicrographyImage = { id: string; name: string; dataUrl: string; comment: string };
+/** Structure d'une ligne d'un tableau vertical de résultats (ex: dosage élémentaire ICP) */
 type VerticalRow = { element: string; value: string; unit: string };
 
+/**
+ * Lit un fichier image local, le redimensionne (côté max 1800px) et le compresse en JPEG (qualité 0.84)
+ * via un élément `<canvas>` afin d'optimiser le poids en base de données et dans les rapports PDF/Word.
+ * @param file Fichier image sélectionné par l'opérateur
+ * @returns Promesse résolue avec l'objet `MicrographyImage` généré
+ */
 const readMicrographyImage = (file: File): Promise<MicrographyImage> => new Promise((resolve, reject) => {
   if (!file.type.startsWith('image/')) { reject(new Error('Le fichier sélectionné n’est pas une image.')); return; }
   const reader = new FileReader();
@@ -19,6 +38,7 @@ const readMicrographyImage = (file: File): Promise<MicrographyImage> => new Prom
     const image = new Image();
     image.onload = () => {
       try {
+        // Limitation de la résolution maximale à 1800px sur le plus grand côté pour préserver la mémoire
         const maxSide = 1800;
         const ratio = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
         const canvas = document.createElement('canvas');
@@ -45,6 +65,14 @@ const readMicrographyImage = (file: File): Promise<MicrographyImage> => new Prom
 /**
  * Analyse un texte issu d'un fichier CSV/TXT ou d'un copier-coller Excel
  * et fusionne les valeurs dans les lignes du tableau vertical.
+ * Supporte à la fois le collage d'une colonne unique de valeurs (à partir de `startRowIndex`)
+ * et le collage multi-colonnes (Élément | Valeur | Unité) avec réconciliation par nom d'élément.
+ *
+ * @param rawText Texte brut issu du presse-papiers ou d'un fichier CSV/TSV
+ * @param currentRows Lignes actuelles du tableau vertical
+ * @param defaultUnit Unité par défaut définie sur le modèle de résultat
+ * @param startRowIndex Index de la ligne cible lors d'un collage direct dans une cellule
+ * @returns Nouveau tableau de lignes `VerticalRow[]` fusionné
  */
 const parseAndMergeVerticalTableText = (
   rawText: string,
@@ -61,6 +89,7 @@ const parseAndMergeVerticalTableText = (
 
   if (lines.length === 0) return currentRows;
 
+  /** Découpe une ligne en cellules selon le délimiteur détecté (Tabulation, point-virgule ou virgule hors nombres décimaux) */
   const parseLineCells = (line: string): string[] => {
     if (line.includes('\t')) return line.split('\t').map(c => c.trim().replace(/^"|"$/g, ''));
     if (line.includes(';')) return line.split(';').map(c => c.trim().replace(/^"|"$/g, ''));
@@ -134,6 +163,9 @@ const parseAndMergeVerticalTableText = (
   return nextRows.length > 0 ? nextRows : [{ element: '', value: '', unit: defaultUnit }];
 };
 
+/**
+ * Composant principal de suivi et de saisie des analyses de laboratoire.
+ */
 export function Analyses() {
   const {
     currentUser,
@@ -148,11 +180,16 @@ export function Analyses() {
     setGlobalSearchQuery
   } = useLims();
 
+  /** Terme de recherche locale (ID d'analyse ou ID d'échantillon) */
   const [searchTerm, setSearchTerm] = useState('');
+  /** ID de l'analyse dont le journal d'audit (Audit Trail) est actuellement déplié */
   const [showAuditFor, setShowAuditFor] = useState<string | null>(null);
+  /** Mode de regroupement de l'affichage : liste plate ('none') ou par demande parente ('request') */
   const [groupBy, setGroupBy] = useState<'none' | 'request'>('none');
+  /** Onglet actif : 'actives' (essais à traiter / corriger) ou 'historique' (essais validés / terminés) */
   const [filterMode, setFilterMode] = useState<'actives' | 'historique'>('actives');
 
+  /** Indique si l'utilisateur courant dispose des privilèges d'approbation/déverrouillage (Manager ou Admin) */
   const isManager = (currentUser?.role === 'manager' || currentUser?.role === 'admin');
 
   /**
@@ -180,6 +217,11 @@ export function Analyses() {
     }
   }, [globalSearchQuery, analyses]);
 
+  /**
+   * Liste des analyses filtrées selon l'état de préparation de l'échantillon parent,
+   * le mode d'affichage ('actives' vs 'historique'), la recherche locale/globale,
+   * et triées par ordre décroissant de priorité (haute > normale > basse).
+   */
   const filteredAnalyses = analyses.filter(a => {
     const sample = samples.find(s => s.id === a.sampleId);
 
@@ -221,6 +263,7 @@ export function Analyses() {
 
     return matchesSearch;
   }).sort((a, b) => {
+    // Tri par priorité de l'échantillon afin de placer les urgences en tête de liste
     const priorityWeight: Record<string, number> = { haute: 3, normale: 2, basse: 1 };
     const sampleA = samples.find(s => s.id === a.sampleId);
     const sampleB = samples.find(s => s.id === b.sampleId);
@@ -229,6 +272,10 @@ export function Analyses() {
     return prioB - prioA;
   });
 
+  /**
+   * Retourne le badge visuel correspondant au statut de l'analyse.
+   * @param status Statut de l'analyse
+   */
   const getStatusBadge = (status: AnalysisStatus) => {
     switch (status) {
       case 'planifie':
@@ -245,6 +292,11 @@ export function Analyses() {
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">Rejeté</span>;
     }
   };
+
+  /**
+   * Retourne le badge visuel de priorité s'il s'agit d'une priorité haute ou basse.
+   * @param priority Priorité effective de l'échantillon ou de la demande
+   */
   const getPriorityBadge = (priority?: string) => {
     if (priority === 'haute') {
       return (
@@ -263,6 +315,13 @@ export function Analyses() {
     return null; // On n'affiche rien (ou un badge discret) si la priorité est normale
   };
 
+  /**
+   * Charge, compresse et ajoute une ou plusieurs images de micrographie dans un champ de résultat dédié.
+   * @param analysisId Identifiant de l'analyse
+   * @param resultId Identifiant du champ de résultat (`ExpectedResult.id`)
+   * @param files Liste des fichiers sélectionnés dans l'input file
+   * @param currentValue Valeur actuelle du champ de résultat
+   */
   const handleMicrographyUpload = async (analysisId: string, resultId: string, files: FileList | null, currentValue: any) => {
     if (!files?.length) return;
     const existing: MicrographyImage[] = currentValue && Array.isArray(currentValue.images) ? currentValue.images : [];
@@ -274,11 +333,22 @@ export function Analyses() {
     }
   };
 
+  /**
+   * Met à jour les métadonnées (nom ou commentaire d'observation) d'une micrographie existante.
+   * @param analysisId Identifiant de l'analyse
+   * @param resultId Identifiant du champ de résultat
+   * @param currentValue Valeur actuelle du résultat contenant le tableau `images`
+   * @param imageId Identifiant unique de l'image à modifier
+   * @param updates Propriétés partielles à mettre à jour (`name`, `comment`)
+   */
   const updateMicrographyImage = (analysisId: string, resultId: string, currentValue: any, imageId: string, updates: Partial<MicrographyImage>) => {
     const images: MicrographyImage[] = Array.isArray(currentValue?.images) ? currentValue.images : [];
     updateAnalysisResult(analysisId, resultId, { images: images.map(img => img.id === imageId ? { ...img, ...updates } : img) });
   };
 
+  /**
+   * Rendu de l'interface de gestion des micrographies (ajout multiple, renommage, commentaire, suppression).
+   */
   const renderMicrographyInput = (analysisId: string, resultId: string, currentValue: any, disabled: boolean) => {
     const images: MicrographyImage[] = Array.isArray(currentValue?.images) ? currentValue.images : [];
     return (
@@ -338,7 +408,18 @@ export function Analyses() {
     );
   };
 
+  /**
+   * Fabrique dynamiquement le composant de saisie adapté à la typologie du résultat attendu (`ExpectedResult.type`) :
+   * - `micrography` : galerie d'images avec commentaires
+   * - `image` : image simple
+   * - `select` / `multiselect` : choix prédéfinis
+   * - `number_series` : série de mesures numériques avec calcul automatique Moyenne / Écart-type (formule de Bessel n-1)
+   * - `vertical_table` : tableau d'éléments chimiques avec import CSV/TXT et collage presse-papiers Excel
+   * - `boolean` / `number` / `text` : champs unitaires standards
+   */
   const renderInputForResult = (analysisId: string, resultTemplate: ExpectedResult, currentValue: any, status: AnalysisStatus) => {
+    // Verrouillage de la saisie : un technicien ne peut plus modifier dès que le statut est 'a_valider', 'valide' ou 'termine'.
+    // Un manager peut encore éditer tant que le statut n'est pas 'termine'.
     const disabled = (!isManager && (status === 'a_valider' || status === 'valide' || status === 'termine')) || (isManager && status === 'termine');
 
     if (resultTemplate.type === 'micrography') {
@@ -413,12 +494,14 @@ export function Analyses() {
       );
     }
 
+    // Saisie de séries numériques (ex: empreintes de dureté multiples) avec statistiques automatiques
     if (resultTemplate.type === 'number_series') {
       const currentValues = Array.isArray(currentValue) ? currentValue : (currentValue !== undefined && currentValue !== '' ? [currentValue] : []);
       const numValues = currentValues
         .filter(v => v !== '' && v !== null && v !== undefined && String(v).trim() !== '')
         .map(v => Number(v))
         .filter(v => !isNaN(v));
+      // Calcul de la moyenne arithmétique et de l'écart-type d'échantillon (divisé par n - 1)
       const mean = numValues.length > 0 ? numValues.reduce((a, b) => a + b, 0) / numValues.length : null;
       const variance = numValues.length > 1
         ? numValues.reduce((a, b) => a + Math.pow(b - mean!, 2), 0) / (numValues.length - 1)
@@ -479,6 +562,7 @@ export function Analyses() {
       );
     }
 
+    // Tableau vertical (ex: composition chimique multi-éléments ICP/OES)
     if (resultTemplate.type === 'vertical_table') {
       const defaultUnit = resultTemplate.unit || '';
       const templateElements = Array.isArray(resultTemplate.options)
@@ -510,10 +594,12 @@ export function Analyses() {
         rows = [{ element: '', value: '', unit: defaultUnit }];
       }
 
+      /** Persiste la mise à jour du tableau vertical dans le store global */
       const updateRows = (nextRows: VerticalRow[]) => {
         updateAnalysisResult(analysisId, resultTemplate.id, nextRows);
       };
 
+      /** Importe et fusionne un fichier CSV/TXT/TSV local dans le tableau vertical */
       const handleFileImport = (file: File | undefined) => {
         if (!file) return;
         const reader = new FileReader();
@@ -525,6 +611,7 @@ export function Analyses() {
         reader.readAsText(file);
       };
 
+      /** Lit le presse-papiers (ou ouvre une invite manuelle en fallback) pour coller des colonnes Excel */
       const handleClipboardPasteButton = async () => {
         try {
           const text = await navigator.clipboard.readText();
@@ -734,6 +821,11 @@ export function Analyses() {
     );
   };
 
+  /**
+   * Génère le rendu de la liste des cartes d'analyses (métadonnées à gauche, formulaire de résultats au centre,
+   * boutons de transition du workflow d'approbation à droite, et journal d'audit dépliable en bas).
+   * @param analysesList Liste des analyses à afficher
+   */
   const renderAnalysesList = (analysesList: typeof analyses) => {
     return analysesList.map((analysis) => {
       const template = analysisTemplates.find(t => t.id === analysis.templateId);
@@ -897,6 +989,7 @@ export function Analyses() {
               </div>
             </div>
 
+            {/* Panneau dépliable de traçabilité (Audit Trail ISO 17025) */}
             {showAuditFor === analysis.id && analysis.auditTrail && (
               <div className="mt-4 p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs text-slate-600 w-full xl:w-3/5 xl:ml-auto">
                 <h5 className="font-bold mb-2">Historique des modifications</h5>

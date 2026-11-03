@@ -8,6 +8,8 @@
  * 4. Génération automatique des échantillons LIMS physiques et des analyses associées
  * 5. Piste d'audit inviolable (Audit Trail conforme 21 CFR Part 11 / ISO 17025)
  * 6. Visualisation et édition des données personnalisées issues des formulaires CMS
+ *
+ * @module views/RequestsInternal
  */
 
 import React, { useState } from 'react';
@@ -17,7 +19,11 @@ import { RequestStatus, AnalysisRequest, MaterialState, Sample } from '../types'
 import { generateUniqueLimsId, generateUniqueBarcode } from '../utils/idGenerator';
 import { printZebraLabelsWindow, generateZplForSamples } from '../utils/zebraLabelPrinter';
 
+/**
+ * Composant principal de revue technique, d'assignation et de réception des demandes clients côté laboratoire.
+ */
 export function RequestsInternal() {
+  // Extraction du store global LIMS (entités filtrées par labo + entités globales `allSamples`/`allAnalyses` pour l'unicité des IDs)
   const {
     currentUser,
     requests,
@@ -43,26 +49,36 @@ export function RequestsInternal() {
     laboratories
   } = useLims();
 
-  // États locaux de sélection et d'édition
+  // États locaux de sélection et d'édition du dossier actif
   const [selectedRequest, setSelectedRequest] = useState<AnalysisRequest | null>(null);
+  // Commentaire ou justification saisi lors d'un changement de statut (obligatoire en cas de rejet)
   const [statusComment, setStatusComment] = useState('');
+  // Active le mode édition inline des champs personnalisés `customData` de la demande (réservé manager/admin)
   const [isEditing, setIsEditing] = useState(false);
+  // Copie de travail des données personnalisées `customData` pendant l'édition
   const [editedData, setEditedData] = useState<Record<string, any>>({});
+  // Filtre d'onglet de la liste de gauche : demandes actives vs historique (terminées/rejetées)
   const [filterMode, setFilterMode] = useState<'actives' | 'terminees'>('actives');
 
-  // Paramètres de génération d'échantillons en masse
+  // Paramètres de génération d'échantillons en masse (réception physique au laboratoire)
   const [sampleQuantity, setSampleQuantity] = useState(1);
+  // Ne propose que les modèles de matériaux actifs dans le sélecteur
   const activeMaterialTemplates = materialTemplates.filter(t => t.isActive !== false);
   const [sampleMaterialTemplateId, setSampleMaterialTemplateId] = useState(activeMaterialTemplates[0]?.id || '');
   const [sampleMaterialState, setSampleMaterialState] = useState<MaterialState>('Massif');
   const [samplePriority, setSamplePriority] = useState<'basse' | 'normale' | 'haute'>('normale');
+  // Propriétés physico-chimiques / géométriques du matériau pré-remplies depuis la demande et ajustables à réception
   const [sampleCustomData, setSampleCustomData] = useState<Record<string, any>>({});
+  // Texte de conclusion générale et avis technique destiné à la balise `{{demande.conclusion}}` des rapports
   const [conclusionText, setConclusionText] = useState('');
+  // Identifiant de l'échantillon pour lequel le mini-formulaire d'ajout d'analyse à la volée est ouvert
   const [addingAnalysisForSample, setAddingAnalysisForSample] = useState<string | null>(null);
+  // Modèle d'analyse sélectionné lors de l'ajout manuel d'un essai sur un échantillon existant
   const [selectedNewAnalysisTplId, setSelectedNewAnalysisTplId] = useState<string>('');
+  // Contrôle le repli/dépli de la chronologie Audit Trail
   const [showAudit, setShowAudit] = useState(false);
 
-  // Liste des utilisateurs ayant le rôle analyste pour l'assignation
+  // Liste des utilisateurs ayant le rôle analyste ou manager rattachés au laboratoire du dossier pour l'assignation
   const analysts = users.filter(u =>
     (u.role === 'analyste' || u.role === 'manager') &&
     (!u.labId || u.labId === 'all' || u.labId === (selectedRequest?.labId || activeLabId))
@@ -71,6 +87,12 @@ export function RequestsInternal() {
   /**
    * Extrait la valeur d'une propriété de matériau depuis le customData d'une demande
    * (compatible avec la structure `${field.id}__material_properties` de NewRequestModal / EditRequestModal)
+   *
+   * @param req Demande d'analyse source
+   * @param matTplId Identifiant du modèle de matériau
+   * @param propFieldId Identifiant technique du champ de propriété matériau
+   * @param propFieldName Libellé humain du champ de propriété matériau
+   * @returns La valeur saisie par le demandeur ou `undefined` si non renseignée
    */
   const getMaterialPropFromRequest = (
     req: AnalysisRequest | null,
@@ -99,7 +121,9 @@ export function RequestsInternal() {
   };
 
   /**
-   * Filtrage des demandes visibles selon l'onglet (actives/terminées), la recherche et le rôle
+   * Filtrage des demandes visibles selon l'onglet (actives/terminées), la recherche et le rôle :
+   * - Managers & Admins : voient toutes les demandes du laboratoire actif
+   * - Analystes : ne voient que les demandes qui leur sont nominativement assignées (`r.assignedTo === currentUser.id`)
    */
   const visibleRequests = requests.filter(r => {
     if (filterMode === 'actives' && (r.status === 'terminee' || r.status === 'rejetee')) return false;
@@ -140,6 +164,8 @@ export function RequestsInternal() {
 
   /**
    * Rendu graphique du badge de statut
+   *
+   * @param status Statut du dossier dans le workflow LIMS
    */
   const getStatusBadge = (status: RequestStatus) => {
     switch (status) {
@@ -166,6 +192,8 @@ export function RequestsInternal() {
 
   /**
    * Formatage des dates pour l'affichage de l'audit trail et des en-têtes
+   *
+   * @param dateString Chaîne ISO 8601
    */
   const formatDate = (dateString: string) => {
     return new Intl.DateTimeFormat('fr-FR', {
@@ -179,6 +207,9 @@ export function RequestsInternal() {
 
   /**
    * Évolution du statut avec consignation dans l'audit trail
+   * Met à jour à la fois le store global et la copie locale `selectedRequest` pour un retour visuel immédiat.
+   *
+   * @param newStatus Nouveau statut cible de la demande
    */
   const handleStatusChange = (newStatus: RequestStatus) => {
     if (selectedRequest) {
@@ -203,6 +234,7 @@ export function RequestsInternal() {
 
   /**
    * Refus technique d'une demande avec justification obligatoire
+   * Enregistre le motif du rejet et ajoute une entrée dans la piste d'audit.
    */
   const handleReject = () => {
     if (selectedRequest && statusComment) {
@@ -227,7 +259,11 @@ export function RequestsInternal() {
   };
 
   /**
-   * Génère les échantillons LIMS réels et associe automatiquement les analyses demandées
+   * Génère les échantillons LIMS réels et associe automatiquement les analyses demandées :
+   * 1. Identifie les essais demandés dans les champs de type `'analyses'` du formulaire (avec fallbacks)
+   * 2. Génère `sampleQuantity` échantillons dotés d'identifiants et codes-barres uniques inter-laboratoires
+   * 3. Pour chaque échantillon créé, instancie les analyses correspondantes à l'état `'planifie'`
+   * 4. Passe automatiquement la demande au statut `'En Cours'`
    */
   const handleGenerateSamples = () => {
     if (!selectedRequest) return;

@@ -1,5 +1,17 @@
 /**
  * Serveur Backend Express & Passerelle API LIMS (Version Sécurisée + SMTP + Stockage Rapports Usage Unique)
+ *
+ * Architecture & Responsabilités :
+ * 1. Collecteur de logs système en mémoire (tampon circulaire de 500 entrées consultable par l'admin).
+ * 2. Service d'envoi d'e-mails transactionnels HTML via Nodemailer (configurable dynamiquement en base).
+ * 3. Authentification stateless par jeton JWT stocké dans un cookie `HttpOnly` + contrôle d'accès RBAC.
+ * 4. Protection anti-bruteforce (Rate Limiting en mémoire par IP et verrouillage OTP après 3 échecs).
+ * 5. API REST de persistance documentaire (`/api/db/:collection`) avec isolation Multi-Tenant (par `labId`)
+ *    et cloisonnement strict de confidentialité pour les clients externes (`role === 'demandeur'`).
+ * 6. Service de conversion à la volée Word (.docx) -> PDF via LibreOffice (`libreoffice-convert`).
+ * 7. Coffre-fort de stockage disque des rapports (`storage/reports/`) et téléchargement par jeton
+ *    cryptographique à usage unique (consommé dès le premier appel et expirant au bout de 2 minutes).
+ * 8. Serveur de développement Vite en mode middleware (dev) ou serveur de fichiers statiques SPA (prod).
  */
 
 import express, { Request, Response, NextFunction } from 'express';
@@ -30,11 +42,14 @@ import {
 } from './src/db/auth.js';
 import { initLimsDb, getCollection, setCollection } from './src/db/lims.js';
 
+/** Indique si le serveur s'exécute en environnement de production */
 const IS_PROD = process.env.NODE_ENV === 'production';
 
 // ==========================================
 // Collecteur de Logs Système (Backend)
 // ==========================================
+
+/** Structure d'une entrée du journal serveur exposée sur `/api/admin/logs` */
 interface ServerLogEntry {
   id: string;
   timestamp: string;
@@ -47,11 +62,15 @@ interface ServerLogEntry {
 const MAX_SERVER_LOGS = 500;
 const serverLogs: ServerLogEntry[] = [];
 
+// Sauvegarde des méthodes console natives avant interception
 const origConsoleLog = console.log.bind(console);
 const origConsoleInfo = console.info.bind(console);
 const origConsoleWarn = console.warn.bind(console);
 const origConsoleError = console.error.bind(console);
 
+/**
+ * Formate un argument quelconque passé à `console.*` en chaîne de caractères lisible.
+ */
 function formatServerArg(arg: any): string {
   if (arg instanceof Error) {
     return `${arg.name}: ${arg.message}${arg.stack ? `\n${arg.stack}` : ''}`;
@@ -66,6 +85,9 @@ function formatServerArg(arg: any): string {
   return String(arg);
 }
 
+/**
+ * Enregistre une entrée dans le tampon circulaire des logs serveur (`serverLogs`).
+ */
 function recordServerLog(level: 'info' | 'warn' | 'error', args: any[]) {
   const formatted = args.map(formatServerArg);
   const message = formatted[0] || '';
@@ -85,6 +107,7 @@ function recordServerLog(level: 'info' | 'warn' | 'error', args: any[]) {
   }
 }
 
+// Surcharge des méthodes globales `console.*` pour alimenter automatiquement le journal d'administration
 console.log = (...args: any[]) => {
   origConsoleLog(...args);
   recordServerLog('info', args);
@@ -105,6 +128,8 @@ console.error = (...args: any[]) => {
 // ==========================================
 // Configuration & Service d'Envoi SMTP
 // ==========================================
+
+/** Paramètres du serveur d'envoi d'e-mails stockés dans la collection `smtpSettings` */
 export interface SmtpConfig {
   enabled: boolean;
   host: string;
@@ -127,6 +152,9 @@ const DEFAULT_SMTP_CONFIG: SmtpConfig = {
   fromEmail: 'noreply@laboratoire.fr'
 };
 
+/**
+ * Lit la configuration SMTP persistée dans SQLite ou retourne la configuration par défaut.
+ */
 async function getSmtpConfig(): Promise<SmtpConfig> {
   try {
     const saved = await getCollection('smtpSettings');
@@ -139,6 +167,9 @@ async function getSmtpConfig(): Promise<SmtpConfig> {
   return DEFAULT_SMTP_CONFIG;
 }
 
+/**
+ * Échappe les caractères spéciaux HTML pour prévenir toute injection dans les e-mails HTML.
+ */
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -148,6 +179,10 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * Construit le gabarit d'e-mail HTML responsive (compatible clients mail Outlook/Gmail/Apple Mail)
+ * pour toutes les notifications transactionnelles du LIMS.
+ */
 function buildHtmlEmailTemplate(
   title: string,
   message: string,
@@ -386,6 +421,15 @@ function buildHtmlEmailTemplate(
 </html>`;
 }
 
+/**
+ * Achemine un e-mail via le serveur SMTP configuré si le service est activé (`config.enabled === true`).
+ *
+ * @param toEmail Adresse e-mail du destinataire
+ * @param subject Objet de l'e-mail (sera préfixé par `[LIMS]`)
+ * @param textMessage Contenu texte brut (et corps du gabarit HTML)
+ * @param recipientName Nom complet du destinataire pour la formule de salutation
+ * @returns `true` si l'e-mail a été envoyé, `false` si SMTP est désactivé ou incomplet
+ */
 async function sendMailViaSmtp(toEmail: string, subject: string, textMessage: string, recipientName?: string): Promise<boolean> {
   const config = await getSmtpConfig();
   if (!config.enabled) {
@@ -427,12 +471,14 @@ async function sendMailViaSmtp(toEmail: string, subject: string, textMessage: st
   return true;
 }
 
+// Vérification de sécurité bloquante en production : interdit le démarrage sans secret JWT explicite
 if (IS_PROD && !process.env.JWT_SECRET) {
   console.error('ERREUR CRITIQUE : La variable d\'environnement JWT_SECRET est obligatoire en production.');
   process.exit(1);
 }
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key-pour-le-developpement-local-uniquement';
 
+/** Options de sécurité appliquées au cookie contenant le jeton JWT */
 const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: IS_PROD,
@@ -440,6 +486,7 @@ const COOKIE_OPTIONS = {
   maxAge: 24 * 60 * 60 * 1000 // 24 heures
 };
 
+/** Liste blanche des collections JSON autorisées dans la table `collections` */
 const ALLOWED_COLLECTIONS = new Set([
   'laboratories',
   'notifications',
@@ -455,6 +502,7 @@ const ALLOWED_COLLECTIONS = new Set([
   'consumables'
 ]);
 
+/** Collections de configuration CMS réservées en écriture aux profils `manager` et `admin` */
 const MANAGER_ONLY_COLLECTIONS = new Set([
   'laboratories',
   'materialTemplates',
@@ -463,11 +511,13 @@ const MANAGER_ONLY_COLLECTIONS = new Set([
   'reportTemplates'
 ]);
 
+/** Collections modifiables par un client externe (`demandeur`), avec fusion sécurisée côté serveur */
 const REQUESTER_WRITABLE_COLLECTIONS = new Set([
   'requests',
   'notifications'
 ]);
 
+/** Extension de l'objet `Request` Express incluant le profil de l'utilisateur authentifié */
 interface AuthRequest extends Request {
   user?: {
     id: string;
@@ -485,6 +535,12 @@ interface AuthRequest extends Request {
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 const otpFailedAttempts = new Map<string, number>();
 
+/**
+ * Vérifie et incrémente le compteur de requêtes pour une clé donnée (ex: `login:127.0.0.1`)
+ * dans une fenêtre glissante `windowMs`.
+ *
+ * @returns `true` si la requête est autorisée, `false` si le quota `maxAttempts` est dépassé
+ */
 function checkRateLimit(key: string, maxAttempts: number, windowMs: number): boolean {
   const now = Date.now();
   const record = rateLimitMap.get(key);
@@ -499,6 +555,11 @@ function checkRateLimit(key: string, maxAttempts: number, windowMs: number): boo
   return true;
 }
 
+/**
+ * Middleware Express d'authentification obligatoire.
+ * Vérifie la signature du JWT présent dans `req.cookies.token` ET recharge l'utilisateur
+ * depuis SQLite (`getUserById`) pour garantir que son compte n'a pas été supprimé ou modifié.
+ */
 const authenticate = async (req: AuthRequest, res: Response, next: NextFunction) => {
   const token = req.cookies.token;
   if (!token) return res.status(401).json({ error: 'Non authentifié' });
@@ -523,10 +584,14 @@ const authenticate = async (req: AuthRequest, res: Response, next: NextFunction)
   }
 };
 
+/**
+ * Initialise et démarre le serveur HTTP Express sur le port 3000.
+ */
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // En-têtes HTTP de sécurité (Durcissement OWASP)
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
@@ -534,9 +599,11 @@ async function startServer() {
     next();
   });
 
+  // Limite de payload fixée à 50 Mo pour supporter les clichés micrographiques et modèles DOCX en Base64
   app.use(express.json({ limit: '50mb' }));
   app.use(cookieParser());
 
+  // Journalisation automatique des erreurs HTTP (>= 400) sur les routes `/api/*`
   app.use((req, res, next) => {
     const start = Date.now();
     res.on('finish', () => {
@@ -551,6 +618,7 @@ async function startServer() {
     next();
   });
 
+  // Initialisation des tables SQLite (`users`, `reset_tokens`, `account_requests`, `collections`)
   await initDb();
   await initLimsDb();
 
@@ -579,6 +647,7 @@ async function startServer() {
       return res.status(403).json({ error: 'Accès réservé aux administrateurs.' });
     }
     const config = await getSmtpConfig();
+    // Masque le mot de passe SMTP dans la réponse JSON envoyée au navigateur
     res.json({
       ...config,
       pass: config.pass ? '••••••••' : '',
@@ -594,6 +663,7 @@ async function startServer() {
       const current = await getSmtpConfig();
       const { enabled, host, port, secure, user, pass, fromName, fromEmail } = req.body;
 
+      // Conserve le mot de passe existant si la chaîne masquée '••••••••' est renvoyée telle quelle
       const updated: SmtpConfig = {
         enabled: Boolean(enabled),
         host: typeof host === 'string' ? host.trim() : current.host,
@@ -693,6 +763,10 @@ async function startServer() {
   // 1. Endpoints Sécurisés pour les Collections
   // ==========================================
 
+  /**
+   * Lecture d'une collection métier avec filtrage de confidentialité côté serveur
+   * pour empêcher un compte `demandeur` d'accéder aux dossiers d'autres clients.
+   */
   app.get('/api/db/:collection', authenticate, async (req: AuthRequest, res) => {
     try {
       const { collection } = req.params;
@@ -714,6 +788,13 @@ async function startServer() {
           const allRequests = ((await getCollection('requests')) as any[]) || [];
           const myReqIds = new Set(allRequests.filter(r => r.requesterId === req.user?.id).map(r => r.id));
           return res.json(data.filter((s: any) => s.requestId && myReqIds.has(s.requestId)));
+        }
+        if (collection === 'analyses') {
+          const allRequests = ((await getCollection('requests')) as any[]) || [];
+          const allSamples = ((await getCollection('samples')) as any[]) || [];
+          const myReqIds = new Set(allRequests.filter(r => r.requesterId === req.user?.id).map(r => r.id));
+          const mySampleIds = new Set(allSamples.filter(s => s.requestId && myReqIds.has(s.requestId)).map(s => s.id));
+          return res.json(data.filter((a: any) => mySampleIds.has(a.sampleId)));
         }
         if (collection === 'reports') {
           const allRequests = ((await getCollection('requests')) as any[]) || [];
@@ -747,6 +828,12 @@ async function startServer() {
     }
   });
 
+  /**
+   * Écriture d'une collection métier avec fusion partielle sécurisée :
+   * - Un `demandeur` ne peut modifier que ses propres `requests` (sans forcer un statut validé) et `notifications`.
+   * - Un `analyste` ou `manager` rattaché à un laboratoire spécifique (`user.labId !== 'all'`)
+   *   ne modifie que les enregistrements de son propre laboratoire sans écraser ceux des autres laboratoires.
+   */
   app.post('/api/db/:collection', authenticate, async (req: AuthRequest, res) => {
     try {
       const { collection } = req.params;
@@ -776,6 +863,7 @@ async function startServer() {
             .filter((r: any) => r.requesterId === user.id)
             .map((r: any) => {
               const prev = existingData.find((ex: any) => ex.id === r.id);
+              // Empêche un demandeur de s'auto-valider une demande côté client
               if (prev && prev.status !== r.status && r.status !== 'soumise') {
                 return { ...r, status: prev.status };
               }
@@ -878,17 +966,16 @@ async function startServer() {
       const caller = req.user!;
       const users = await getUsers();
 
-      // MODIFICATION : Si c'est un demandeur, on lui renvoie son profil + tous les managers
+      // Si c'est un demandeur, on lui renvoie uniquement son profil + les managers (pour permettre les notifications de nouvelles demandes)
       if (caller.role === 'demandeur') {
         const allowedUsers = users.filter(u => u.id === caller.id || u.role === 'manager');
-        // On retire les mots de passe par mesure de sécurité
         const safeUsers = allowedUsers.map(({ passwordHash, ...safe }) => safe);
         return res.json(safeUsers);
       }
 
       if (caller.role !== 'admin' && caller.labId && caller.labId !== 'all') {
         const filtered = users.filter(u => !u.labId || u.labId === 'all' || u.labId === caller.labId);
-        return res.json(filtered);
+        return res.json(filtered.map(({ passwordHash, ...safe }) => safe));
       }
 
       const allSafeUsers = users.map(({ passwordHash, ...safe }) => safe);
@@ -919,6 +1006,7 @@ async function startServer() {
         return res.status(403).json({ error: 'Vous n\'êtes pas autorisé à attribuer ce rôle.' });
       }
 
+      // Un manager affecté à un laboratoire ne peut créer du personnel interne que pour son propre laboratoire
       const enforcedLabId = (caller.role === 'manager' && caller.labId && caller.labId !== 'all' && role !== 'demandeur')
         ? caller.labId
         : labId;
@@ -986,6 +1074,7 @@ async function startServer() {
 
       const user = await getUserByEmail(email.trim());
       if (!user) {
+        // Réponse générique identique pour prévenir l'énumération des comptes existants
         return res.json({ success: true, message: 'Si l\'email existe, un code a été envoyé.' });
       }
 
@@ -1033,6 +1122,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Code invalide ou expiré' });
       }
 
+      // Révoque le code OTP au bout de 3 tentatives erronées sur cet email
       if (resetRecord.token !== code) {
         const attempts = (otpFailedAttempts.get(cleanEmail) || 0) + 1;
         otpFailedAttempts.set(cleanEmail, attempts);
@@ -1132,6 +1222,7 @@ async function startServer() {
   // 6. Service de Conversion Word vers PDF (Authentifié & Isolé)
   // ==========================================
 
+  /** Cache mémoire temporaire (TTL 1h) des PDF de prévisualisation générés par LibreOffice */
   const tempPdfs = new Map<string, { buffer: Buffer; timestamp: number; ownerId: string; labId?: string | null }>();
   let activePdfConversions = 0;
   const MAX_CONCURRENT_CONVERSIONS = 2;
@@ -1154,6 +1245,7 @@ async function startServer() {
   });
 
   app.post('/api/convert-pdf', authenticate, async (req: AuthRequest, res) => {
+    // Sémaphore limitant le nombre de processus LibreOffice simultanés pour protéger la RAM/CPU
     if (activePdfConversions >= MAX_CONCURRENT_CONVERSIONS) {
       return res.status(503).json({ error: 'Service de conversion occupé, veuillez réessayer dans quelques secondes.' });
     }
@@ -1165,6 +1257,7 @@ async function startServer() {
       }
 
       const docxBuf = Buffer.from(docxBase64, 'base64');
+      // Vérifie la signature magique ZIP ('PK' = 0x50 0x4B) d'un fichier .docx et plafonne la taille à 15 Mo
       if (docxBuf.length > 15 * 1024 * 1024 || docxBuf.length < 4 || docxBuf[0] !== 0x50 || docxBuf[1] !== 0x4b) {
         return res.status(400).json({ error: 'Fichier DOCX invalide ou trop volumineux (max 15 Mo).' });
       }
@@ -1180,6 +1273,7 @@ async function startServer() {
         labId: req.user!.labId
       });
 
+      // Nettoyage automatique des prévisualisations PDF de plus d'une heure
       for (const [key, value] of tempPdfs.entries()) {
         if (Date.now() - value.timestamp > 3600000) tempPdfs.delete(key);
       }
@@ -1219,7 +1313,7 @@ async function startServer() {
   const oneTimeDownloadTokens = new Map<string, DownloadTokenData>();
 
   /**
-   * Enregistre physiquement le rapport généré par le laborantin ou manager dans storage/reports/
+   * Enregistre physiquement le rapport généré par le laborantin ou manager dans `storage/reports/`
    */
   app.post('/api/reports/upload', authenticate, async (req: AuthRequest, res) => {
     try {
@@ -1233,6 +1327,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Paramètres du rapport incomplets.' });
       }
 
+      // Assainissement strict du nom de fichier pour empêcher toute traversée de répertoire (Path Traversal)
       const safeReportId = String(reportId).replace(/[^a-zA-Z0-9_-]/g, '_');
       const ext = format === 'Word' ? 'docx' : 'pdf';
       const storedFileName = `${safeReportId}.${ext}`;
@@ -1267,7 +1362,7 @@ async function startServer() {
     const requests = ((await getCollection('requests')) as any[]) || [];
     const samples = ((await getCollection('samples')) as any[]) || [];
 
-    // Vérification stricte de confidentialité pour les demandeurs
+    // Vérification stricte de confidentialité pour les demandeurs (prévention d'IDOR)
     if (user.role === 'demandeur') {
       const myRequestIds = new Set(
         requests.filter((r: any) => r.requesterId === user.id).map((r: any) => r.id)

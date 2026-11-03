@@ -14,6 +14,7 @@ import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
 // Initialisation du worker PDF.js depuis le package distribué
+// Utilise `import.meta.url` pour que le bundler (Vite) résolve correctement le fichier `.mjs` local
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
   import.meta.url,
@@ -27,12 +28,23 @@ interface PdfViewerProps {
   url: string;
 }
 
+/**
+ * Composant d'affichage de documents PDF multi-pages basé sur `react-pdf` (PDF.js).
+ * Utilisé notamment dans `ReportPreviewModal` pour prévisualiser les rapports Word (.docx)
+ * après leur conversion serveur en PDF via LibreOffice.
+ *
+ * @param {PdfViewerProps} props - Les propriétés contenant l'URL ou DataURL du PDF (`url`).
+ * @returns {JSX.Element} Le conteneur défilant affichant chaque page du PDF sous forme de canevas.
+ */
 export function PdfViewer({ url }: PdfViewerProps) {
-  // Nombre total de pages du document chargé
+  // Nombre total de pages du document chargé (indéfini tant que le PDF n'est pas analysé)
   const [numPages, setNumPages] = useState<number>();
 
   /**
-   * Callback déclenché à la fin de l'analyse du document PDF
+   * Callback déclenché à la fin de l'analyse du document PDF par PDF.js.
+   * Met à jour le nombre de pages afin d'instancier les composants `<Page />` correspondants.
+   *
+   * @param {{ numPages: number }} param0 - Objet d'événement fourni par `react-pdf` contenant le total des pages.
    */
   function onDocumentLoadSuccess({ numPages }: { numPages: number }): void {
     setNumPages(numPages);
@@ -41,6 +53,7 @@ export function PdfViewer({ url }: PdfViewerProps) {
   return (
     <div className="flex flex-col items-center w-full bg-slate-200 p-4 custom-scrollbar">
       <div className="flex flex-col gap-6">
+        {/* Conteneur racine react-pdf gérant le téléchargement et le décodage du flux PDF */}
         <Document 
           file={url} 
           onLoadSuccess={onDocumentLoadSuccess} 
@@ -52,6 +65,7 @@ export function PdfViewer({ url }: PdfViewerProps) {
           }
         >
           {/* Génération de chaque page avec largeur calibrée à 800px */}
+          {/* Les couches de texte et d'annotations sont désactivées pour alléger le DOM et garantir un rendu purement graphique fidèle */}
           {Array.from(new Array(numPages || 0), (el, index) => (
             <div key={`page_${index + 1}`} className="shadow-xl bg-white mb-6 last:mb-0">
               <Page 

@@ -45,6 +45,22 @@ import { initLimsDb, getCollection, setCollection } from './src/db/lims.js';
 /** Indique si le serveur s'exécute en environnement de production */
 const IS_PROD = process.env.NODE_ENV === 'production';
 
+// Détection automatique du chemin d'installation de LibreOffice sur Windows, Linux et macOS
+// afin d'assurer que le binaire `soffice` soit accessible dans process.env.PATH pour `libreoffice-convert`.
+const COMMON_LIBREOFFICE_PATHS = [
+  'C:\\Program Files\\LibreOffice\\program',
+  'C:\\Program Files (x86)\\LibreOffice\\program',
+  '/usr/bin',
+  '/usr/local/bin',
+  '/Applications/LibreOffice.app/Contents/MacOS'
+];
+for (const loPath of COMMON_LIBREOFFICE_PATHS) {
+  if (fs.existsSync(loPath)) {
+    process.env.PATH = `${loPath}${path.delimiter}${process.env.PATH || ''}`;
+    break;
+  }
+}
+
 // ==========================================
 // Collecteur de Logs Système (Backend)
 // ==========================================
@@ -1282,9 +1298,14 @@ async function startServer() {
         pdfBase64: pdfBuf.toString('base64'),
         pdfUrl: `/api/temp-pdf/${id}`
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Erreur lors de la conversion PDF :', error);
-      res.status(500).json({ error: 'Erreur lors de la génération du document PDF' });
+      const errMsg = String(error?.message || error || '');
+      const isMissingLibreOffice = errMsg.includes('soffice') || errMsg.includes('ENOENT') || errMsg.includes('not found') || errMsg.includes('Command failed');
+      const userMessage = isMissingLibreOffice
+        ? "LibreOffice n'est pas installé ou le binaire 'soffice' est introuvable sur le serveur. Veuillez installer LibreOffice (https://fr.libreoffice.org) pour activer la conversion Word vers PDF, ou téléchargez le rapport directement au format Word (.docx)."
+        : `Erreur lors de la conversion du document PDF : ${errMsg}`;
+      res.status(500).json({ error: userMessage });
     } finally {
       activePdfConversions = Math.max(0, activePdfConversions - 1);
     }

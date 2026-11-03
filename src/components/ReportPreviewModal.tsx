@@ -14,7 +14,7 @@
  */
 
 import React, { useRef, useEffect, useState } from "react";
-import { X, Printer, Download, CheckCircle2 } from "lucide-react";
+import { X, Printer, Download, CheckCircle2, AlertTriangle } from "lucide-react";
 import { Report, AnalysisRequest, Sample, Analysis, AnalysisTemplate, User } from "../types";
 import { useLims } from "../store";
 import domtoimage from "dom-to-image-more";
@@ -1018,8 +1018,27 @@ export function ReportPreviewModal({
             /* Branche A : Affichage via PdfViewer du document Word converti par LibreOffice */
             <div className="w-full flex justify-center flex-col items-center max-w-[1000px] mx-auto">
               {docxError && (
-                <div className="text-red-500 mb-4 bg-red-100 p-4 rounded-lg font-bold">
-                  {docxError}
+                <div className="w-full max-w-2xl bg-amber-50 border border-amber-200 text-amber-900 p-5 rounded-xl shadow-xs mb-6 text-sm">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-amber-950 text-base mb-1">Aperçu PDF indisponible</h4>
+                      <p className="text-amber-800 leading-relaxed mb-3">{docxError}</p>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={generateDOCX}
+                          className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg shadow-xs transition-colors"
+                        >
+                          <Download className="w-4 h-4" />
+                          Télécharger le document Word (.docx)
+                        </button>
+                        <span className="text-xs text-amber-700">
+                          Le document Word fusionné avec vos données reste 100 % valide et téléchargeable.
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
               {isGeneratingPreview ? (

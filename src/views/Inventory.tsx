@@ -19,15 +19,24 @@ import { useLims } from '../store';
 import { Archive, AlertTriangle, Plus, Minus, Search, Droplet, Layers, Wrench, Settings, Trash2, X } from 'lucide-react';
 import { ConsumableCategory } from '../types';
 
+/**
+ * Composant principal de la vue de gestion de l'inventaire des consommables de laboratoire.
+ * Permet le suivi des quantités, des dates de péremption, des alertes de seuil critique,
+ * ainsi que l'ajustement rapide ou l'ajout de nouvelles références.
+ */
 export function Inventory() {
+  // Extraction de la liste des consommables et des actions de mutation depuis le store global LIMS
   const { consumables, updateConsumableStock, addConsumable, deleteConsumable } = useLims();
   
   // États de recherche et filtrage
+  /** Terme de recherche textuelle pour filtrer les consommables par nom, ID ou catégorie */
   const [searchTerm, setSearchTerm] = useState('');
+  /** Contrôle l'ouverture de la fenêtre modale d'ajout d'un nouveau produit */
   const [showNewModal, setShowNewModal] = useState(false);
 
   
   // État du formulaire de création d'un article
+  /** État contrôlé des champs du formulaire de création d'un nouveau consommable */
   const [newConsumable, setNewConsumable] = useState({
     name: '',
     category: 'Chimie' as ConsumableCategory,
@@ -46,6 +55,7 @@ export function Inventory() {
 
   /**
    * Retourne l'icône représentative de la catégorie de consommable
+   * @param category Catégorie du consommable ('Résine', 'Chimie', 'Abrasif', 'Équipement')
    */
   const getCategoryIcon = (category: string) => {
     switch(category) {
@@ -58,6 +68,10 @@ export function Inventory() {
 
   /**
    * Ajuste la quantité en stock avec arrondi au dixième (supporte les volumes liquides et masses)
+   * tout en empêchant un stock négatif (`Math.max(0, ...)`).
+   * @param id Identifiant du consommable
+   * @param currentLevel Quantité actuelle en stock
+   * @param amount Variation à appliquer (ex: -1, -0.1, +1 ou réassort)
    */
   const handleAdjust = (id: string, currentLevel: number, amount: number) => {
     const newLevel = Math.max(0, currentLevel + amount);
@@ -66,7 +80,8 @@ export function Inventory() {
   };
 
   /**
-   * Création d'une nouvelle référence d'inventaire
+   * Création d'une nouvelle référence d'inventaire à la soumission du formulaire modal.
+   * @param e Événement de soumission du formulaire
    */
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
@@ -95,7 +110,7 @@ export function Inventory() {
     });
   };
 
-  // Calcul du nombre de références sous le seuil d'alerte
+  // Calcul du nombre de références sous le seuil d'alerte (affiché dans le bandeau supérieur)
   const lowStockCount = consumables.filter(c => c.stockLevel <= c.minThreshold).length;
 
   return (

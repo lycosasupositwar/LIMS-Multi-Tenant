@@ -1,4 +1,14 @@
 #!/bin/bash
+# ==============================================================================
+# Script d'Installation Assistée LIMS Multi-Tenant (Environnements Linux)
+# ==============================================================================
+# Ce script automatise :
+# 1. La vérification ou l'installation de Node.js v22+ (requis pour `node:sqlite`)
+# 2. L'installation des dépendances npm du projet
+# 3. La génération d'un fichier `.env` avec une clé `JWT_SECRET` aléatoire
+# 4. La création ou mise à jour du compte Super Administrateur dans SQLite
+# ==============================================================================
+
 # Arrête le script à la moindre erreur
 set -e
 
@@ -30,11 +40,14 @@ if ! check_node_version; then
     
     if command -v apt-get &> /dev/null; then
         # Utilisation de -qq pour rendre l'update silencieux et éviter les erreurs d'arguments
-        $SUDO apt-get update -qq \vert{}\vert{} true$SUDO apt-get install -y curl ca-certificates
-        curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO bash -$SUDO apt-get install -y nodejs
+        $SUDO apt-get update -qq || true
+        $SUDO apt-get install -y curl ca-certificates
+        curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO bash -
+        $SUDO apt-get install -y nodejs
     elif command -v yum &> /dev/null; then
         $SUDO yum install -y curl ca-certificates
-        curl -fsSL https://rpm.nodesource.com/setup_22.x | $SUDO bash -$SUDO yum install -y nodejs
+        curl -fsSL https://rpm.nodesource.com/setup_22.x | $SUDO bash -
+        $SUDO yum install -y nodejs
     elif command -v apk &> /dev/null; then
         $SUDO apk add --no-cache curl nodejs npm
     else

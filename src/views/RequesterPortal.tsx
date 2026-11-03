@@ -1,5 +1,14 @@
 /**
  * Portail Demandeur Multi-Laboratoires (Espace Client Unifié)
+ *
+ * Ce composant offre aux clients internes et externes (rôle `demandeur`) une interface dédiée :
+ * 1. Vue d'ensemble multi-laboratoires avec cartes de comptage interactives par laboratoire
+ * 2. Dépôt de nouvelles demandes d'analyses et duplication rapide de dossiers existants (`NewRequestModal`)
+ * 3. Suivi en temps réel de l'avancement des dossiers (statuts vulgarisés pour le client)
+ * 4. Consultation ou modification des demandes en brouillon / rejetées (`EditRequestModal`)
+ * 5. Téléchargement sécurisé des rapports d'essais validés via jeton à usage unique (One-Time Link)
+ *
+ * @module views/RequesterPortal
  */
 
 import React, { useState } from 'react';
@@ -10,17 +19,31 @@ import { getLabColor } from '../utils/colors';
 import { NewRequestModal } from '../components/NewRequestModal';
 import { EditRequestModal } from '../components/EditRequestModal';
 
+/**
+ * Composant principal du Portail Demandeur.
+ *
+ * @param props.onOpenSettings Callback optionnel permettant d'ouvrir le panneau de profil/paramètres utilisateur
+ */
 export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => void }) {
+  // Extraction des données globales depuis le store LIMS
   const { currentUser, requests, reports, samples, allRequestTemplates, laboratories } = useLims();
+  // Contrôle l'ouverture de la modale de création d'une nouvelle demande
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
+  // Demande sélectionnée pour consultation ou édition dans `EditRequestModal`
   const [editingRequest, setEditingRequest] = useState<AnalysisRequest | null>(null);
+  // Demande source utilisée pour pré-remplir `NewRequestModal` lors d'une duplication
   const [duplicateRequest, setDuplicateRequest] = useState<Partial<AnalysisRequest> | null>(null);
+  // Filtre par laboratoire ('all' ou identifiant de laboratoire spécifique)
   const [selectedLabFilter, setSelectedLabFilter] = useState<string>('all');
+  // Requête de recherche textuelle (par référence de dossier ou par titre)
   const [searchQuery, setSearchQuery] = useState('');
+  // Identifiant de la demande dont le rapport est en cours de génération/téléchargement (pour l'état de chargement)
   const [downloadingRequestId, setDownloadingRequestId] = useState<string | null>(null);
 
+  // Restriction stricte aux demandes créées par l'utilisateur connecté
   const myRequests = requests.filter(r => r.requesterId === currentUser?.id);
 
+  // Application combinée du filtre par laboratoire destinataire et de la recherche textuelle
   const filteredRequests = myRequests.filter(req => {
     const matchesLab = selectedLabFilter === 'all' || req.labId === selectedLabFilter;
     const matchesSearch = searchQuery === '' || 
@@ -31,6 +54,10 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
 
   /**
    * Vérifie si un rapport généré existe pour une demande donnée
+   * (soit par rattachement direct `r.requestId`, soit via les échantillons liés à la demande)
+   *
+   * @param requestId Identifiant unique de la demande d'analyse
+   * @returns `true` si au moins un rapport au statut `'genere'` correspond à cette demande
    */
   const hasReportForRequest = (requestId: string) => {
     const reqSampleIds = new Set(samples.filter(s => s.requestId === requestId).map(s => s.id));
@@ -44,10 +71,13 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
 
   /**
    * Génère un lien unique à usage unique pour la demande et déclenche le téléchargement direct
+   *
+   * @param requestId Identifiant unique de la demande dont on souhaite télécharger le rapport
    */
   const handleDownloadRequestReport = async (requestId: string) => {
     try {
       setDownloadingRequestId(requestId);
+      // Appel API POST pour générer un token éphémère de téléchargement côté serveur
       const res = await fetch(`/api/reports/by-request/${encodeURIComponent(requestId)}/generate-link`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
@@ -73,6 +103,11 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
     }
   };
 
+  /**
+   * Retourne le badge visuel du statut de la demande avec un libellé adapté au vocabulaire client
+   *
+   * @param status Statut interne de la demande (`RequestStatus`)
+   */
   const getStatusBadge = (status: RequestStatus) => {
     switch (status) {
       case 'brouillon': 
@@ -100,6 +135,11 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
     }
   };
 
+  /**
+   * Génère la pastille colorée identifiant le laboratoire destinataire d'une demande
+   *
+   * @param labId Identifiant du laboratoire (`lab-1`, `lab-2`, etc.)
+   */
   const getLabBadge = (labId?: string) => {
     const labIndex = laboratories.findIndex(l => l.id === labId);
     const lab = laboratories[labIndex];
@@ -113,6 +153,11 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
     );
   };
 
+  /**
+   * Formate une date ISO en format court français (ex: "15 mars 2025")
+   *
+   * @param dateString Chaîne ISO 8601 représentant la date de création
+   */
   const formatDate = (dateString: string) => {
     return new Intl.DateTimeFormat('fr-FR', { 
       day: '2-digit', 

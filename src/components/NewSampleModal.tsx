@@ -24,30 +24,53 @@ interface Props {
   onClose: () => void;
 }
 
+/**
+ * Composant modal permettant d'enregistrer un nouvel échantillon physique reçu au laboratoire
+ * (hors flux d'acceptation automatique d'une demande ou pour un prélèvement direct).
+ *
+ * @param {Props} props - Les propriétés de contrôle de la modale (`isOpen`, `onClose`).
+ * @returns {JSX.Element | null} Le rendu du formulaire d'enregistrement ou `null` si fermé.
+ */
 export function NewSampleModal({ isOpen, onClose }: Props) {
+  // Extraction du catalogue de matériaux du laboratoire actif et des fonctions d'ajout depuis le store LIMS
   const { materialTemplates, addSample, labSettings, activeLabId, allSamples } = useLims();
+  // Filtrage des modèles de matériaux actifs configurés dans le CMS
   const activeTemplates = materialTemplates.filter(t => t.isActive !== false);
   
   // États locaux du formulaire
+  /** Identifiant du modèle de matériau sélectionné dans le CMS */
   const [selectedTemplateId, setSelectedTemplateId] = useState(activeTemplates[0]?.id || '');
+  /** Nom du client ou donneur d'ordre */
   const [client, setClient] = useState('');
+  /** Référence du projet ou du chantier associé à l'échantillon */
   const [project, setProject] = useState('');
+  /** Niveau d'urgence de traitement ('basse' | 'normale' | 'haute') */
   const [priority, setPriority] = useState<Priority>('normale');
+  /** État physique macroscopique de la matière ('Massif' | 'Fritté' | 'Poudre' | 'Liquide') */
   const [materialState, setMaterialState] = useState<MaterialState>('Massif');
+  /** Valeurs des propriétés techniques dynamiques propres au gabarit de matériau choisi */
   const [customData, setCustomData] = useState<Record<string, any>>({});
+  /** Observations libres de l'opérateur à la réception (état de surface, emballage, etc.) */
   const [notes, setNotes] = useState('');
 
+  // Court-circuit de rendu si la modale n'est pas ouverte
   if (!isOpen) return null;
 
+  // Récupération de la définition complète du modèle de matériau sélectionné
   const activeTemplate = activeTemplates.find(t => t.id === selectedTemplateId);
 
 /**
-   * Création et insertion de l'échantillon dans le catalogue
+   * Création et insertion de l'échantillon dans le catalogue.
+   * Génère un identifiant LIMS séquentiel unique (ex: ECH-MET-26-XXX) ainsi qu'un code-barres
+   * préfixé par les 3 premières lettres de la catégorie de matériau.
+   *
+   * @param {React.FormEvent} e - Événement de soumission du formulaire HTML.
    */
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeTemplate) return;
 
+    // Préfixe d'identifiant paramétré pour le laboratoire actif et préfixe 3 lettres pour le code-barres
     const prefix = labSettings?.idPrefixes?.sample || 'ECH';
     const barcodePrefix = activeTemplate.category.substring(0, 3).toUpperCase();
 
@@ -60,6 +83,7 @@ export function NewSampleModal({ isOpen, onClose }: Props) {
       barcodePrefix
     );
 
+    // Construction de l'entité échantillon au statut initial 'receptionne'
     const newSample: Sample = {
       id: uniqueSampleId,
       labId: activeLabId,
@@ -81,7 +105,10 @@ export function NewSampleModal({ isOpen, onClose }: Props) {
   };
 
   /**
-   * Enregistrement des valeurs des champs dynamiques
+   * Enregistrement des valeurs des champs dynamiques dans le dictionnaire `customData`.
+   *
+   * @param {string} fieldId - Identifiant de la propriété du matériau.
+   * @param {any} value - Valeur saisie ou sélectionnée.
    */
   const handleCustomDataChange = (fieldId: string, value: any) => {
     setCustomData(prev => ({ ...prev, [fieldId]: value }));
@@ -196,6 +223,7 @@ export function NewSampleModal({ isOpen, onClose }: Props) {
                         {field.name} {field.required && <span className="text-red-500">*</span>}
                       </label>
                       
+                      {/* Propriété de type liste déroulante ('select') */}
                       {field.type === 'select' ? (
                         <select 
                           required={field.required}
@@ -209,6 +237,7 @@ export function NewSampleModal({ isOpen, onClose }: Props) {
                           ))}
                         </select>
                       ) : field.type === 'multiselect' ? (
+                        /* Propriété à choix multiples sous forme de badges ('multiselect') */
                         <div className="flex flex-wrap gap-2 mt-2">
                           {field.options?.map(opt => {
                             const currentValues = customData[field.id] || [];
@@ -235,6 +264,7 @@ export function NewSampleModal({ isOpen, onClose }: Props) {
                           })}
                         </div>
                       ) : (
+                        /* Propriété numérique ou textuelle avec affichage optionnel de l'unité physique à droite */
                         <div className="relative">
                           <input 
                             type={field.type === 'number' ? 'number' : 'text'} 

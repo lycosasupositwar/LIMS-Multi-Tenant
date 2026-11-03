@@ -11,6 +11,14 @@
  * 
  * Les demandeurs (ex: Jean Dupont) disposent d'un portail unifié unique à partir
  * duquel ils peuvent soumettre des demandes à l'un ou l'autre laboratoire.
+ *
+ * NOTE IMPORTANTE POUR LES DÉVELOPPEURS :
+ * Ces collections (`initialLaboratories`, `initialRequestTemplates`, `initialMaterialTemplates`,
+ * `initialAnalysisTemplates`, `initialConsumables`, `initialRequests`, `initialSamples`,
+ * `initialAnalyses`, `initialReports`, `initialReportTemplates`) servent de valeurs de repli
+ * (seed initial) dans `src/store.tsx` via le hook `useSyncedState`. Dès la première connexion
+ * d'un utilisateur authentifié, si une collection est absente de la table SQLite `collections`,
+ * elle est automatiquement persistée en base de données via `POST /api/db/:collection`.
  */
 
 import { 

@@ -26,6 +26,9 @@ import PizZip from "pizzip";
 import { PdfViewer } from "./PdfViewer";
 import { createDocxImageModule } from "../utils/docxImageModule";
 
+/**
+ * Propriétés de la modale d'aperçu et d'export de rapport d'analyse
+ */
 interface ReportPreviewModalProps {
   /** État de visibilité de la modale */
   isOpen: boolean;
@@ -49,6 +52,13 @@ interface ReportPreviewModalProps {
   onAutoDownloadComplete?: () => void;
 }
 
+/**
+ * Composant modal de prévisualisation, d'impression, de téléchargement (PDF/DOCX)
+ * et d'archivage automatique côté serveur des rapports d'essais LIMS.
+ *
+ * @param {ReportPreviewModalProps} props - Les propriétés du composant incluant les entités métier liées au rapport.
+ * @returns {JSX.Element | null} Le rendu de la modale d'aperçu ou `null` si fermée.
+ */
 export function ReportPreviewModal({
   isOpen,
   onClose,
@@ -61,18 +71,32 @@ export function ReportPreviewModal({
   autoDownload = false,
   onAutoDownloadComplete
 }: ReportPreviewModalProps) {
+  // Paramètres visuels/organisationnels du laboratoire actif et bibliothèque de modèles Word (.docx)
   const { labSettings, reportTemplates } = useLims();
+
+  // Message d'erreur éventuel lors du parsing Docxtemplater ou de la conversion LibreOffice
   const [docxError, setDocxError] = useState<string | null>(null);
+  // URL (ou DataURL) du PDF généré par le serveur à partir du modèle Word pour affichage dans `<PdfViewer />`
   const [previewPdfUrl, setPreviewPdfUrl] = useState<string | null>(null);
+  // Chaîne Base64 brute du PDF issu de la conversion DOCX (utilisée pour le téléchargement et l'archivage)
   const [previewPdfBase64, setPreviewPdfBase64] = useState<string | null>(null);
+  // Indicateur de chargement pendant la génération/conversion de l'aperçu PDF côté serveur
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
+  // Indicateur d'état pendant la rastérisation HTML -> PDF ou le téléchargement PDF
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  // Indique si le rapport PDF final a bien été archivé dans `storage/reports/` sur le serveur
   const [isSavedOnServer, setIsSavedOnServer] = useState(false);
+
+  // Référence vers le conteneur DOM reproduisant la feuille A4 HTML pour la capture `dom-to-image-more`
   const pdfRef = useRef<HTMLDivElement>(null);
+  // Mémorise l'identifiant du dernier rapport sauvegardé automatiquement pour éviter les envois redondants
   const autoSavedReportIdRef = useRef<string | null>(null);
 
   /**
-   * Formatage français des dates
+   * Formatage français des dates (ex: "03 novembre 2026").
+   *
+   * @param {string} dateString - Chaîne ISO de la date à formater.
+   * @returns {string} Date formatée en français.
    */
   const formatDate = (dateString: string) => {
     const d = new Date(dateString);
@@ -82,7 +106,10 @@ export function ReportPreviewModal({
   // Filtrage des échantillons associés au rapport
   const reportSamples = samples.filter(s => report?.sampleIds.includes(s.id));
 
-  // Résolution de la demande d'analyse parente
+  // Résolution de la demande d'analyse parente :
+  // 1. Par `report.requestId` explicite
+  // 2. Sinon par correspondance du titre de la demande dans le titre du rapport
+  // 3. Sinon via le `requestId` du premier échantillon rattaché
   let guessedRequestId = report?.requestId;
   if (!guessedRequestId && report?.title) {
     const matchedReq = requests.find(r => report.title.includes(r.title));
@@ -95,6 +122,7 @@ export function ReportPreviewModal({
       ? requests.find(r => r.id === reportSamples[0].requestId)
       : null);
 
+  // Identification du client demandeur et du responsable technique (manager) pour le bloc de signature
   const client = request ? users.find(u => u.id === request.requesterId) : null;
   const manager = users.find(u => u.role === 'manager');
 
@@ -103,10 +131,14 @@ export function ReportPreviewModal({
 
   // Identification du modèle Word personnalisé associé
   const template = report?.templateId ? reportTemplates?.find((t: any) => t.id === report.templateId) : null;
+  // Indique si le rapport s'appuie sur un fichier Word (.docx) encodé en Base64 plutôt que sur le gabarit HTML standard
   const isDocx = !!(template && template.fileData);
 
   /**
-   * Envoie le fichier PDF (en Base64) au serveur pour stockage dans le dossier sécurisé storage/reports/
+   * Envoie le fichier PDF (en Base64) au serveur pour stockage dans le dossier sécurisé `storage/reports/`.
+   * Cet archivage permet au portail Demandeur de télécharger directement le PDF officiel.
+   *
+   * @param {string} pdfBase64 - Contenu binaire du fichier PDF encodé en Base64 (sans préfixe DataURI).
    */
   const savePdfToServerStorage = async (pdfBase64: string) => {
     if (!report) return;
@@ -131,15 +163,18 @@ export function ReportPreviewModal({
   };
 
   /**
-   * Génère un PDF A4 multi-pages propre :
-   * - Répète l'en-tête et le pied de page sur chaque feuille
-   * - Ne coupe jamais un bloc d'analyse ou de texte en deux
-   * - Ajoute la numérotation des pages (Page X / Y)
+   * Génère un PDF A4 multi-pages propre à partir de l'aperçu HTML (`pdfRef`) :
+   * - Répète l'en-tête (`.pdf-header`) et le pied de page (`.pdf-footer`) sur chaque feuille
+   * - Ne coupe jamais un bloc d'analyse ou de texte (`.pdf-block`) en deux entre deux pages
+   * - Ajoute la numérotation des pages (`Page X / Y`) en bas à droite
+   *
+   * @returns {Promise<jsPDF | null>} L'instance `jsPDF` prête à être sauvegardée/exportée, ou `null` si le DOM est absent.
    */
   const buildPdfFromHtmlPreview = async (): Promise<jsPDF | null> => {
     const container = pdfRef.current;
     if (!container) return null;
 
+    // Facteur de sur-échantillonnage (x2) pour garantir la netteté des textes et tableaux lors de la capture JPEG
     const scale = 2;
     const pdf = new jsPDF({
       orientation: 'portrait',
@@ -154,7 +189,7 @@ export function ReportPreviewModal({
     const marginBottom = 15; // Espace réservé au pied de page en mm
     const contentWidth = pageWidth - marginX * 2;
 
-    // Fonction utilitaire pour capturer un élément DOM en image Haute Définition
+    // Fonction utilitaire pour capturer un élément DOM en image Haute Définition et calculer sa hauteur équivalente en mm
     const captureElement = async (el: HTMLElement) => {
       const rect = el.getBoundingClientRect();
       const w = Math.ceil(rect.width || el.offsetWidth);
@@ -176,6 +211,7 @@ export function ReportPreviewModal({
       return { dataUrl, heightMm };
     };
 
+    // Sélection des éléments structurants de la page A4 HTML
     const headerEl = container.querySelector('.pdf-header') as HTMLElement | null;
     const footerEl = container.querySelector('.pdf-footer') as HTMLElement | null;
     const blockEls = Array.from(container.querySelectorAll('.pdf-block')) as HTMLElement[];
@@ -183,6 +219,7 @@ export function ReportPreviewModal({
     const headerImg = headerEl ? await captureElement(headerEl) : null;
     const footerImg = footerEl ? await captureElement(footerEl) : null;
 
+    // Ordonnée maximale (en mm) avant d'entrer dans la zone réservée au pied de page
     const maxContentY = pageHeight - marginBottom - (footerImg ? footerImg.heightMm + 2 : 0);
     let currentY = marginTop;
 
@@ -254,20 +291,30 @@ export function ReportPreviewModal({
   };
 
   /**
-   * Construit la structure de données complète injectée dans le moteur de gabarit Word
+   * Construit la structure de données complète injectée dans le moteur de gabarit Word (`Docxtemplater`).
+   * Prépare à la fois :
+   * - Les balises simples et imbriquées (`demande`, `demandeur`, `echantillon`, `analyses`, `micrographies`)
+   * - Les statistiques automatiques (moyenne, écart-type) pour les séries de mesures (`number_series`)
+   * - Les tableaux Word natifs en OpenXML (`<w:tbl>`) pour `tables_series`, `tables_verticales` et `tables_analyses`
+   *
+   * @returns {Record<string, any>} Le dictionnaire de contexte transmis à `doc.render()`.
    */
   const getDocData = () => {
     const todayFormatted = new Intl.DateTimeFormat("fr-FR").format(new Date());
 
+    // Normalise un libellé en identifiant de clé sans accents ni caractères spéciaux (ex: "Limite d'élasticité" -> "limite_d_elasticite")
     const sanitizeKey = (str: string) =>
       str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
 
+    // Élimine les entrées vides d'une série de mesures
     const filterNonEmptySeries = (arr: any[]): any[] =>
       arr.filter(val => val !== '' && val !== null && val !== undefined && String(val).trim() !== '');
 
+    // Convertit une série brute en tableau de nombres valides pour les calculs statistiques
     const parseValidNumbers = (arr: any[]): number[] =>
       filterNonEmptySeries(arr).map(Number).filter((n: number) => !isNaN(n));
 
+    // Formate n'importe quel type de résultat d'analyse (image, tableau vertical, série ou scalaire) en chaîne lisible
     const formatResultValueAsText = (v: any, expected?: any): string => {
       if (v && typeof v === 'object' && Array.isArray(v.images)) {
         return `${v.images.length} image(s) de micrographie`;
@@ -282,6 +329,7 @@ export function ReportPreviewModal({
       return v !== undefined && v !== null ? String(v) : '';
     };
 
+    // Transformation de chaque analyse du rapport en objet structuré pour les boucles Word `{{#analyses}}...{{/analyses}}`
     const analysesData = reportAnalyses.map((a: any) => {
       const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
       const safeAnalysisName = sanitizeKey(t?.name || "inconnu");
@@ -302,7 +350,9 @@ export function ReportPreviewModal({
             valeur: formatResultValueAsText(v, expected)
           };
         }),
+        // Drapeau booléen permettant des conditions ciblées dans Word (ex: `{{#is_essai_de_traction}}`)
         [`is_${safeAnalysisName}`]: true,
+        // Extraction à plat des clichés micrographiques avec leurs métadonnées et DataURL
         micrographies: Object.entries(a.results || {}).flatMap(([k, v]) => {
           const expected = t?.expectedResults?.find((er: any) => er.id === k);
           const images = v && typeof v === 'object' && Array.isArray((v as any).images) ? (v as any).images : [];
@@ -321,6 +371,7 @@ export function ReportPreviewModal({
       const series_resultats: any[] = [];
       const tableaux_verticaux: any[] = [];
 
+      // Enrichissement de `baseObj` avec les accès directs par nom de paramètre (`res_<nom>`) et statistiques de séries
       Object.entries(a.results || {}).forEach(([k, v]) => {
         const expected = t?.expectedResults?.find((er: any) => er.id === k);
         const fieldName = expected?.name || k;
@@ -347,6 +398,7 @@ export function ReportPreviewModal({
           cleanVals.forEach((val, i) => {
             baseObj[`res_${safeName}_v${i + 1}`] = val;
           });
+          // Calcul de la moyenne et de l'écart-type d'échantillon (n - 1) sur les valeurs numériques
           const numVals = parseValidNumbers(v);
           let mean: number | null = null;
           let stdDev: number | null = null;
@@ -391,8 +443,10 @@ export function ReportPreviewModal({
       return baseObj;
     });
 
+    // Génération des tableaux OpenXML (`{@xml}`) regroupant les séries de mesures multi-échantillons
     const tables_series: any[] = [];
     const seriesGroups: Record<string, { paramName: string, rows: any[] }> = {};
+    // Échappement des caractères réservés XML pour prévenir toute corruption du document Word (.docx)
     const escapeXML = (str: string) => {
       if (str === null || str === undefined) return "";
       return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
@@ -499,6 +553,7 @@ export function ReportPreviewModal({
       });
     });
 
+    // Génération des tableaux récapitulatifs d'analyses classiques (colonnes = résultats attendus, lignes = échantillons)
     const tables_analyses: any[] = [];
     const analysesGroups: Record<string, { templateName: string, columns: any[], rows: any[] }> = {};
 
@@ -561,6 +616,7 @@ export function ReportPreviewModal({
       }
     });
 
+    // Dictionnaire final exposé aux balises du document Word (supporte à la fois la notation à plat "demande.id" et l'objet imbriqué `demande`)
     return {
       "echantillons": reportSamples.map((s: any) => ({ ...s, materiau: s.materialState })),
       "tables_series": tables_series,
@@ -595,6 +651,7 @@ export function ReportPreviewModal({
         id: request?.id || "N/A",
         titre: request?.title || "",
         conclusion: request?.conclusion || "Aucune conclusion renseignée.",
+        // Résolution des identifiants d'analyses en noms lisibles dans `demande.custom`
         custom: Object.fromEntries(
           Object.entries(request?.customData || {}).map(([k, v]) => {
             if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'string' && v[0].includes('-')) {
@@ -640,6 +697,7 @@ export function ReportPreviewModal({
         setIsGeneratingPreview(true);
         setDocxError(null);
         try {
+          // Décodage du fichier Word modèle (.docx) stocké en DataURL Base64
           const base64Data = currentTemplate.fileData.split(",")[1];
           const binaryString = atob(base64Data);
           const len = binaryString.length;
@@ -647,6 +705,7 @@ export function ReportPreviewModal({
           for (let i = 0; i < len; i++) {
             bytes[i] = binaryString.charCodeAt(i);
           }
+          // Décompression de l'archive ZIP OpenXML et initialisation de Docxtemplater avec le module d'images
           const zip = new PizZip(bytes);
           const doc = new Docxtemplater(zip, {
             modules: [createDocxImageModule()],
@@ -656,10 +715,12 @@ export function ReportPreviewModal({
             nullGetter: () => ""
           });
 
+          // Fusion des données LIMS dans le document Word et re-génération en Base64
           const docData = getDocData();
           doc.render(docData);
           const out = doc.getZip().generate({ type: "base64" });
 
+          // Appel à l'API backend (LibreOffice headless) pour convertir le DOCX fusionné en PDF
           fetch('/api/convert-pdf', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -670,6 +731,7 @@ export function ReportPreviewModal({
               if (data.pdfUrl) {
                 setPreviewPdfUrl(data.pdfUrl);
                 setPreviewPdfBase64(data.pdfBase64);
+                // Archivage automatique du PDF converti sur le serveur pour le portail client
                 if (data.pdfBase64) {
                   void savePdfToServerStorage(data.pdfBase64);
                 }
@@ -686,6 +748,7 @@ export function ReportPreviewModal({
         } catch (e: any) {
           console.warn("Erreur de rendu Docx :", e);
           setIsGeneratingPreview(false);
+          // Extraction détaillée des erreurs de syntaxe de balises Word (multi-erreurs Docxtemplater)
           if (e.properties && e.properties.errors instanceof Array) {
             const errorMessages = e.properties.errors.map((err: any) => err.properties.explanation || err.message).join(", ");
             setDocxError("Erreur dans le modèle Word : " + errorMessages);
@@ -704,6 +767,7 @@ export function ReportPreviewModal({
   useEffect(() => {
     if (!isOpen || !report || isDocx) return;
 
+    // Temporisation de 500 ms pour laisser le DOM et les images (logos, micrographies) finir leur rendu initial
     const timer = setTimeout(async () => {
       try {
         if (autoDownload) {
@@ -726,7 +790,7 @@ export function ReportPreviewModal({
   }, [isOpen, report, autoDownload, isDocx]);
 
   /**
-   * Génération et téléchargement direct du fichier Word DOCX
+   * Génération et téléchargement direct du fichier Word DOCX éditable sur le poste de l'opérateur.
    */
   const generateDOCX = () => {
     if (report?.templateId) {
@@ -753,6 +817,7 @@ export function ReportPreviewModal({
           doc.render(docData);
           const out = doc.getZip().generate({ type: "blob" });
 
+          // Déclenchement du téléchargement navigateur via un lien éphémère
           const a = document.createElement("a");
           a.href = URL.createObjectURL(out);
           a.download = `Rapport_${report.id}.docx`;
@@ -766,8 +831,15 @@ export function ReportPreviewModal({
 
   /**
    * Impression directe du document PDF (et non de la fenêtre de l'application)
+   * via l'injection d'une `<iframe>` invisible chargée avec le Blob PDF.
    */
   const handlePrint = async () => {
+    /**
+     * Charge une URL de PDF dans une iframe cachée et appelle la boîte de dialogue d'impression native.
+     *
+     * @param {string} urlToPrint - URL ou Blob URL du document PDF à imprimer.
+     * @param {boolean} revokeAfter - Indique s'il faut révoquer le Blob URL après impression.
+     */
     const printPdfBlobUrl = (urlToPrint: string, revokeAfter = false) => {
       const iframe = document.createElement('iframe');
       iframe.style.position = 'fixed';
@@ -786,6 +858,7 @@ export function ReportPreviewModal({
         } catch (e) {
           console.error('Erreur lors du lancement de l\'impression PDF :', e);
         } finally {
+          // Nettoyage différé (15s) pour laisser le spouleur d'impression du navigateur récupérer le flux PDF
           setTimeout(() => {
             if (document.body.contains(iframe)) {
               document.body.removeChild(iframe);
@@ -798,6 +871,7 @@ export function ReportPreviewModal({
       };
     };
 
+    // En mode Word (.docx), l'aperçu PDF déjà généré par LibreOffice est directement imprimé
     if (isDocx && previewPdfUrl) {
       printPdfBlobUrl(previewPdfUrl, false);
       return;
@@ -820,12 +894,14 @@ export function ReportPreviewModal({
   };
 
   /**
-   * Téléchargement du fichier PDF généré ET enregistrement dans storage/reports/
+   * Téléchargement du fichier PDF généré ET enregistrement dans `storage/reports/`.
+   * Gère de manière transparente les deux moteurs (PDF issu de Word ou PDF capturé depuis la feuille A4 HTML).
    */
   const generatePDF = async () => {
     if (!report) return;
 
     if (isDocx && report.templateId) {
+      // Cas 1 : Modèle Word converti en PDF côté serveur
       if (previewPdfBase64) {
         await savePdfToServerStorage(previewPdfBase64);
 
@@ -848,6 +924,7 @@ export function ReportPreviewModal({
         alert("Veuillez patienter pendant la génération de l'aperçu PDF.");
       }
     } else {
+      // Cas 2 : Modèle HTML A4 standard converti à la volée via dom-to-image-more + jsPDF
       if (!pdfRef.current) {
         alert("Aperçu non disponible pour la conversion PDF.");
         return;
@@ -877,6 +954,7 @@ export function ReportPreviewModal({
     }
   };
 
+  // Court-circuit si la modale est fermée ou qu'aucun rapport n'est sélectionné
   if (!isOpen || !report) return null;
 
   return (
@@ -900,6 +978,7 @@ export function ReportPreviewModal({
               <p className="text-sm text-slate-500">Document généré le {formatDate(report.createdAt)}</p>
             </div>
           </div>
+          {/* Barre d'outils d'export : Impression, Téléchargement DOCX (si applicable), Téléchargement PDF et Fermeture */}
           <div className="flex items-center space-x-2">
             <button
               onClick={handlePrint}
@@ -936,6 +1015,7 @@ export function ReportPreviewModal({
         {/* Zone de prévisualisation (DOCX converti ou gabarit HTML A4) */}
         <div className="flex-1 overflow-y-auto bg-slate-200 p-4 sm:p-8 custom-scrollbar">
           {isDocx ? (
+            /* Branche A : Affichage via PdfViewer du document Word converti par LibreOffice */
             <div className="w-full flex justify-center flex-col items-center max-w-[1000px] mx-auto">
               {docxError && (
                 <div className="text-red-500 mb-4 bg-red-100 p-4 rounded-lg font-bold">
@@ -957,12 +1037,13 @@ export function ReportPreviewModal({
               )}
             </div>
           ) : (
+            /* Branche B : Rendu de la feuille A4 HTML standard (ciblée par `pdfRef` pour la découpe en blocs PDF) */
             <div
               ref={pdfRef}
               className="bg-white w-full max-w-[210mm] min-h-[297mm] h-fit mx-auto shadow-lg p-10 sm:p-14 text-slate-900"
               style={{ fontFamily: '"Inter", sans-serif' }}
             >
-              {/* En-tête officiel du laboratoire (répété sur chaque page du PDF) */}
+              {/* En-tête officiel du laboratoire (répété sur chaque page du PDF grâce à la classe `.pdf-header`) */}
               <header className="pdf-header flex justify-between items-start border-b-2 border-blue-900 pb-6 mb-6 bg-white">
                 <div>
                   {labSettings.logoUrl ? (
@@ -1070,6 +1151,7 @@ export function ReportPreviewModal({
                                   <tr key={expected.id}>
                                     <td className="border border-slate-200 p-2 text-slate-600 bg-slate-50 w-1/3 align-top">{expected.name}</td>
                                     <td className="border border-slate-200 p-2 font-medium w-2/3">
+                                      {/* Rendu polymorphe selon le type de résultat attendu (micrographie, tableau vertical, série de nombres, booléen, multiselect ou scalaire) */}
                                       {analysis.results[expected.id] !== undefined ? (
                                         expected.type === 'micrography'
                                           ? (() => {
@@ -1138,6 +1220,7 @@ export function ReportPreviewModal({
                               </tbody>
                             </table>
 
+                            {/* Affichage des images globales rattachées à l'analyse */}
                             {analysis.images.length > 0 && (
                               <div className="grid grid-cols-2 gap-4 mt-3">
                                 {analysis.images.map((img, idx) => (
@@ -1156,6 +1239,7 @@ export function ReportPreviewModal({
                               </div>
                             )}
 
+                            {/* Observations éventuelles de l'analyste sur cet essai */}
                             {analysis.notes && (
                               <div className="text-sm mt-2 p-3 bg-blue-50/50 border border-blue-100 rounded text-slate-700 italic">
                                 <span className="font-semibold block mb-1 text-blue-900 not-italic text-xs uppercase">Observations</span>
@@ -1214,7 +1298,7 @@ export function ReportPreviewModal({
                 </div>
               </section>
 
-              {/* Pied de page des accréditations */}
+              {/* Pied de page des accréditations (capturé par `.pdf-footer` pour répétition sur chaque page PDF) */}
               {labSettings.isoCertifications.length > 0 && (
                 <footer className="pdf-footer mt-8 pt-4 pb-2 border-t border-slate-200 text-center text-xs text-slate-500 font-medium tracking-wide bg-white">
                   CERTIFICATIONS LABORATOIRE : {labSettings.isoCertifications.join(' • ')}

@@ -1,5 +1,16 @@
 /**
  * Gestionnaire d'État Global & Multi-Laboratoires (LIMS React Context)
+ *
+ * Ce module constitue le cœur réactif de l'application côté client :
+ * 1. Synchronisation bidirectionnelle avec l'API SQLite (`/api/db/:collection`) via le hook `useSyncedState`.
+ * 2. Isolation Multi-Tenant par laboratoire (`activeLabId`) et par rôle (`demandeur` vs personnel interne).
+ * 3. Orchestration des workflows métier ISO/IEC 17025 :
+ *    - Création, revue, validation, rejet, resoumission et assignation des demandes (`AnalysisRequest`).
+ *    - Enregistrement des échantillons/sous-échantillons et suivi d'enrobage (`Sample`).
+ *    - Saisie des résultats d'essais, verrouillage selon statut et transition automatique vers `En Validation` (`Analysis`).
+ *    - Émission des rapports et clôture automatique de la demande associée (`Report`).
+ *    - Surveillance des seuils critiques et dates de péremption des stocks (`Consumable`).
+ *    - Piste d'audit (`AuditLog`) et notifications multi-canaux (in-app + e-mail SMTP).
  */
 
 import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react';
@@ -32,40 +43,71 @@ import {
   initialReportTemplates
 } from './data';
 import { generateUniqueLimsId } from './utils/idGenerator';
+
+/**
+ * Métadonnées optionnelles de routage attachées à une notification
+ * pour permettre la navigation directe vers l'élément concerné au clic dans `Layout.tsx`.
+ */
 interface NotificationMeta {
+  /** Onglet cible à ouvrir ('requests' | 'samples' | 'analyses' | 'reports' | 'inventory' | 'settings') */
   targetTab?: string;
+  /** Identifiant de l'entité à mettre en évidence ou à pré-filtrer dans la barre de recherche globale */
   targetId?: string;
+  /** Identifiant du laboratoire sur lequel basculer lors du clic */
   labId?: string;
 }
 
+/**
+ * Interface complète exposée par le contexte React `useLims()`
+ */
 interface LimsContextType {
+  // --- Recherche Globale ---
+  /** Chaîne de filtrage globale partagée entre l'en-tête (`Layout`) et les vues métier */
   globalSearchQuery: string;
   setGlobalSearchQuery: (query: string) => void;
 
+  // --- Authentification & Utilisateurs ---
+  /** Utilisateur actuellement connecté (ou `null` si non authentifié) */
   currentUser: User | null;
+  /** Liste des utilisateurs accessibles selon les habilitations du compte connecté */
   users: User[];
+  /** Recharge la liste des utilisateurs depuis `GET /api/users` */
   fetchUsers: () => Promise<void>;
+  /** Connecte un utilisateur et ajuste le laboratoire actif selon son profil */
   login: (user: User) => void;
+  /** Déconnecte l'utilisateur et détruit le cookie JWT côté serveur */
   logout: () => void;
 
+  // --- Gestion Multi-Laboratoires (Multi-Tenancy) ---
+  /** Liste de tous les laboratoires configurés dans l'instance */
   laboratories: Laboratory[];
+  /** Identifiant du laboratoire actuellement sélectionné dans l'interface */
   activeLabId: string;
+  /** Objet complet du laboratoire actuellement actif */
   activeLab: Laboratory;
+  /** Change le laboratoire actif (avec contrôle d'accès selon `currentUser.labId`) */
   setActiveLabId: (labId: string) => void;
   updateLaboratory: (id: string, updates: Partial<Laboratory>) => void;
   addLaboratory: (lab: Laboratory) => void;
   deleteLaboratory: (id: string) => void;
 
+  // --- Notifications ---
+  /** Liste globale des notifications */
   notifications: Notification[];
+  /** Supprime/acquitte une notification par son identifiant */
   markNotificationAsRead: (id: string) => void;
-  clearUserNotifications: () => void; // Optionnel : pour un bouton "Tout effacer"
+  /** Purge toutes les notifications appartenant à l'utilisateur connecté */
+  clearUserNotifications: () => void;
+  /** Crée une notification in-app et déclenche optionnellement un e-mail via `/api/notifications/send-email` */
   addNotification: (userId: string, title: string, message: string, type?: 'system' | 'email', meta?: NotificationMeta) => void;
 
+  // --- Modèles CMS filtrés pour le laboratoire actif ---
   materialTemplates: MaterialTemplate[];
   analysisTemplates: AnalysisTemplate[];
   requestTemplates: RequestTemplate[];
   reportTemplates: ReportTemplate[];
 
+  // --- Collections Brutes Multi-Laboratoires (pour vues transversales / Portail Demandeur / Admin) ---
   allMaterialTemplates: MaterialTemplate[];
   allAnalysisTemplates: AnalysisTemplate[];
   allRequestTemplates: RequestTemplate[];
@@ -76,13 +118,16 @@ interface LimsContextType {
   allRequests: AnalysisRequest[];
   allConsumables: Consumable[];
 
+  // --- Collections Filtrées (selon `activeLabId` ou `currentUser.id` pour un demandeur) ---
   samples: Sample[];
   analyses: Analysis[];
   reports: Report[];
   requests: AnalysisRequest[];
   consumables: Consumable[];
+  /** Raccourci vers `activeLab.settings` */
   labSettings: LabSettings;
 
+  // --- Actions CRUD sur les Modèles CMS (Manager / Admin) ---
   addMaterialTemplate: (template: MaterialTemplate) => void;
   updateMaterialTemplate: (id: string, updates: Partial<MaterialTemplate>) => void;
   deleteMaterialTemplate: (id: string) => void;
@@ -99,6 +144,7 @@ interface LimsContextType {
   updateReportTemplate: (id: string, updates: Partial<ReportTemplate>) => void;
   deleteReportTemplate: (id: string) => void;
 
+  // --- Actions sur le Cycle de Vie des Demandes d'Analyses ---
   addRequest: (request: AnalysisRequest) => void;
   updateRequestStatus: (id: string, status: AnalysisRequest['status'], comment?: string) => void;
   updateRequestData: (id: string, updates: Partial<AnalysisRequest>, summary: string) => void;
@@ -106,33 +152,51 @@ interface LimsContextType {
   resubmitRequest: (id: string, customData: Record<string, any>) => void;
   assignRequest: (requestId: string, analystId: string) => void;
 
+  // --- Actions sur les Échantillons & Sous-Échantillons ---
   addSample: (sample: Sample) => void;
   deleteSample: (id: string) => void;
   updateSampleStatus: (id: string, status: Sample['status']) => void;
   updateSampleMounting: (id: string, mountingInfo: Sample['mountingInfo']) => void;
   addSampleImage: (id: string, imageUrl: string) => void;
 
+  // --- Actions sur les Essais & Résultats d'Analyses ---
   addAnalysis: (analysis: Analysis) => void;
   deleteAnalysis: (id: string) => void;
-  updateAnalysisStatus: (id: string, status: Analysis['status']) => void;
+  updateAnalysisStatus: (id: string, status: Analysis['status'], comment?: string) => void;
   updateAnalysisResult: (id: string, resultId: string, value: any) => void;
   addAnalysisImage: (id: string, imageUrl: string) => void;
 
+  // --- Actions sur les Rapports d'Essais ---
   addReport: (report: Report) => void;
   deleteReport: (id: string) => void;
 
+  // --- Actions sur l'Inventaire des Consommables ---
   updateConsumableStock: (id: string, newLevel: number) => void;
   addConsumable: (consumable: Consumable) => void;
   deleteConsumable: (id: string) => void;
 
+  // --- Administration & Maintenance ---
   updateLabSettings: (settings: Partial<LabSettings>) => void;
-
   purgeData: (options: Record<string, boolean>) => void;
   applyPatch: (patch: any) => void;
 }
 
 const LimsContext = createContext<LimsContextType | undefined>(undefined);
 
+/**
+ * Hook générique de synchronisation d'une collection React avec la base SQLite du serveur.
+ *
+ * Fonctionnement :
+ * 1. Au montage (ou dès que `isAuthenticated` passe à `true`), interroge `GET /api/db/:collection`.
+ * 2. Si la collection existe en base, remplace l'état local par les données persistées.
+ * 3. Si la collection n'existe pas encore (`null`), initialise la base avec `initialData` via `POST`.
+ * 4. À chaque appel à `setSyncedData`, met à jour l'état React immédiatement (UI optimiste)
+ *    et persiste le nouveau tableau en arrière-plan via `POST /api/db/:collection`.
+ *
+ * @param collection Nom de la collection autorisée côté serveur (ex: 'samples', 'requests')
+ * @param initialData Valeur par défaut issue de `src/data.ts`
+ * @param isAuthenticated Indique si une session utilisateur valide est active
+ */
 function useSyncedState<T>(collection: string, initialData: T, isAuthenticated: boolean) {
   const [data, setData] = useState<T>(initialData);
 
@@ -144,6 +208,7 @@ function useSyncedState<T>(collection: string, initialData: T, isAuthenticated: 
         if (res !== null && !res.error) {
           setData(res);
         } else if (res === null) {
+          // Première initialisation de la collection dans SQLite avec le jeu de démonstration
           fetch(`/api/db/${collection}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -171,6 +236,9 @@ function useSyncedState<T>(collection: string, initialData: T, isAuthenticated: 
   return [data, setSyncedData] as const;
 }
 
+/**
+ * Fournisseur de contexte principal englobant toute l'application (`App.tsx`)
+ */
 export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
 
@@ -178,6 +246,10 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const [users, setUsers] = useState<User[]>([]);
   const [isInitializing, setIsInitializing] = useState(true);
 
+  /**
+   * Récupère la liste des utilisateurs depuis le serveur.
+   * Note : Le serveur filtre automatiquement les données selon le rôle de l'appelant.
+   */
   const fetchUsers = async () => {
     try {
       const res = await fetch('/api/users');
@@ -190,6 +262,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  // Vérification automatique de la session existante (cookie HTTP-Only `token`) au démarrage
   useEffect(() => {
     const checkSession = async () => {
       try {
@@ -208,6 +281,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     checkSession();
   }, []);
 
+  // Force la sélection du laboratoire d'affectation pour les managers et analystes mono-labo
   useEffect(() => {
     if (currentUser && (currentUser.role === 'manager' || currentUser.role === 'analyste')) {
       if (currentUser.labId && currentUser.labId !== 'all') {
@@ -218,6 +292,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
 
   const isAuthenticated = !!currentUser;
 
+  // --- États Synchronisés avec SQLite ---
   const [laboratories, setLaboratories] = useSyncedState<Laboratory[]>('laboratories', initialLaboratories, isAuthenticated);
   const [notifications, setNotifications] = useSyncedState<Notification[]>('notifications', [], isAuthenticated);
 
@@ -240,6 +315,10 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [currentUser]);
 
+  /**
+   * Modifie le laboratoire actif dans l'interface tout en empêchant un membre
+   * assigné à un laboratoire spécifique de basculer sur un autre laboratoire.
+   */
   const setActiveLabId = (labId: string) => {
     if (currentUser?.role === 'manager' || currentUser?.role === 'analyste') {
       if (currentUser.labId && currentUser.labId !== 'all' && currentUser.labId !== labId) {
@@ -250,12 +329,14 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setActiveLabIdState(labId);
   };
 
+  /** Résolution mémoïsée du laboratoire actif (avec repli sécurisé sur le premier laboratoire) */
   const activeLab = useMemo(() => {
     return laboratories.find(l => l.id === activeLabId) || laboratories[0] || initialLaboratories[0];
   }, [laboratories, activeLabId]);
 
   const labSettings = activeLab.settings;
 
+  // --- Gestion des Laboratoires ---
   const updateLaboratory = (id: string, updates: Partial<Laboratory>) => {
     setLaboratories(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
   };
@@ -283,8 +364,10 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }));
   };
 
+  // --- Filtrage Contextuel des Collections (Multi-Tenant & Isolation Demandeur) ---
   const isRequester = currentUser?.role === 'demandeur';
 
+  /** Demandes filtrées : celles du client connecté (si demandeur) ou celles du laboratoire actif */
   const requests = useMemo(() => {
     if (isRequester) {
       return rawRequests.filter(r => r.requesterId === currentUser?.id);
@@ -292,6 +375,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     return rawRequests.filter(r => r.labId === activeLabId);
   }, [rawRequests, isRequester, currentUser, activeLabId]);
 
+  /** Échantillons filtrés : ceux rattachés aux demandes du client (si demandeur) ou ceux du labo actif */
   const samples = useMemo(() => {
     if (isRequester) {
       const myRequestIds = new Set(requests.map(r => r.id));
@@ -300,6 +384,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     return rawSamples.filter(s => s.labId === activeLabId);
   }, [rawSamples, isRequester, requests, activeLabId]);
 
+  /** Analyses filtrées : celles des échantillons du client (si demandeur) ou celles du labo actif */
   const analyses = useMemo(() => {
     if (isRequester) {
       const mySampleIds = new Set(samples.map(s => s.id));
@@ -308,6 +393,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     return rawAnalyses.filter(a => a.labId === activeLabId);
   }, [rawAnalyses, isRequester, samples, activeLabId]);
 
+  /** Rapports filtrés : ceux rattachés aux demandes/échantillons du client ou ceux du labo actif */
   const reports = useMemo(() => {
     if (isRequester) {
       const myRequestIds = new Set(requests.map(r => r.id));
@@ -321,10 +407,12 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     return rawReports.filter(r => r.labId === activeLabId);
   }, [rawReports, isRequester, requests, samples, activeLabId]);
 
+  /** Consommables filtrés par laboratoire actif */
   const consumables = useMemo(() => {
     return rawConsumables.filter(c => c.labId === activeLabId);
   }, [rawConsumables, activeLabId]);
 
+  /** Modèles CMS : un demandeur voit les modèles de tous les laboratoires pour soumettre ses commandes */
   const materialTemplates = useMemo(() => {
     if (isRequester) return rawMaterialTemplates;
     return rawMaterialTemplates.filter(t => t.labId === activeLabId);
@@ -345,6 +433,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     return rawReportTemplates.filter(t => t.labId === activeLabId);
   }, [rawReportTemplates, isRequester, activeLabId]);
 
+  // --- Connexion / Déconnexion ---
   const login = async (user: User) => {
     setCurrentUser(user);
     if (user.labId && user.labId !== 'all') {
@@ -388,6 +477,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
 
     setNotifications(prev => [newNotif, ...prev]);
 
+    // Si le canal 'email' est demandé, sollicite l'API backend qui utilisera Nodemailer si SMTP est actif
     if (type === 'email') {
       void (async () => {
         try {
@@ -436,6 +526,9 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setNotifications(prev => prev.filter(n => n.userId !== currentUser.id));
   };
 
+  /**
+   * Fabrique une entrée d'audit horodatée signée par l'utilisateur courant
+   */
   const createAuditLog = (action: string, details: string): AuditLog => ({
     id: `AUD-${Date.now()}`,
     timestamp: new Date().toISOString(),
@@ -444,6 +537,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     details
   });
 
+  // --- CRUD Modèles CMS ---
   const addMaterialTemplate = (template: MaterialTemplate) => {
     const item = { ...template, labId: template.labId || activeLabId };
     setMaterialTemplates(prev => [...prev, item]);
@@ -488,6 +582,12 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setReportTemplates(prev => prev.filter(t => t.id !== id));
   };
 
+  // --- Workflow des Demandes d'Analyses ---
+
+  /**
+   * Enregistre une nouvelle demande d'analyse avec génération d'identifiant unique
+   * et notifie automatiquement tous les managers habilités sur le laboratoire cible.
+   */
   const addRequest = async (request: AnalysisRequest) => {
     const targetLabId = request.labId || activeLabId;
     const targetLab = laboratories.find(l => l.id === targetLabId);
@@ -518,7 +618,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       }
     }
 
-    // Filtrage souple (insensible à la casse sur le rôle)
+    // Filtrage souple (insensible à la casse sur le rôle) des managers du laboratoire cible
     let labManagers = currentUsers.filter(u => {
       const role = (u.role || '').toLowerCase();
       const isManager = role === 'manager';
@@ -544,14 +644,18 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     );
   };
 
+  /**
+   * Met à jour le statut d'une demande d'analyse, enrichit sa piste d'audit
+   * et notifie le demandeur lors du franchissement des jalons clés.
+   */
   const updateRequestStatus = (id: string, status: AnalysisRequest['status'], comment?: string) => {
     const reqToUpdate = rawRequests.find(r => r.id === id);
 
     if (reqToUpdate && reqToUpdate.status !== status) {
       // Dictionnaire UNIQUEMENT des étapes clés qui doivent notifier le demandeur
-      // Adaptez les clés selon les valeurs exactes utilisées dans votre fichier types.ts
       const keyStageLabels: Record<string, string> = {
         'validee': 'Validée et prise en compte par le laboratoire',
+        'En Cours': 'Analyses en cours de réalisation',
         'en_cours': 'Analyses en cours de réalisation',
         'En Validation': 'Résultats en cours de validation finale',
         'en_validation': 'Résultats en cours de validation finale',
@@ -582,6 +686,9 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }));
   };
 
+  /**
+   * Refuse une demande client avec un motif obligatoire et notifie le demandeur.
+   */
   const rejectRequest = (id: string, reason: string) => {
     const reqToUpdate = rawRequests.find(r => r.id === id);
     if (reqToUpdate) {
@@ -602,6 +709,9 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }));
   };
 
+  /**
+   * Permet au demandeur de corriger et resoumettre une demande précédemment refusée.
+   */
   const resubmitRequest = (id: string, customData: Record<string, any>) => {
     const reqToUpdate = rawRequests.find(r => r.id === id);
     if (reqToUpdate) {
@@ -625,6 +735,10 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }));
   };
 
+  /**
+   * Assigne (ou désassigne) une demande à un analyste, répercute le nom du technicien
+   * sur toutes les analyses rattachées aux échantillons de la demande, et notifie les parties.
+   */
   const assignRequest = (requestId: string, analystId: string) => {
     const reqToUpdate = rawRequests.find(r => r.id === requestId);
     if (reqToUpdate) {
@@ -667,6 +781,9 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }));
   };
 
+  /**
+   * Modifie les données ou la priorité d'une demande par un manager (avec propagation de la priorité aux échantillons).
+   */
   const updateRequestData = (id: string, updates: Partial<AnalysisRequest>, summary: string) => {
     setRequests(prev => prev.map(r => {
       if (r.id === id) {
@@ -680,6 +797,11 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  // --- Gestion des Échantillons & Sous-Échantillons ---
+
+  /**
+   * Ajoute un nouvel échantillon ou sous-échantillon en garantissant l'unicité de son ID.
+   */
   const addSample = (sample: Sample) => {
     setSamples(prev => {
       const existingIds = new Set(prev.map(s => s.id));
@@ -692,10 +814,14 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       return [item, ...prev];
     });
   };
+
+  /**
+   * Supprime un échantillon, ses sous-échantillons enfants éventuels, ainsi que toutes leurs analyses rattachées.
+   */
   const deleteSample = (id: string) => {
-    // Supprime l'échantillon (ainsi que ses sous-échantillons éventuels) et toutes les analyses qui lui sont rattachées
+    const childSampleIds = new Set(rawSamples.filter(s => s.parentSampleId === id).map(s => s.id));
     setSamples(prev => prev.filter(s => s.id !== id && s.parentSampleId !== id));
-    setAnalyses(prev => prev.filter(a => a.sampleId !== id));
+    setAnalyses(prev => prev.filter(a => a.sampleId !== id && !childSampleIds.has(a.sampleId)));
   };
 
   const updateSampleStatus = (id: string, status: Sample['status']) => {
@@ -710,6 +836,11 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setSamples(prev => prev.map(s => s.id === id ? { ...s, images: [...s.images, imageUrl] } : s));
   };
 
+  // --- Gestion des Analyses & Résultats d'Essais ---
+
+  /**
+   * Crée une nouvelle fiche d'analyse avec génération d'un identifiant unique `ESS-AA-XXXXX`.
+   */
   const addAnalysis = (analysis: Analysis) => {
     setAnalyses(prev => {
       const existingIds = new Set(prev.map(a => a.id));
@@ -726,6 +857,13 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setAnalyses(prev => prev.filter(a => a.id !== id));
   };
 
+  /**
+   * Met à jour le statut d'une analyse et orchestre les transitions automatiques avec la demande parente :
+   * - Si `status === 'rejete'` : notifie l'analyste et rouvre la demande (`En Cours`) si elle était `En Validation`.
+   * - Si `status === 'a_valider'` : notifie les managers du laboratoire.
+   * - Si tous les échantillons et analyses d'une demande sont prêts (`a_valider`, `valide` ou `termine`),
+   *   bascule automatiquement la demande parente au statut `En Validation`.
+   */
   const updateAnalysisStatus = (id: string, status: Analysis['status'], comment?: string) => {
     setAnalyses(prevAnalyses => {
       const updatedAnalyses = prevAnalyses.map(analysis => {
@@ -820,11 +958,16 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     });
   };
 
-
+  /**
+   * Enregistre ou met à jour la valeur d'un résultat attendu dans une analyse,
+   * sous réserve que l'analyse ne soit pas verrouillée pour le rôle de l'utilisateur courant.
+   * Chaque modification est inscrite dans la piste d'audit avec l'ancienne et la nouvelle valeur.
+   */
   const updateAnalysisResult = (id: string, resultId: string, value: any) => {
     setAnalyses(prev => prev.map(a => {
       if (a.id === id) {
         const isManager = currentUser?.role === 'manager' || currentUser?.role === 'admin';
+        // Un analyste ne peut plus modifier dès le statut 'a_valider' ; un manager peut corriger jusqu'au statut 'termine'
         const isLocked = (!isManager && (a.status === 'a_valider' || a.status === 'valide' || a.status === 'termine')) || (isManager && a.status === 'termine');
         if (isLocked) {
           console.warn('Modification refusée : l\'analyse est verrouillée pour ce profil.');
@@ -865,6 +1008,12 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }));
   };
 
+  // --- Gestion des Rapports ---
+
+  /**
+   * Ajoute un rapport officiel, résout automatiquement la demande parente si non spécifiée,
+   * clôture la demande parente au statut `terminee` et notifie le client demandeur.
+   */
   const addReport = (report: Report) => {
     // Résolution automatique du requestId à partir des échantillons liés s'il n'est pas fourni
     let resolvedRequestId = report.requestId;
@@ -913,6 +1062,8 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setReports(prev => prev.filter(r => r.id !== id));
   };
 
+  // --- Gestion des Consommables & Stocks ---
+
   const addConsumable = (consumable: Consumable) => {
     const item = { ...consumable, labId: consumable.labId || activeLabId };
     setConsumables(prev => [item, ...prev]);
@@ -922,6 +1073,10 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     setConsumables(prev => prev.filter(c => c.id !== id));
   };
 
+  /**
+   * Met à jour le stock d'un consommable, actualise la date de réapprovisionnement en cas d'ajout
+   * et déclenche une alerte aux managers si le stock franchit à la baisse le seuil minimal.
+   */
   const updateConsumableStock = (id: string, newLevel: number) => {
     const c = rawConsumables.find(cons => cons.id === id);
     if (c) {
@@ -950,9 +1105,9 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     }));
   };
 
-  // Vérification de la péremption des consommables au chargement
+  // Vérification de la péremption des consommables (horizon 60 jours)
   useEffect(() => {
-    if (!currentUser || (currentUser.role !== 'manager') || (currentUser.role !== 'analyste')) return;
+    if (!currentUser || (currentUser.role !== 'manager' && currentUser.role !== 'analyste')) return;
 
     const now = new Date();
     const sixtyDaysLater = new Date();
@@ -968,25 +1123,29 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
             ? `Le consommable "${c.name}" a dépassé sa date de péremption (${c.expiryDate}).`
             : `Le consommable "${c.name}" arrive à expiration le ${c.expiryDate}.`;
 
-          // Vérifie si une notification similaire n'existe pas déjà pour éviter le spam
-          // (Optionnel selon votre gestion, ici déclenché en console/log ou notification)
-          const labManagers = users.filter(u => (u.role === 'manager') && (u.labId === c.labId || u.labId === 'all' || !u.labId));
-          labManagers.forEach(m => addNotification(
-            m.id,
-            `Alerte Péremption Proche : ${c.name}`,
-            `Le consommable "${c.name}" arrive à expiration le ${c.expiryDate}.`,
-            'email',
-            { targetTab: 'inventory', targetId: c.id, labId: c.labId }
-          ));
+          // Évite de recréer une notification si une alerte existe déjà pour ce consommable
+          const alreadyNotified = notifications.some(
+            n => n.targetTab === 'inventory' && n.targetId === c.id && n.title === title
+          );
+          if (!alreadyNotified) {
+            const labManagers = users.filter(u => (u.role === 'manager') && (u.labId === c.labId || u.labId === 'all' || !u.labId));
+            labManagers.forEach(m => addNotification(
+              m.id,
+              title,
+              message,
+              'email',
+              { targetTab: 'inventory', targetId: c.id, labId: c.labId }
+            ));
+          }
           console.warn(`[ALERTE PÉREMPTION] ${message}`);
         }
       }
     });
   }, [consumables, currentUser]);
 
-
-
-
+  /**
+   * Restaure un jeu de configurations CMS complet (import JSON depuis `Settings.tsx`).
+   */
   const applyPatch = (patch: any) => {
     if (patch.laboratories) setLaboratories(patch.laboratories);
     if (patch.materialTemplates) setMaterialTemplates(patch.materialTemplates);
@@ -995,6 +1154,9 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     if (patch.reportTemplates) setReportTemplates(patch.reportTemplates);
   };
 
+  /**
+   * Purge sélectivement les collections opérationnelles du laboratoire actif (`Settings.tsx`).
+   */
   const purgeData = (options: Record<string, boolean>) => {
     if (options.samples) setSamples(prev => prev.filter(s => s.labId !== activeLabId));
     if (options.analyses) setAnalyses(prev => prev.filter(a => a.labId !== activeLabId));
@@ -1047,6 +1209,10 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   );
 };
 
+/**
+ * Hook personnalisé d'accès au contexte global LIMS.
+ * Lève une exception explicite s'il est appelé en dehors de `<LimsProvider>`.
+ */
 export const useLims = () => {
   const context = useContext(LimsContext);
   if (context === undefined) {

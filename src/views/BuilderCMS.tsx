@@ -1,9 +1,26 @@
+/**
+ * Vue CMS Modulaire & Configuration des Modèles Dynamiques (BuilderCMS)
+ *
+ * Cette vue permet aux administrateurs et managers de concevoir et personnaliser sans code
+ * les structures de données dynamiques du laboratoire actif (architecture multi-tenant) :
+ * 1. Modèles de Matériaux (MaterialTemplate) : champs personnalisés pour la caractérisation des échantillons.
+ * 2. Modèles d'Analyses (AnalysisTemplate) : résultats attendus (nombres, séries statistiques, tableaux ICP, micrographies, etc.).
+ * 3. Formulaires Clients (RequestTemplate) : questionnaires dynamiques soumis lors d'une demande d'analyse.
+ * 4. Modèles de Rapports (ReportTemplate) : modèles Word (.docx) avec catalogue interactif de balises Mustache/XML.
+ */
+
 import React, { useState, useRef, useEffect } from 'react';
 import { useLims } from '../store';
 import { Plus, Settings2, GripVertical, Database, Layers, TestTube2, Check, X, FileText, ArrowUp, ArrowDown, Trash2, Copy, Edit2, UploadCloud, Building2 } from 'lucide-react';
 import { MaterialTemplate, CustomField, AnalysisTemplate, ExpectedResult, RequestTemplate, ReportTemplate } from '../types';
 
+/**
+ * Composant principal de l'éditeur de modèles dynamiques (CMS Modulaire).
+ * Gère la création, la modification en temps réel, le réordonnancement, le clonage
+ * et la suppression des modèles de matériaux, d'analyses, de formulaires et de rapports.
+ */
 export function BuilderCMS() {
+  // Extraction des modèles filtrés par laboratoire actif et des actions CRUD depuis le store global LIMS
   const {
     materialTemplates, analysisTemplates, requestTemplates, reportTemplates,
     updateMaterialTemplate, updateRequestTemplate, updateAnalysisTemplate, updateReportTemplate,
@@ -11,15 +28,21 @@ export function BuilderCMS() {
     deleteMaterialTemplate, deleteAnalysisTemplate, deleteRequestTemplate, deleteReportTemplate,
     activeLabId, activeLab, laboratories, setActiveLabId
   } = useLims();
+
+  // Onglet actif du constructeur ('materials' | 'analyses' | 'requests' | 'reports')
   const [builderTab, setBuilderTab] = useState<'materials' | 'analyses' | 'requests' | 'reports'>('materials');
+
+  // États locaux conservant l'élément actuellement sélectionné dans la barre latérale pour chaque catégorie
   const [activeMaterialTpl, setActiveMaterialTpl] = useState<MaterialTemplate | null>(materialTemplates[0] || null);
   const [activeAnalysisTpl, setActiveAnalysisTpl] = useState<AnalysisTemplate | null>(analysisTemplates[0] || null);
   const [activeRequestTpl, setActiveRequestTpl] = useState<RequestTemplate | null>(requestTemplates[0] || null);
   const [activeReportTpl, setActiveReportTpl] = useState<ReportTemplate | null>(reportTemplates?.[0] || null);
+
+  // Référence vers l'input fichier caché pour l'import de modèles Word (.docx)
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Synchronise les données du modèle sélectionné sans perdre la sélection
-  // lorsque le store est mis à jour pendant la saisie.
+  // lorsque le store est mis à jour pendant la saisie ou lors d'un changement de laboratoire actif.
   useEffect(() => {
     setActiveMaterialTpl(current => {
       const selected = current && materialTemplates.find(tpl => tpl.id === current.id);
@@ -48,17 +71,29 @@ export function BuilderCMS() {
     });
   }, [activeLabId, reportTemplates]);
 
+  // États de contrôle des formulaires d'ajout/édition de champs et des modales d'options/suppression
   const [isAddingField, setIsAddingField] = useState(false);
   const [editingFieldId, setEditingFieldId] = useState<string | null>(null);
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  // États du formulaire d'édition d'un champ personnalisé (CustomField) ou résultat attendu (ExpectedResult)
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldType, setNewFieldType] = useState<string>('text');
   const [newFieldUnit, setNewFieldUnit] = useState('');
   const [newFieldOptions, setNewFieldOptions] = useState('');
   const [newFieldRequired, setNewFieldRequired] = useState(false);
+
+  // État mémorisant la dernière balise Word copiée dans le presse-papiers pour le retour visuel ("Copié")
   const [copiedTag, setCopiedTag] = useState<string | null>(null);
 
+  /**
+   * Copie une balise de modèle Word (ex: `{{demande.id}}`) dans le presse-papiers.
+   * Inclut un mécanisme de repli (fallback via `<textarea>` et `execCommand`) pour les contextes
+   * d'exécution restreints (iframes ou contextes non-HTTPS où `navigator.clipboard` est bloqué).
+   *
+   * @param tag - La chaîne de caractères de la balise à copier
+   */
   const handleCopyTag = (tag: string) => {
     navigator.clipboard.writeText(tag).then(() => {
       setCopiedTag(tag);
@@ -80,6 +115,12 @@ export function BuilderCMS() {
     });
   };
 
+  /**
+   * Pré-remplit le formulaire d'ajout/édition avec les propriétés d'un champ existant
+   * afin de permettre sa modification en place.
+   *
+   * @param field - Le champ personnalisé (`CustomField`) ou résultat attendu (`ExpectedResult`) à éditer
+   */
   const handleEditFieldClick = (field: any) => {
     setEditingFieldId(field.id);
     setNewFieldName(field.name);
@@ -90,6 +131,12 @@ export function BuilderCMS() {
     setIsAddingField(true);
   };
 
+  /**
+   * Gère l'importation d'un fichier modèle Word (`.docx`) pour le modèle de rapport actif.
+   * Lit le fichier en Base64 (DataURL) via `FileReader` et met à jour le store global.
+   *
+   * @param e - Événement de changement de l'input file
+   */
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || !e.target.files[0]) return;
     const file = e.target.files[0];
@@ -111,16 +158,25 @@ export function BuilderCMS() {
   };
 
 
+  /**
+   * Ajoute un nouveau champ ou met à jour un champ existant (`editingFieldId`)
+   * dans le modèle actif (Analyse, Matériau ou Formulaire de demande).
+   * Parse automatiquement la liste d'options (séparées par virgules, points-virgules ou retours à la ligne)
+   * pour les types `select`, `multiselect` et `vertical_table`.
+   */
   const handleAddField = () => {
     if (!newFieldName) return;
 
+    // Découpage et nettoyage des options pour les listes déroulantes et tableaux verticaux (ex: éléments ICP)
     const parsedOptions = ['select', 'multiselect', 'vertical_table'].includes(newFieldType) && newFieldOptions.trim()
       ? newFieldOptions.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean)
       : undefined;
 
+    // Conservation de l'ID lors d'une modification ou génération d'un identifiant unique
     const newFieldId = editingFieldId || `field_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
     if (builderTab === 'analyses' && activeAnalysisTpl) {
+      // Cas d'un modèle d'analyse : création/mise à jour d'un résultat attendu (ExpectedResult)
       const newResult: ExpectedResult = {
         id: newFieldId,
         name: newFieldName,
@@ -138,6 +194,7 @@ export function BuilderCMS() {
       updateAnalysisTemplate(activeAnalysisTpl.id, updatedTemplate);
       setActiveAnalysisTpl(updatedTemplate);
     } else {
+      // Cas d'un modèle de matériau ou de formulaire client : création/mise à jour d'un champ personnalisé (CustomField)
       const newField: CustomField = {
         id: newFieldId,
         name: newFieldName,
@@ -168,6 +225,7 @@ export function BuilderCMS() {
       }
     }
 
+    // Réinitialisation du formulaire de saisie de champ
     setIsAddingField(false);
     setEditingFieldId(null);
     setNewFieldName('');
@@ -177,6 +235,11 @@ export function BuilderCMS() {
     setNewFieldRequired(false);
   };
 
+  /**
+   * Supprime un champ personnalisé ou un résultat attendu du modèle actif selon l'onglet courant.
+   *
+   * @param idToRemove - Identifiant unique du champ à retirer
+   */
   const handleRemoveField = (idToRemove: string) => {
     if (builderTab === 'materials' && activeMaterialTpl) {
       const updatedTemplate = {
@@ -202,6 +265,10 @@ export function BuilderCMS() {
     }
   };
 
+  /**
+   * Crée un nouveau modèle vierge rattaché au laboratoire actif (`activeLabId`)
+   * dans la catégorie correspondant à l'onglet actif, puis le sélectionne immédiatement.
+   */
   const handleAddTemplate = () => {
     if (builderTab === 'materials') {
       const newId = `MAT-${Date.now()}`;
@@ -252,6 +319,13 @@ export function BuilderCMS() {
     }
   };
 
+  /**
+   * Réordonne un champ ou résultat attendu vers le haut (`up`) ou vers le bas (`down`)
+   * par permutation d'index dans le tableau du modèle actif.
+   *
+   * @param index - Position actuelle du champ dans la liste
+   * @param direction - Direction du déplacement ('up' | 'down')
+   */
   const handleMoveField = (index: number, direction: 'up' | 'down') => {
     if (builderTab === 'materials' && activeMaterialTpl) {
       const fields = [...activeMaterialTpl.fields];
@@ -286,10 +360,17 @@ export function BuilderCMS() {
     }
   };
 
+  /**
+   * Ouvre la modale de confirmation avant la suppression définitive du modèle actif.
+   */
   const handleDeleteTemplate = () => {
     setShowDeleteConfirm(true);
   };
 
+  /**
+   * Exécute la suppression définitive du modèle actif dans le store et sélectionne
+   * automatiquement le premier modèle restant de la liste (ou `null` si vide).
+   */
   const executeDelete = () => {
     if (builderTab === 'materials' && activeMaterialTpl) {
       deleteMaterialTemplate(activeMaterialTpl.id);
@@ -311,6 +392,10 @@ export function BuilderCMS() {
     setShowDeleteConfirm(false);
   };
 
+  /**
+   * Duplique (clone) le modèle actuellement sélectionné avec un nouvel identifiant horodaté
+   * et le suffixe "(Copie)", puis sélectionne la copie créée.
+   */
   const handleCloneTemplate = () => {
     if (builderTab === 'materials' && activeMaterialTpl) {
       const newId = `MAT-${Date.now()}`;
@@ -387,7 +472,7 @@ export function BuilderCMS() {
       </div>
 
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 min-h-0">
-        {/* Sidebar */}
+        {/* Sidebar : Liste des modèles filtrés selon l'onglet actif et bouton d'ajout rapide */}
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden">
           <div className="p-4 border-b border-slate-200 bg-slate-50 font-semibold text-slate-700 flex items-center justify-between">
             <div className="flex items-center">
@@ -472,8 +557,12 @@ export function BuilderCMS() {
           </div>
         </div>
 
-        {/* Builder Area */}
+        {/* Builder Area : Zone d'édition principale du modèle sélectionné */}
         <div className="lg:col-span-3 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden">
+          {/* ==========================================================================
+              ONGLET 1 : ÉDITEUR DE MODÈLES DE MATÉRIAUX (MaterialTemplate)
+              Permet de définir les propriétés physiques/chimiques à saisir sur les échantillons
+             ========================================================================== */}
           {builderTab === 'materials' && activeMaterialTpl && (
             <>
               <div className="p-5 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
@@ -627,6 +716,10 @@ export function BuilderCMS() {
             </>
           )}
 
+          {/* ==========================================================================
+              ONGLET 2 : ÉDITEUR DE MODÈLES D'ANALYSES (AnalysisTemplate)
+              Configure les résultats attendus (nombres, séries, tableaux verticaux ICP, micrographies...)
+             ========================================================================== */}
           {builderTab === 'analyses' && activeAnalysisTpl && (
             <>
               <div className="p-5 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
@@ -796,6 +889,10 @@ export function BuilderCMS() {
               </div>
             </>
           )}
+          {/* ==========================================================================
+              ONGLET 3 : ÉDITEUR DE FORMULAIRES DE DEMANDE CLIENT (RequestTemplate)
+              Définit le questionnaire dynamique présenté aux demandeurs lors de la création d'un dossier
+             ========================================================================== */}
           {builderTab === 'requests' && activeRequestTpl && (
             <>
               <div className="p-5 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
@@ -946,6 +1043,11 @@ export function BuilderCMS() {
             </>
           )}
 
+          {/* ==========================================================================
+              ONGLET 4 : ÉDITEUR DE MODÈLES DE RAPPORTS WORD (.DOCX) (ReportTemplate)
+              Gère l'importation du gabarit .docx et expose le dictionnaire de balises dynamiques
+              (boucles conditionnelles, tableaux XML natifs, galerie de micrographies et champs personnalisés)
+             ========================================================================== */}
           {builderTab === 'reports' && activeReportTpl && (
             <div className="flex flex-col h-full">
               <div className="p-5 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
@@ -1232,6 +1334,7 @@ export function BuilderCMS() {
         </div>
       </div>
 
+      {/* Modale de confirmation de suppression définitive d'un modèle */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden">
@@ -1250,6 +1353,7 @@ export function BuilderCMS() {
         </div>
       )}
 
+      {/* Modale d'options avancées du modèle (Catégorie du matériau/analyse, Norme ISO/ASTM...) */}
       {isOptionsOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">

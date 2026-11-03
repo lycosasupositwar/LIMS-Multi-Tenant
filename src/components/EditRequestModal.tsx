@@ -6,6 +6,7 @@
  * - Rappel visible du motif du rejet formulé par le laboratoire
  * - Rechargement des valeurs préalablement saisies dans les champs dynamiques
  * - Modification des options et réactivation de la demande au statut 'soumise'
+ * - Mode lecture seule automatique si la demande est dans un état actif (acceptée, en cours, etc.)
  */
 
 import React, { useState, useEffect } from 'react';
@@ -17,34 +18,51 @@ import { AnalysisRequest } from '../types';
  * Propriétés attendues par la modale d'édition
  */
 interface Props {
-  /** Demande d'analyse cible */
+  /** Demande d'analyse cible à consulter ou à corriger */
   request: AnalysisRequest;
   /** Indicateur d'affichage de la modale */
   isOpen: boolean;
-  /** Fonction de fermeture */
+  /** Fonction de rappel déclenchée à la fermeture de la modale */
   onClose: () => void;
 }
 
+/**
+ * Composant modal permettant de visualiser ou d'éditer les champs dynamiques (CMS)
+ * d'une demande d'analyse existante avant de la resoumettre au laboratoire.
+ *
+ * @param {Props} props - Les propriétés du composant (`request`, `isOpen`, `onClose`).
+ * @returns {JSX.Element | null} Le rendu de la modale ou `null` si elle est fermée.
+ */
 export function EditRequestModal({ request, isOpen, onClose }: Props) {
+  // Extraction des modèles CMS et de l'action de resoumission depuis le store global LIMS
   const { requestTemplates, resubmitRequest, analysisTemplates, materialTemplates } = useLims();
+
+  // État local contenant la copie modifiable des valeurs des champs dynamiques de la demande
   const [customData, setCustomData] = useState<Record<string, any>>({});
 
+  // Détermine si le formulaire est verrouillé en lecture seule :
+  // seules les demandes 'rejetee' ou en 'brouillon' peuvent être modifiées par l'utilisateur
   const isReadOnly = request.status !== 'rejetee' && request.status !== 'brouillon';
 
   // Synchronisation des données personnalisées à l'ouverture de la modale
+  // ou lorsque la demande sélectionnée change
   useEffect(() => {
     if (isOpen) {
       setCustomData(request.customData);
     }
   }, [isOpen, request]);
 
+  // Court-circuit de rendu si la modale est fermée
   if (!isOpen) return null;
 
   // Récupération du gabarit de formulaire associé à cette demande
   const activeTemplate = requestTemplates.find(t => t.id === request.templateId);
 
   /**
-   * Validation des corrections et transmission au gestionnaire d'état
+   * Validation des corrections et transmission au gestionnaire d'état.
+   * Réactive la demande (passage au statut 'soumise') avec les nouvelles données personnalisées.
+   *
+   * @param {React.FormEvent} e - Événement de soumission du formulaire HTML.
    */
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,7 +73,10 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
   };
 
   /**
-   * Met à jour une entrée dynamique dans le dictionnaire local
+   * Met à jour une entrée dynamique dans le dictionnaire local `customData`.
+   *
+   * @param {string} fieldId - L'identifiant unique du champ dynamique CMS (ou clé composite pour propriétés matériaux).
+   * @param {any} value - La nouvelle valeur saisie ou sélectionnée par l'utilisateur.
    */
   const handleCustomDataChange = (fieldId: string, value: any) => {
     setCustomData(prev => ({ ...prev, [fieldId]: value }));
@@ -100,6 +121,7 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                 <label className="block text-sm font-medium text-slate-700 mb-1">
                   Titre de la demande / Projet
                 </label>
+                {/* Le titre du dossier est figé pour conserver la traçabilité dans l'historique */}
                 <input 
                   type="text" 
                   disabled 
@@ -110,7 +132,7 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
               </div>
             </div>
 
-            {/* Formulaire dynamique paramétré */}
+            {/* Formulaire dynamique paramétré selon les champs du gabarit CMS */}
             {activeTemplate && activeTemplate.fields.length > 0 && (
               <div className="space-y-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
                 <h3 className="text-sm font-bold text-indigo-500 uppercase tracking-wider flex items-center">
@@ -123,6 +145,7 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                         {field.name} {field.required && <span className="text-red-500">*</span>}
                       </label>
                       
+                      {/* Cas 1 : Liste déroulante à choix unique ('select') */}
                       {field.type === 'select' ? (
                         <select 
                           required={field.required}
@@ -137,6 +160,7 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                           ))}
                         </select>
                       ) : field.type === 'analyses' ? (
+                        /* Cas 2 : Sélecteur multi-analyses sous forme de badges cliquables ('analyses') */
                         <div className="flex flex-wrap gap-2 mt-2">
                           {analysisTemplates.filter(t => t.isActive !== false).map(tpl => {
                             const currentValues = customData[field.id] || [];
@@ -147,6 +171,7 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                                 type="button"
                                 disabled={isReadOnly}
                                 onClick={() => {
+                                  // Bascule (toggle) la sélection de l'analyse dans le tableau de valeurs
                                   const newValues = isSelected
                                     ? currentValues.filter((v: string) => v !== tpl.id)
                                     : [...currentValues, tpl.id];
@@ -164,7 +189,9 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                           })}
                         </div>
                       ) : field.type === 'materials' ? (
+                        /* Cas 3 : Sélecteur de modèles de matériaux avec sous-formulaire de propriétés imbriquées ('materials') */
                         <div className="flex flex-wrap gap-2 mt-2">
+                          {/* Boutons de sélection des matériaux actifs rattachés au laboratoire de la demande */}
                           {materialTemplates.filter(t => t.labId === request.labId && t.isActive !== false).map(tpl => {
                             const currentValues = customData[field.id] || [];
                             const isSelected = currentValues.includes(tpl.id);
@@ -185,10 +212,13 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                               </button>
                             );
                           })}
+                          {/* Rendu dynamique des fiches de propriétés techniques pour chaque matériau sélectionné */}
                           {materialTemplates.filter(t => t.labId === request.labId && t.isActive !== false && (customData[field.id] || []).includes(t.id)).map(tpl => {
+                            // Clé conventionnelle stockant les sous-propriétés matériaux dans customData
                             const propertiesKey = `${field.id}__material_properties`;
                             const allProperties = customData[propertiesKey] || {};
                             const materialProperties = allProperties[tpl.id] || {};
+                            // Met à jour une propriété spécifique d'un modèle de matériau sélectionné
                             const updateProperty = (propertyId: string, value: any) => handleCustomDataChange(propertiesKey, { ...allProperties, [tpl.id]: { ...materialProperties, [propertyId]: value } });
                             return <div key={`properties-${tpl.id}`} className="w-full mt-3 rounded-lg border border-emerald-200 bg-white p-3">
                               <h4 className="text-sm font-semibold text-emerald-800 mb-3">Propriétés — {tpl.name}</h4>
@@ -205,6 +235,7 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                           })}
                         </div>
                       ) : field.type === 'multiselect' ? (
+                        /* Cas 4 : Choix multiples génériques sous forme de pilules cliquables ('multiselect') */
                         <div className="flex flex-wrap gap-2 mt-2">
                           {field.options?.map(opt => {
                             const currentValues = customData[field.id] || [];
@@ -232,6 +263,7 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                           })}
                         </div>
                       ) : field.type === 'boolean' ? (
+                         /* Cas 5 : Case à cocher booléenne ('boolean') */
                          <div className="flex items-center h-full">
                            <input 
                             type="checkbox"
@@ -243,6 +275,7 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                            <span className="ml-2 text-sm text-slate-600">Oui</span>
                          </div>
                       ) : field.type === 'date' ? (
+                        /* Cas 6 : Sélecteur de date calendrier ('date') */
                         <input 
                           type="date"
                           required={field.required}
@@ -252,6 +285,7 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                           className={`w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500 ${isReadOnly ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''}`}
                         />
                       ) : (
+                        /* Cas 7 : Champ texte standard ou numérique ('text' | 'number') */
                         <input 
                           type={field.type === 'number' ? 'number' : 'text'} 
                           required={field.required}

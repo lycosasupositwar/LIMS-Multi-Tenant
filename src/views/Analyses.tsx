@@ -193,6 +193,39 @@ export function Analyses() {
   const isManager = (currentUser?.role === 'manager' || currentUser?.role === 'admin');
 
   /**
+   * Indique si une valeur de résultat doit être considérée comme "non renseignée"
+   * (gère les types simples, séries numériques, tableaux verticaux et galeries de micrographies).
+   */
+  const isResultEmpty = (value: any): boolean => {
+    if (value === undefined || value === null) return true;
+    if (typeof value === 'string') return value.trim() === '';
+    if (Array.isArray(value)) {
+      return !value.some((v: any) => {
+        if (v && typeof v === 'object') return String(v.value ?? '').trim() !== '';
+        return v !== null && v !== undefined && String(v).trim() !== '';
+      });
+    }
+    if (typeof value === 'object' && Array.isArray(value.images)) return value.images.length === 0;
+    return false;
+  };
+
+  /**
+   * Soumet une analyse à la validation Manager après contrôle des résultats obligatoires
+   * (`ExpectedResult.required === true`). Bloque la soumission si un champ requis est vide.
+   */
+  const submitForValidation = (analysis: typeof analyses[number]) => {
+    const template = analysisTemplates.find(t => t.id === analysis.templateId);
+    const missing = (template?.expectedResults || [])
+      .filter(er => er.required && isResultEmpty(analysis.results?.[er.id]))
+      .map(er => er.name);
+    if (missing.length > 0) {
+      alert(`Impossible de soumettre : les résultats obligatoires suivants ne sont pas renseignés :\n- ${missing.join('\n- ')}`);
+      return;
+    }
+    updateAnalysisStatus(analysis.id, 'a_valider');
+  };
+
+  /**
    * Synchronise automatiquement l'onglet ('actives' vs 'historique') et fait défiler jusqu'à l'analyse
    * lorsqu'un manager clique sur une notification ciblant un essai (ex: ESS-26-0612).
    */
@@ -203,7 +236,8 @@ export function Analyses() {
       a => a.id.toLowerCase() === q || (a.sampleId && a.sampleId.toLowerCase() === q)
     );
     if (targetAnalysis) {
-      if (targetAnalysis.status === 'valide' || targetAnalysis.status === 'termine' || targetAnalysis.status === 'rejete') {
+      // Les analyses rejetées restent dans l'onglet 'actives' (à corriger par l'analyste)
+      if (targetAnalysis.status === 'valide' || targetAnalysis.status === 'termine') {
         setFilterMode('historique');
       } else {
         setFilterMode('actives');
@@ -939,7 +973,7 @@ export function Analyses() {
                 {/* L'analyste peut soumettre ou resoumettre si l'essai est 'En Cours' OU 'rejete' */}
                 {(analysis.status === 'En Cours' || analysis.status === 'rejete') && (
                   <button
-                    onClick={() => updateAnalysisStatus(analysis.id, 'a_valider')}
+                    onClick={() => submitForValidation(analysis)}
                     className="w-full text-xs px-3 py-2 bg-amber-500 text-white rounded-md font-medium hover:bg-amber-600 transition-colors text-center shadow-xs"
                   >
                     {analysis.status === 'rejete' ? 'Corriger & Resoumettre' : 'Soumettre résultats'}

@@ -33,6 +33,8 @@ export function Inventory() {
   const [searchTerm, setSearchTerm] = useState('');
   /** Contrôle l'ouverture de la fenêtre modale d'ajout d'un nouveau produit */
   const [showNewModal, setShowNewModal] = useState(false);
+  /** Filtre par catégorie de consommable ('all' = toutes les catégories) */
+  const [selectedCategory, setSelectedCategory] = useState<'all' | ConsumableCategory>('all');
 
   
   // État du formulaire de création d'un article
@@ -46,11 +48,13 @@ export function Inventory() {
     expiryDate: '',
   });
 
-  // Filtrage combiné (nom, référence, catégorie)
-  const filteredConsumables = consumables.filter(c => 
-    c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.category.toLowerCase().includes(searchTerm.toLowerCase())
+  // Filtrage combiné (nom, référence, catégorie) + filtre exact par catégorie sélectionnée
+  const filteredConsumables = consumables.filter(c =>
+    (selectedCategory === 'all' || c.category === selectedCategory) && (
+      c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.category.toLowerCase().includes(searchTerm.toLowerCase())
+    )
   );
 
   /**
@@ -87,7 +91,7 @@ export function Inventory() {
     e.preventDefault();
     if (!newConsumable.name || !newConsumable.unit) return;
     
-    const id = `csm-${Math.random().toString(36).substr(2, 6)}`;
+    const id = `csm-${crypto.randomUUID().slice(0, 8)}`;
     addConsumable({
       id,
       name: newConsumable.name,
@@ -153,11 +157,16 @@ export function Inventory() {
             />
           </div>
           <div className="flex gap-2 w-full sm:w-auto">
-             <select className="w-full sm:w-auto border-slate-300 rounded-md text-sm text-slate-700 focus:ring-blue-500">
+             <select
+               value={selectedCategory}
+               onChange={(e) => setSelectedCategory(e.target.value as 'all' | ConsumableCategory)}
+               className="w-full sm:w-auto border-slate-300 rounded-md text-sm text-slate-700 focus:ring-blue-500"
+             >
                <option value="all">Toutes les catégories</option>
-               <option value="resine">Résines</option>
-               <option value="chimie">Produits Chimiques</option>
-               <option value="abrasif">Abrasifs</option>
+               <option value="Résine">Résines</option>
+               <option value="Chimie">Produits Chimiques</option>
+               <option value="Abrasif">Abrasifs</option>
+               <option value="Équipement">Équipements</option>
              </select>
           </div>
         </div>
@@ -217,8 +226,11 @@ export function Inventory() {
                       <div>Réassort : {new Date(item.lastRestocked).toLocaleDateString('fr-FR')}</div>
                       {item.expiryDate && (
                         (() => {
+                          // Normalisation à minuit (heure locale) pour un calcul de jours fiable
                           const exp = new Date(item.expiryDate);
+                          exp.setHours(0, 0, 0, 0);
                           const today = new Date();
+                          today.setHours(0, 0, 0, 0);
                           const diffDays = Math.ceil((exp.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
                           const isExpired = diffDays < 0;
                           const isSoon = diffDays <= 30 && !isExpired;

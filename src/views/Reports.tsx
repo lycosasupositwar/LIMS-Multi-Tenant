@@ -39,9 +39,25 @@ export function Reports() {
     users, 
     reportTemplates, 
     labSettings,
+    activeLabId,
     addReport, 
     deleteReport 
   } = useLims() as any;
+
+  /**
+   * Sélectionne le Manager signataire rattaché au laboratoire actif
+   * (repli sur un manager/admin transversal si aucun manager dédié n'existe).
+   */
+  const findLabManager = () =>
+    users.find((u: any) => u.role === 'manager' && u.labId === activeLabId) ||
+    users.find((u: any) => (u.role === 'manager' || u.role === 'admin') && (!u.labId || u.labId === 'all')) ||
+    users.find((u: any) => u.role === 'manager' || u.role === 'admin');
+
+  /** Nettoie une couleur hexadécimale pour OpenXML (Word exige 6 caractères hex sans '#') */
+  const cleanHex = (value: string | undefined, fallback: string) => {
+    const hex = String(value || '').replace(/[^0-9A-Fa-f]/g, '');
+    return hex.length === 6 ? hex.toUpperCase() : fallback;
+  };
 
   /** ID du modèle Word (.docx) sélectionné pour le rapport consolidé (vide = PDF Générique) */
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
@@ -279,11 +295,11 @@ export function Reports() {
       let maxVals = 0;
       group.rows.forEach(r => { if (r.valeurs.length > maxVals) maxVals = r.valeurs.length; });
       if (maxVals > 0) {
-        const tColor = labSettings?.tableStyles?.borderColor || "000000";
+        const tColor = cleanHex(labSettings?.tableStyles?.borderColor, "000000");
         const tSize = labSettings?.tableStyles?.borderSize ?? 4;
         let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
         xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-        const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${labSettings?.tableStyles?.headerBgColor || "E2E8F0"}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+        const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${cleanHex(labSettings?.tableStyles?.headerBgColor, "E2E8F0")}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
         addHeaderCell("Echantillon");
         for (let i = 1; i <= maxVals; i++) addHeaderCell(`Mesure ${i}`);
         addHeaderCell("Moyenne");
@@ -312,9 +328,9 @@ export function Reports() {
           const filledRows = v.filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''));
           if (filledRows.length === 0) return;
 
-          const tColor = labSettings?.tableStyles?.borderColor || "000000";
+          const tColor = cleanHex(labSettings?.tableStyles?.borderColor, "000000");
           const tSize = labSettings?.tableStyles?.borderSize ?? 4;
-          const headerBg = labSettings?.tableStyles?.headerBgColor || "E2E8F0";
+          const headerBg = cleanHex(labSettings?.tableStyles?.headerBgColor, "E2E8F0");
 
           let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
 
@@ -380,11 +396,11 @@ export function Reports() {
 
     Object.values(analysesGroups).forEach(group => {
       if (group.rows.length > 0 && group.columns.length > 0) {
-        const tColor = labSettings?.tableStyles?.borderColor || "000000";
+        const tColor = cleanHex(labSettings?.tableStyles?.borderColor, "000000");
         const tSize = labSettings?.tableStyles?.borderSize ?? 4;
         let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
         xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-        const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${labSettings?.tableStyles?.headerBgColor || "E2E8F0"}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+        const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${cleanHex(labSettings?.tableStyles?.headerBgColor, "E2E8F0")}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
         const addDataCell = (text: string) => { xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
         
         addHeaderCell("Echantillon");
@@ -519,7 +535,7 @@ export function Reports() {
           });
           const client = users.find((u: any) => u.id === req.requesterId);
           const reqAnalyses = analyses.filter((a: any) => linkedSamples.map((s: any) => s.id).includes(a.sampleId));
-          const manager = users.find((u: any) => u.role === "manager" || u.role === "admin");
+          const manager = findLabManager();
           const docData = buildDocData(req, client, linkedSamples, reqAnalyses, manager);
           doc.render(docData);
 
@@ -626,7 +642,7 @@ export function Reports() {
               : null);
               
         const client = request ? users.find((u: any) => u.id === request.requesterId) : null;
-        const manager = users.find((u: any) => u.role === "manager" || u.role === "admin");
+        const manager = findLabManager();
 
         const docData = buildDocData(request, client, linkedSamples, reqAnalyses, manager);
         doc.render(docData);
@@ -694,20 +710,31 @@ export function Reports() {
           const clean = v.filter((val: any) => val !== '' && val !== null && val !== undefined && String(val).trim() !== '');
           return `${label}: [${clean.join(', ')}]`;
         }
+        // Galerie de micrographies : on exporte le nombre et les noms des clichés
+        if (v && typeof v === 'object' && Array.isArray((v as any).images)) {
+          const imgs = (v as any).images;
+          return `${label}: ${imgs.length} micrographie(s) (${imgs.map((i: any) => i?.name || 'image').join(', ')})`;
+        }
+        if (v && typeof v === 'object') {
+          return `${label}: ${JSON.stringify(v)}`;
+        }
         return `${label}: ${v}`;
       }).join(' | ');
+      // Échappement CSV : toute cellule est entourée de guillemets (gère ; et retours à la ligne)
+      const csvCell = (val: any) => `"${String(val ?? '').replace(/"/g, '""')}"`;
       const row = [
         a.id,
         new Date(a.date || a.updatedAt || Date.now()).toLocaleDateString('fr-FR'),
         a.sampleId,
         template?.name || "N/A",
         a.technician,
-        `"${resultsString.replace(/"/g, '""')}"`
-      ];
+        resultsString
+      ].map(csvCell);
       csvContent += row.join(";") + "\n";
     });
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    // BOM UTF-8 (\uFEFF) : indispensable pour qu'Excel (Windows FR) affiche correctement les accents
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -742,13 +769,14 @@ export function Reports() {
       const sampleAnalyses = analyses.filter((a: any) => a.sampleId === certSelectedSample);
       const req = sample?.requestId ? requests.find((r: any) => r.id === sample.requestId) : null;
       const client = req ? users.find((u: any) => u.id === req.requesterId) : null;
-      const manager = users.find((u: any) => u.role === "manager" || u.role === "admin");
+      const manager = findLabManager();
 
       const baseDocData = buildDocData(req, client, sample ? [sample] : [], sampleAnalyses, manager);
       
       const docData: any = {
         ...baseDocData,
-        date: new Date().toLocaleDateString('fr-FR'),
+        // Conserve la structure objet pour rester compatible avec la balise Word {{date.jour}}
+        date: { ...(baseDocData as any).date, jour: new Date().toLocaleDateString('fr-FR') },
         echantillon: {
           id: sample?.id,
           barcode: sample?.barcode,

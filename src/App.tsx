@@ -77,11 +77,21 @@ function Main() {
       case 'inventory':
         return <Inventory />;
       case 'equipments':
-        return <Equipments />;
+        // Parc équipements & métrologie réservé aux managers et administrateurs
+        return currentUser.role === 'manager' || currentUser.role === 'admin' ? (
+          <Equipments />
+        ) : (
+          <Dashboard onNavigate={(tab) => setActiveTab(tab)} />
+        );
       case 'nonconformities':
         return <NonConformities />;
       case 'planning':
-        return <Planning />;
+        // Planning & charge réservé aux managers et administrateurs
+        return currentUser.role === 'manager' || currentUser.role === 'admin' ? (
+          <Planning />
+        ) : (
+          <Dashboard onNavigate={(tab) => setActiveTab(tab)} />
+        );
       case 'builder':
         // Le module de conception de formulaires et templates est réservé aux managers
         return currentUser.role === 'manager' || currentUser.role === 'admin' ? (

@@ -1303,11 +1303,15 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const updateUserQualifications = async (userId: string, qualifiedTemplateIds: string[]): Promise<boolean> => {
     try {
       const res = await fetch(`/api/users/${userId}/qualifications`, {
-        method: 'PATCH',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ qualifiedTemplateIds })
       });
-      if (!res.ok) return false;
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error('Échec mise à jour habilitations (HTTP ' + res.status + ') :', err.error || res.statusText);
+        return false;
+      }
       setUsers(prev => prev.map(u => (u.id === userId ? { ...u, qualifiedTemplateIds } : u)));
       return true;
     } catch (e) {

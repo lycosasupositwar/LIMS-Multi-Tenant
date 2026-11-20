@@ -12,7 +12,7 @@
  * @module views/RequestsInternal
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLims } from '../store';
 import { FileText, Clock, User, CheckCircle, Shield, AlertCircle, PlayCircle, History, Mail, XCircle, Plus, Box, Edit2, Save, Database, Layers, TestTube2, Trash2, Printer, QrCode } from 'lucide-react';
 import { RequestStatus, AnalysisRequest, MaterialState, Sample } from '../types';

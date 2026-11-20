@@ -10,7 +10,7 @@
  */
 
 import React, { ReactNode, useState } from 'react';
-import { LayoutDashboard, Box, Activity, FileText, Settings, Bell, Search, User, Blocks, LogOut, Archive, Building2, ChevronDown, Check } from 'lucide-react';
+import { LayoutDashboard, Box, Activity, FileText, Settings, Bell, Search, User, Blocks, LogOut, Archive, Building2, ChevronDown, Check, Menu, X } from 'lucide-react';
 import * as motion from 'motion/react-client';
 import { useLims } from '../store';
 import { getLabColor } from '../utils/colors';
@@ -57,6 +57,8 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
 
   // État d'ouverture du menu déroulant de sélection d'instance de laboratoire
   const [isLabMenuOpen, setIsLabMenuOpen] = useState(false);
+  // État d'ouverture du tiroir de navigation sur écrans mobiles (< md)
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   // Compteur de demandes d'ouverture de compte en attente (affiché en badge rouge sur l'onglet Paramètres)
   const [pendingRequestsCount, setPendingRequestsCount] = React.useState(0);
   // Référence mutable mémorisant le dernier nombre de demandes notifiées pour éviter les notifications en doublon
@@ -66,8 +68,8 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
    * Polling périodique (toutes les 15s) pour alerter le manager des nouvelles demandes d'accès
    */
   React.useEffect(() => {
-    // Seuls les utilisateurs ayant le rôle 'manager' contrôlent les inscriptions en attente
-    if (currentUser?.role !== 'manager') return;
+    // Seuls les managers et administrateurs contrôlent les inscriptions en attente
+    if (currentUser?.role !== 'manager' && currentUser?.role !== 'admin') return;
 
     const checkRequests = async () => {
       try {
@@ -206,8 +208,8 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
     { id: 'inventory', label: 'Consommables', icon: Archive },
   ];
 
-  // L'accès au configurateur de gabarits (CMS Builder) est réservé aux managers
-  if (currentUser?.role === 'manager') {
+  // L'accès au configurateur de gabarits (CMS Builder) est réservé aux managers et administrateurs
+  if (currentUser?.role === 'manager' || currentUser?.role === 'admin') {
     navItems.push({ id: 'builder', label: 'Config. CMS', icon: Blocks });
   }
 
@@ -294,9 +296,64 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
         </div>
       </aside>
 
+      {/* Tiroir de navigation mobile (< md) */}
+      {isMobileMenuOpen && (
+        <div className="fixed inset-0 z-50 md:hidden flex">
+          <div className="fixed inset-0 bg-slate-900/50" onClick={() => setIsMobileMenuOpen(false)} />
+          <div className="relative w-64 max-w-[80vw] bg-white h-full shadow-xl flex flex-col z-10">
+            <div className="h-16 flex items-center justify-between px-5 border-b border-slate-200">
+              <div className="flex items-center">
+                <div className="w-8 h-8 bg-blue-700 rounded-lg flex items-center justify-center mr-2.5 shadow-sm">
+                  <Blocks className="text-white w-5 h-5" />
+                </div>
+                <span className="font-display font-bold text-lg text-slate-900">Materio<span className="text-blue-600">Lab</span></span>
+              </div>
+              <button type="button" onClick={() => setIsMobileMenuOpen(false)} className="p-1.5 text-slate-500 hover:text-slate-800 rounded-lg">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
+              {navItems.map(item => {
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => { setActiveTab(item.id); setIsMobileMenuOpen(false); }}
+                    className={`w-full flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors ${isActive ? 'bg-blue-50 text-blue-700' : 'text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    <Icon className="w-5 h-5 mr-3" />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+            <div className="p-4 border-t border-slate-200 flex items-center justify-between">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-slate-900 truncate">{currentUser?.name}</p>
+                <p className="text-xs text-slate-500 capitalize">{currentUser?.role}</p>
+              </div>
+              <button type="button" onClick={logout} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md" title="Déconnexion">
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 2. Zone de Contenu Principal */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 lg:px-8">
+        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 sm:px-6 lg:px-8">
+          {/* Bouton menu burger visible uniquement sur mobile (< md) */}
+          <button
+            type="button"
+            onClick={() => setIsMobileMenuOpen(true)}
+            className="md:hidden mr-3 p-2 text-slate-600 hover:bg-slate-100 rounded-lg"
+            title="Ouvrir le menu"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
           {/* Barre de recherche transversale (filtre temps réel sur la vue courante) */}
           <div className="flex-1 flex items-center">
             <div className="max-w-md w-full relative">
@@ -372,7 +429,7 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
                         >
                           <div>
                             <div className="flex items-center gap-1.5 font-bold text-slate-800">
-                              <span className={`w-2 h-2 rounded-full shrink-0 ${getLabColor(index).mainBg}`} />
+                              <span className={`w-2 h-2 rounded-full shrink-0 ${getLabColor(laboratories.findIndex(l => l.id === lab.id)).mainBg}`} />
                               <span>{lab.name}</span>
                               <span className="text-[10px] text-slate-400 font-mono">[{lab.code}]</span>
                             </div>

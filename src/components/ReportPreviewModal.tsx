@@ -72,7 +72,7 @@ export function ReportPreviewModal({
   onAutoDownloadComplete
 }: ReportPreviewModalProps) {
   // Paramètres visuels/organisationnels du laboratoire actif et bibliothèque de modèles Word (.docx)
-  const { labSettings, reportTemplates } = useLims();
+  const { labSettings, reportTemplates, allMaterialTemplates } = useLims();
 
   // Message d'erreur éventuel lors du parsing Docxtemplater ou de la conversion LibreOffice
   const [docxError, setDocxError] = useState<string | null>(null);
@@ -122,9 +122,18 @@ export function ReportPreviewModal({
       ? requests.find(r => r.id === reportSamples[0].requestId)
       : null);
 
-  // Identification du client demandeur et du responsable technique (manager) pour le bloc de signature
+  // Identification du client demandeur et du responsable technique (manager du laboratoire émetteur)
   const client = request ? users.find(u => u.id === request.requesterId) : null;
-  const manager = users.find(u => u.role === 'manager');
+  const manager =
+    users.find(u => u.role === 'manager' && report?.labId && u.labId === report.labId) ||
+    users.find(u => u.role === 'manager' && (!u.labId || u.labId === 'all')) ||
+    users.find(u => u.role === 'manager' || u.role === 'admin');
+
+  /** Nettoie une couleur hexadécimale pour OpenXML (Word exige 6 caractères hex sans '#') */
+  const cleanHex = (value: string | undefined, fallback: string) => {
+    const hex = String(value || '').replace(/[^0-9A-Fa-f]/g, '');
+    return hex.length === 6 ? hex.toUpperCase() : fallback;
+  };
 
   // Analyses réalisées sur les échantillons du rapport
   const reportAnalyses = analyses.filter(a => report?.sampleIds.includes(a.sampleId));
@@ -478,11 +487,11 @@ export function ReportPreviewModal({
       let maxVals = 0;
       group.rows.forEach(r => { if (r.valeurs.length > maxVals) maxVals = r.valeurs.length; });
       if (maxVals > 0) {
-        const tColor = labSettings?.tableStyles?.borderColor || "000000";
+        const tColor = cleanHex(labSettings?.tableStyles?.borderColor, "000000");
         const tSize = labSettings?.tableStyles?.borderSize ?? 4;
         let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
         xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-        const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${labSettings?.tableStyles?.headerBgColor || "E2E8F0"}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+        const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${cleanHex(labSettings?.tableStyles?.headerBgColor, "E2E8F0")}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
         addHeaderCell("Echantillon");
         for (let i = 1; i <= maxVals; i++) addHeaderCell(`Mesure ${i}`);
         addHeaderCell("Moyenne");
@@ -511,9 +520,9 @@ export function ReportPreviewModal({
           const filledRows = v.filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''));
           if (filledRows.length === 0) return;
 
-          const tColor = labSettings?.tableStyles?.borderColor || "000000";
+          const tColor = cleanHex(labSettings?.tableStyles?.borderColor, "000000");
           const tSize = labSettings?.tableStyles?.borderSize ?? 4;
-          const headerBg = labSettings?.tableStyles?.headerBgColor || "E2E8F0";
+          const headerBg = cleanHex(labSettings?.tableStyles?.headerBgColor, "E2E8F0");
 
           let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
 
@@ -579,11 +588,11 @@ export function ReportPreviewModal({
 
     Object.values(analysesGroups).forEach(group => {
       if (group.rows.length > 0 && group.columns.length > 0) {
-        const tColor = labSettings?.tableStyles?.borderColor || "000000";
+        const tColor = cleanHex(labSettings?.tableStyles?.borderColor, "000000");
         const tSize = labSettings?.tableStyles?.borderSize ?? 4;
         let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
         xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-        const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${labSettings?.tableStyles?.headerBgColor || "E2E8F0"}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+        const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${cleanHex(labSettings?.tableStyles?.headerBgColor, "E2E8F0")}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
         const addDataCell = (text: string) => { xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
 
         addHeaderCell("Echantillon");
@@ -690,8 +699,9 @@ export function ReportPreviewModal({
    * et sa sauvegarde automatique dans storage/reports/
    */
   useEffect(() => {
+    if (!isOpen || !report) return;
     setIsSavedOnServer(false);
-    if (isDocx && report?.templateId) {
+    if (isDocx && report.templateId) {
       const currentTemplate = reportTemplates?.find((t: any) => t.id === report.templateId);
       if (currentTemplate && currentTemplate.fileData) {
         setIsGeneratingPreview(true);
@@ -758,7 +768,7 @@ export function ReportPreviewModal({
         }
       }
     }
-  }, [report, isDocx]);
+  }, [isOpen, report, isDocx]);
 
   /**
    * Sauvegarde automatique en arrière-plan du rendu A4 HTML exact dans storage/reports/
@@ -817,11 +827,13 @@ export function ReportPreviewModal({
           doc.render(docData);
           const out = doc.getZip().generate({ type: "blob" });
 
-          // Déclenchement du téléchargement navigateur via un lien éphémère
+          // Déclenchement du téléchargement navigateur via un lien éphémère puis libération mémoire
+          const blobUrl = URL.createObjectURL(out);
           const a = document.createElement("a");
-          a.href = URL.createObjectURL(out);
+          a.href = blobUrl;
           a.download = `Rapport_${report.id}.docx`;
           a.click();
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
         } catch (e) {
           console.error('Erreur export DOCX :', e);
         }
@@ -1124,7 +1136,7 @@ export function ReportPreviewModal({
                     {reportSamples.map(sample => (
                       <tr key={sample.id}>
                         <td className="border border-slate-200 p-2 font-mono text-xs">{sample.id}</td>
-                        <td className="border border-slate-200 p-2">{sample.project}</td>
+                        <td className="border border-slate-200 p-2">{allMaterialTemplates.find(m => m.id === sample.templateId)?.name || sample.project}</td>
                         <td className="border border-slate-200 p-2">{sample.materialState}</td>
                         <td className="border border-slate-200 p-2 text-xs">
                           {sample.mountingInfo?.method || 'Aucune'}

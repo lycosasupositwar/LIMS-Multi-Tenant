@@ -71,7 +71,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
         if (initialRequest.labId) setSelectedLabId(initialRequest.labId);
         if (initialRequest.templateId) setSelectedTemplateId(initialRequest.templateId);
         if (initialRequest.title) setTitle("Copie de " + initialRequest.title);
-        if (initialRequest.customData) setCustomData(initialRequest.customData);
+        if (initialRequest.customData) setCustomData(JSON.parse(JSON.stringify(initialRequest.customData)));
       } else {
         // Mode création vierge : initialisation sur le laboratoire actif et son premier gabarit disponible
         const defaultLabId = activeLabId || laboratories[0]?.id || '';
@@ -88,19 +88,18 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
     }
   }, [isOpen, initialRequest, activeLabId, laboratories, allRequestTemplates]);
 
-  // Synchronisation du modèle par défaut lors du changement de laboratoire (manuel)
-  useEffect(() => {
-    // Ne réinitialiser que s'il n'y a pas d'initialRequest en cours de chargement
-    if (!isOpen || initialRequest) return;
-    
-    const available = allRequestTemplates.filter(t => t.labId === selectedLabId && t.isActive !== false);
-    if (available.length > 0) {
-      setSelectedTemplateId(available[0].id);
-    } else {
-      setSelectedTemplateId('');
-    }
+  /**
+   * Gestionnaire de sélection manuelle d'un laboratoire destinataire :
+   * met à jour le laboratoire, réinitialise le gabarit sur le premier modèle actif du nouveau labo
+   * et efface les données personnalisées (y compris lorsqu'on est parti d'une duplication).
+   */
+  const handleSelectLab = (labId: string) => {
+    if (labId === selectedLabId) return;
+    setSelectedLabId(labId);
+    const available = allRequestTemplates.filter(t => t.labId === labId && t.isActive !== false);
+    setSelectedTemplateId(available.length > 0 ? available[0].id : '');
     setCustomData({});
-  }, [selectedLabId, allRequestTemplates, isOpen, initialRequest]);
+  };
 
   // Ne rien afficher si la modale est fermée
   if (!isOpen) return null;
@@ -124,6 +123,16 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !activeTemplate) return;
+
+    // Validation des champs obligatoires de type sélecteur boutons ('analyses', 'materials', 'multiselect')
+    const missingButtonFields = activeTemplate.fields
+      .filter(f => f.required && (f.type === 'analyses' || f.type === 'materials' || f.type === 'multiselect'))
+      .filter(f => !Array.isArray(customData[f.id]) || customData[f.id].length === 0)
+      .map(f => f.name);
+    if (missingButtonFields.length > 0) {
+      alert(`Veuillez sélectionner au moins une option pour :\n- ${missingButtonFields.join('\n- ')}`);
+      return;
+    }
 
     // Détermination du préfixe d'ID (ex: REQ-MET) et génération sans collision
     const prefix = targetLab?.settings?.idPrefixes?.request || `REQ-${targetLab?.code || 'LAB'}`;
@@ -194,7 +203,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                   return (
                     <div
                       key={lab.id}
-                      onClick={() => setSelectedLabId(lab.id)}
+                      onClick={() => handleSelectLab(lab.id)}
                       className={`p-3.5 rounded-xl border-2 transition-all cursor-pointer flex flex-col justify-between ${
                         isSelected 
                           ? `${color.borderDark} ${color.bgFade} ${color.ring}`
@@ -428,8 +437,8 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                         <input 
                           type={field.type === 'number' ? 'number' : 'text'} 
                           required={field.required}
-                          value={customData[field.id] || ''} 
-                          onChange={e => handleCustomDataChange(field.id, field.type === 'number' ? Number(e.target.value) : e.target.value)}
+                          value={customData[field.id] ?? ''} 
+                          onChange={e => handleCustomDataChange(field.id, field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)}
                           className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:ring-blue-500 focus:border-blue-500"
                         />
                       )}

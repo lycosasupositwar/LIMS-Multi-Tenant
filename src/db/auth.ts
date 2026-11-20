@@ -8,7 +8,6 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
-import bcrypt from 'bcryptjs';
 
 /** Instance unique de connexion SQLite (pattern Singleton) */
 let db: DatabaseSync | null = null;
@@ -32,8 +31,8 @@ export function getDb(): DatabaseSync {
  * 2. Table `reset_tokens` : codes temporaires de récupération de mot de passe
  * 3. Table `account_requests` : formulaires de demandes d'accès soumis par les demandeurs
  * 
- * Si la table `users` est vide lors du premier lancement, un jeu de comptes
- * de démonstration représentatif de chaque profil métier est automatiquement injecté.
+ * Note : La création du premier compte Super Administrateur s'effectue via `install.sh`
+ * ou par insertion initiale dans la table `users`.
  */
 export async function initDb() {
   const database = getDb();

@@ -150,10 +150,16 @@ export function BuilderCMS() {
           setActiveReportTpl(updated);
         }
       };
+      reader.onerror = () => {
+        alert("Erreur lors de la lecture du fichier Word. Assurez-vous qu'il s'agit bien d'un .docx valide.");
+      };
       reader.readAsDataURL(file);
     } catch (err) {
       console.warn("Erreur lors de l'import Word:", err);
       alert("Erreur lors de la lecture du fichier Word. Assurez-vous qu'il s'agit bien d'un .docx");
+    } finally {
+      // Permet de réimporter un fichier modifié portant le même nom
+      e.target.value = '';
     }
   };
 
@@ -403,6 +409,7 @@ export function BuilderCMS() {
         ...activeMaterialTpl,
         id: newId,
         name: `${activeMaterialTpl.name} (Copie)`,
+        fields: JSON.parse(JSON.stringify(activeMaterialTpl.fields || [])),
       };
       addMaterialTemplate(newTpl);
       setActiveMaterialTpl(newTpl);
@@ -412,6 +419,7 @@ export function BuilderCMS() {
         ...activeAnalysisTpl,
         id: newId,
         name: `${activeAnalysisTpl.name} (Copie)`,
+        expectedResults: JSON.parse(JSON.stringify(activeAnalysisTpl.expectedResults || [])),
       };
       addAnalysisTemplate(newTpl);
       setActiveAnalysisTpl(newTpl);
@@ -421,6 +429,7 @@ export function BuilderCMS() {
         ...activeRequestTpl,
         id: newId,
         name: `${activeRequestTpl.name} (Copie)`,
+        fields: JSON.parse(JSON.stringify(activeRequestTpl.fields || [])),
       };
       addRequestTemplate(newTpl);
       setActiveRequestTpl(newTpl);
@@ -435,6 +444,17 @@ export function BuilderCMS() {
       setActiveReportTpl(newTpl);
     }
   };
+
+  // Réinitialise le sous-formulaire d'ajout/édition de champ lors d'un changement d'onglet ou de modèle actif
+  useEffect(() => {
+    setIsAddingField(false);
+    setEditingFieldId(null);
+    setNewFieldName('');
+    setNewFieldType('text');
+    setNewFieldUnit('');
+    setNewFieldRequired(false);
+    setNewFieldOptions('');
+  }, [builderTab, activeMaterialTpl?.id, activeAnalysisTpl?.id, activeRequestTpl?.id]);
 
   return (
     <div className="space-y-6 h-full flex flex-col">
@@ -701,8 +721,8 @@ export function BuilderCMS() {
                         Champ requis obligatoirement
                       </label>
                       <div className="flex gap-2">
-                        <button onClick={() => setIsAddingField(false)} className="px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-100 rounded font-medium">Annuler</button>
-                        <button onClick={handleAddField} className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded font-medium shadow-sm flex items-center"><Check className="w-4 h-4 mr-1" /> Ajouter</button>
+                        <button onClick={() => { setIsAddingField(false); setEditingFieldId(null); setNewFieldName(''); setNewFieldOptions(''); }} className="px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-100 rounded font-medium">Annuler</button>
+                        <button onClick={handleAddField} className="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded font-medium shadow-sm flex items-center"><Check className="w-4 h-4 mr-1" /> {editingFieldId ? 'Enregistrer' : 'Ajouter'}</button>
                       </div>
                     </div>
                   </div>

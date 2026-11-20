@@ -571,6 +571,7 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
     allAnalysisTemplates,
     allRequestTemplates,
     labSettings,
+    users,
     setGlobalSearchQuery
   } = useLims();
 
@@ -673,9 +674,9 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
     const pendingSamples = samples.filter(
       s => s.status === 'receptionne' || s.status === 'en_preparation'
     );
-    // Essais en cours attribués nominativement à l'opérateur
+    // Essais actifs ou planifiés attribués nominativement à l'opérateur
     const myAnalyses = analyses.filter(
-      a => a.technician === currentUser.name && a.status === 'En Cours'
+      a => a.technician === currentUser.name && ['planifie', 'En Cours', 'en_cours', 'rejete'].includes(a.status)
     );
 
     /**
@@ -812,7 +813,7 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
                 <button
                   type="button"
                   onClick={() => setSelectedAnalystRequest(null)}
-                  className="text-slate-400 hover:text-white transition-colors"
+                  className="text-slate-400 hover:text-slate-700 transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -1035,7 +1036,7 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
 
   const pendingValidationAnalyses = filteredAnalyses.filter(a => a.status === 'a_valider').length;
   const inProgressAnalyses = filteredAnalyses.filter(
-    a => a.status === 'En Cours' || a.status === 'a_valider'
+    a => ['planifie', 'En Cours', 'en_cours', 'a_valider', 'rejete'].includes(a.status)
   ).length;
   const validatedAnalyses = filteredAnalyses.filter(a =>
     ['valide', 'termine'].includes(a.status)
@@ -1568,7 +1569,7 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
           r.createdAt ? new Date(r.createdAt).toLocaleDateString('fr-FR') : '',
           getRequestAgeDays(r),
           overdue ? { v: 'OUI (RETARD)', s: 4 } : { v: 'NON', s: 5 },
-          r.assignedTo || 'Non assigné',
+          (r.assignedTo && users.find(u => u.id === r.assignedTo)?.name) || r.assignedTo || 'Non assigné',
           r.conclusion || r.rejectionReason || ''
         ];
       })
@@ -2258,7 +2259,7 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
               </div>
               <button
                 onClick={() => setIsBilanModalOpen(false)}
-                className="text-slate-400 hover:text-white transition-colors"
+                className="text-slate-400 hover:text-slate-700 transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>

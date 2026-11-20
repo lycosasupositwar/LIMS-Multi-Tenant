@@ -92,12 +92,16 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   // Double confirmation requise avant l'exécution irréversible de la purge
   const [confirmPurge, setConfirmPurge] = useState(false);
 
-  // Écoute de l'événement d'ouverture directe de l'onglet utilisateurs (déclenché depuis les notifications)
+  // Écoute de l'événement d'ouverture directe de l'onglet utilisateurs (réservé manager/admin)
   useEffect(() => {
-    const handleOpenUsers = () => setActiveTab('users');
+    const handleOpenUsers = () => {
+      if (currentUser?.role === 'manager' || currentUser?.role === 'admin') {
+        setActiveTab('users');
+      }
+    };
     window.addEventListener('open-users-tab', handleOpenUsers);
     return () => window.removeEventListener('open-users-tab', handleOpenUsers);
-  }, []);
+  }, [currentUser]);
 
   // États de mise à jour du mot de passe de l'utilisateur connecté
   const [currentPassword, setCurrentPassword] = useState('');
@@ -362,7 +366,11 @@ export function Settings({ onBack }: { onBack?: () => void }) {
    */
   const handleApproveRequest = async (req: any) => {
     try {
-      const tempPassword = Math.random().toString(36).slice(-8);
+      // Génération cryptographiquement sûre d'un mot de passe temporaire de 12 caractères
+      const charset = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$';
+      const randBytes = new Uint32Array(12);
+      crypto.getRandomValues(randBytes);
+      const tempPassword = Array.from(randBytes, b => charset[b % charset.length]).join('');
       const res = await fetch('/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -448,15 +456,10 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   };
 
   /**
-   * Importe et applique à chaud un fichier JSON de configuration (`applyPatch`)
-   * sans altérer les données opérationnelles existantes (demandes, échantillons, analyses).
-   *
-   * @param e - Événement de sélection du fichier JSON
+   * Lit un fichier JSON de configuration (issu d'un sélecteur ou d'un glisser-déposer)
+   * et applique le patch à chaud sans altérer les données opérationnelles.
    */
-  const importPatch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const processPatchFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
@@ -472,18 +475,33 @@ export function Settings({ onBack }: { onBack?: () => void }) {
       } catch (err: any) {
         setPatchMsg({ type: 'error', text: 'Erreur lors de la lecture de la configuration: ' + err.message });
       }
-      e.target.value = '';
     };
     reader.readAsText(file);
   };
 
+  /**
+   * Importe et applique à chaud un fichier JSON de configuration (`applyPatch`)
+   * sans altérer les données opérationnelles existantes (demandes, échantillons, analyses).
+   *
+   * @param e - Événement de sélection du fichier JSON
+   */
+  const importPatch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    processPatchFile(file);
+    e.target.value = '';
+  };
+
   // État local du formulaire d'identité et de paramétrage du laboratoire actif
   const [formData, setFormData] = useState(labSettings);
+  // Chaîne brute de saisie des certifications ISO (évite de manger les espaces après virgule pendant la frappe)
+  const [isoInputText, setIsoInputText] = useState((labSettings?.isoCertifications || []).join(', '));
   const [saved, setSaved] = useState(false);
 
   // Synchronisation du formulaire lorsque les paramètres du laboratoire actif changent dans le store
   useEffect(() => {
     setFormData(labSettings);
+    setIsoInputText((labSettings?.isoCertifications || []).join(', '));
   }, [labSettings]);
 
   /**
@@ -532,10 +550,13 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   };
 
   /**
-   * Met à jour la liste des certifications ISO (séparées par des virgules) dans l'état local du formulaire.
+   * Met à jour la liste des certifications ISO (séparées par des virgules) dans l'état local du formulaire
+   * tout en conservant le texte brut pendant la frappe (évite la suppression des espaces après virgule).
    */
   const handleIsoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const certs = e.target.value.split(',').map(s => s.trim());
+    const raw = e.target.value;
+    setIsoInputText(raw);
+    const certs = raw.split(',').map(s => s.trim()).filter(Boolean);
     setFormData({ ...formData, isoCertifications: certs });
     setSaved(false);
   };
@@ -554,11 +575,15 @@ export function Settings({ onBack }: { onBack?: () => void }) {
    * (couleur d'en-tête Hex, couleur et épaisseur des bordures).
    */
   const handleTableStyleChange = (field: string, value: string | number) => {
+    // Nettoie tout '#' éventuel sur les couleurs hexadécimales pour compatibilité OpenXML Word
+    const cleanValue = (field === 'headerBgColor' || field === 'borderColor') && typeof value === 'string'
+      ? value.replace(/^#/, '').toUpperCase()
+      : value;
     const newSettings = {
       ...formData,
       tableStyles: {
         ...formData.tableStyles,
-        [field]: value
+        [field]: cleanValue
       } as any
     };
     setFormData(newSettings);
@@ -624,11 +649,6 @@ export function Settings({ onBack }: { onBack?: () => void }) {
               <Users className="w-4 h-4 inline mr-2" />
               Utilisateurs
             </button>
-          </>
-        )}
-        {/* Onglets strictement réservés aux Administrateurs après Sauvegarde Config. */}
-        {currentUser?.role === 'admin' && (
-          <>
             <button
               onClick={() => setActiveTab('system')}
               className={`py-2 px-4 text-sm font-medium border-b-2 outline-none transition-colors ${activeTab === 'system' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
@@ -636,6 +656,11 @@ export function Settings({ onBack }: { onBack?: () => void }) {
               <Settings2 className="w-4 h-4 inline mr-2" />
               Sauvegarde Config.
             </button>
+          </>
+        )}
+        {/* Onglets strictement réservés aux Administrateurs */}
+        {currentUser?.role === 'admin' && (
+          <>
             <button
               onClick={() => setActiveTab('smtp')}
               className={`py-2 px-4 text-sm font-medium border-b-2 outline-none transition-colors flex items-center ${activeTab === 'smtp' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
@@ -938,8 +963,9 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                 <input
                   type="text"
                   name="isoCertifications"
-                  value={formData.isoCertifications.join(', ')}
+                  value={isoInputText}
                   onChange={handleIsoChange}
+                  onBlur={() => setIsoInputText((formData.isoCertifications || []).join(', '))}
                   placeholder="ISO 9001:2015, ISO 17025:2017"
                   className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
                 />
@@ -1267,7 +1293,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                         if (editingLabData.id) {
                           updateLaboratory(editingLabData.id, {
                             name: editingLabData.name,
-                            shortName: editingLabData.name,
+                            shortName: editingLabData.shortName || editingLabData.name,
                             code: editingLabData.code,
                             description: editingLabData.description
                           });
@@ -1350,7 +1376,15 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                       {patchMsg.text}
                     </div>
                   )}
-                  <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-10 hover:bg-slate-50 transition-colors">
+                  <div
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const droppedFile = e.dataTransfer.files?.[0];
+                      if (droppedFile) processPatchFile(droppedFile);
+                    }}
+                    className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-10 hover:bg-slate-50 transition-colors"
+                  >
                     <Upload className="w-10 h-10 text-slate-300 mb-3" />
                     <div className="text-slate-600 font-medium mb-1">Glissez-déposez un patch JSON ou cliquez pour parcourir</div>
                     <div className="text-slate-400 text-xs mb-4">Seuls les fichiers lims_config_*.json sont acceptés</div>

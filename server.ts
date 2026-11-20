@@ -14,6 +14,7 @@
  * 8. Serveur de développement Vite en mode middleware (dev) ou serveur de fichiers statiques SPA (prod).
  */
 
+import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -54,8 +55,9 @@ const COMMON_LIBREOFFICE_PATHS = [
   '/usr/local/bin',
   '/Applications/LibreOffice.app/Contents/MacOS'
 ];
+const sofficeBin = process.platform === 'win32' ? 'soffice.exe' : 'soffice';
 for (const loPath of COMMON_LIBREOFFICE_PATHS) {
-  if (fs.existsSync(loPath)) {
+  if (fs.existsSync(path.join(loPath, sofficeBin))) {
     process.env.PATH = `${loPath}${path.delimiter}${process.env.PATH || ''}`;
     break;
   }
@@ -605,7 +607,8 @@ const authenticate = async (req: AuthRequest, res: Response, next: NextFunction)
  */
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  // Lit le port depuis la variable d'environnement PORT (fichier .env), avec repli sur 3000
+  const PORT = Number(process.env.PORT) || 3000;
 
   // En-têtes HTTP de sécurité (Durcissement OWASP)
   app.use((req, res, next) => {
@@ -1564,7 +1567,8 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    // Syntaxe Express 5 obligatoire pour les routes joker SPA (remplace app.get('*', ...) qui lève une PathError en Express 5)
+    app.get('/{*splat}', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

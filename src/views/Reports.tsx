@@ -25,6 +25,7 @@ import Docxtemplater from "docxtemplater";
 import PizZip from "pizzip";
 import { saveAs } from "file-saver";
 import { createDocxImageModule } from "../utils/docxImageModule";
+import { generateUniqueLimsId } from "../utils/idGenerator";
 
 /**
  * Composant principal de la vue de génération, prévisualisation et téléchargement des rapports et certificats.
@@ -509,7 +510,8 @@ export function Reports() {
     const req = requests.find((r: any) => r.id === selectedRequestId);
     if (!req) return;
     
-    const reportId = `RAP-${new Date().getFullYear()}-${Math.floor(Math.random() * 1000).toString().padStart(3, "0")}`;
+    // Génération d'un identifiant de rapport garanti unique (évite toute collision sur Math.random() * 1000)
+    const reportId = generateUniqueLimsId('RAP', reports.map((r: any) => r.id));
     const linkedSamples = samples.filter((s: any) => s.requestId === selectedRequestId);
     let storedFileName: string | undefined;
 

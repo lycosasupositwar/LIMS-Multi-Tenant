@@ -8,11 +8,10 @@
  * 4. De générer automatiquement un code-barres unique et un identifiant d'échantillon
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { X } from 'lucide-react';
 import { useLims } from '../store';
-import { Sample, Priority, MaterialState } from '../types';
-import { generateUniqueLimsId, generateUniqueBarcode } from '../utils/idGenerator';
+import { Sample, Priority, MaterialState, SampleStatus } from '../types';
 
 /**
  * Propriétés attendues par la modale
@@ -24,84 +23,37 @@ interface Props {
   onClose: () => void;
 }
 
-/**
- * Composant modal permettant d'enregistrer un nouvel échantillon physique reçu au laboratoire
- * (hors flux d'acceptation automatique d'une demande ou pour un prélèvement direct).
- *
- * @param {Props} props - Les propriétés de contrôle de la modale (`isOpen`, `onClose`).
- * @returns {JSX.Element | null} Le rendu du formulaire d'enregistrement ou `null` si fermé.
- */
 export function NewSampleModal({ isOpen, onClose }: Props) {
-  // Extraction du catalogue de matériaux du laboratoire actif et des fonctions d'ajout depuis le store LIMS
-  const { materialTemplates, addSample, labSettings, activeLabId, allSamples } = useLims();
-  // Filtrage des modèles de matériaux actifs configurés dans le CMS
+  const { materialTemplates, addSample, labSettings, activeLabId } = useLims();
   const activeTemplates = materialTemplates.filter(t => t.isActive !== false);
   
   // États locaux du formulaire
-  /** Identifiant du modèle de matériau sélectionné dans le CMS */
   const [selectedTemplateId, setSelectedTemplateId] = useState(activeTemplates[0]?.id || '');
-  /** Nom du client ou donneur d'ordre */
   const [client, setClient] = useState('');
-  /** Référence du projet ou du chantier associé à l'échantillon */
   const [project, setProject] = useState('');
-  /** Niveau d'urgence de traitement ('basse' | 'normale' | 'haute') */
   const [priority, setPriority] = useState<Priority>('normale');
-  /** État physique macroscopique de la matière ('Massif' | 'Fritté' | 'Poudre' | 'Liquide') */
   const [materialState, setMaterialState] = useState<MaterialState>('Massif');
-  /** Valeurs des propriétés techniques dynamiques propres au gabarit de matériau choisi */
   const [customData, setCustomData] = useState<Record<string, any>>({});
-  /** Observations libres de l'opérateur à la réception (état de surface, emballage, etc.) */
   const [notes, setNotes] = useState('');
 
-  // Réinitialise le formulaire à chaque ouverture et synchronise le gabarit sur le laboratoire actif
-  useEffect(() => {
-    if (isOpen) {
-      const currentActive = materialTemplates.filter(t => t.isActive !== false);
-      setSelectedTemplateId(currentActive[0]?.id || '');
-      setClient('');
-      setProject('');
-      setPriority('normale');
-      setMaterialState('Massif');
-      setCustomData({});
-      setNotes('');
-    }
-  }, [isOpen, activeLabId, materialTemplates]);
-
-  // Court-circuit de rendu si la modale n'est pas ouverte
   if (!isOpen) return null;
 
-  // Récupération de la définition complète du modèle de matériau sélectionné
   const activeTemplate = activeTemplates.find(t => t.id === selectedTemplateId);
 
-/**
-   * Création et insertion de l'échantillon dans le catalogue.
-   * Génère un identifiant LIMS séquentiel unique (ex: ECH-MET-26-XXX) ainsi qu'un code-barres
-   * préfixé par les 3 premières lettres de la catégorie de matériau.
-   *
-   * @param {React.FormEvent} e - Événement de soumission du formulaire HTML.
+  /**
+   * Création et insertion de l'échantillon dans le catalogue
    */
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeTemplate) return;
 
-    // Préfixe d'identifiant paramétré pour le laboratoire actif et préfixe 3 lettres pour le code-barres
     const prefix = labSettings?.idPrefixes?.sample || 'ECH';
-    const barcodePrefix = activeTemplate.category.substring(0, 3).toUpperCase();
-
-    const uniqueSampleId = generateUniqueLimsId(
-      prefix,
-      allSamples.map(s => s.id)
-    );
-    const uniqueBarcode = generateUniqueBarcode(
-      allSamples.map(s => s.barcode),
-      barcodePrefix
-    );
-
-    // Construction de l'entité échantillon au statut initial 'receptionne'
     const newSample: Sample = {
-      id: uniqueSampleId,
+      // Génération de l'ID séquentiel
+      id: `${prefix}-${new Date().getFullYear().toString().slice(2)}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`,
       labId: activeLabId,
-      barcode: uniqueBarcode,
+      // Génération du code-barres basé sur la catégorie matière
+      barcode: `${activeTemplate.category.substring(0, 3).toUpperCase()}-${Math.floor(Math.random() * 100000).toString().padStart(6, '0')}`,
       templateId: activeTemplate.id,
       materialState,
       status: 'receptionne',
@@ -119,10 +71,7 @@ export function NewSampleModal({ isOpen, onClose }: Props) {
   };
 
   /**
-   * Enregistrement des valeurs des champs dynamiques dans le dictionnaire `customData`.
-   *
-   * @param {string} fieldId - Identifiant de la propriété du matériau.
-   * @param {any} value - Valeur saisie ou sélectionnée.
+   * Enregistrement des valeurs des champs dynamiques
    */
   const handleCustomDataChange = (fieldId: string, value: any) => {
     setCustomData(prev => ({ ...prev, [fieldId]: value }));
@@ -237,7 +186,6 @@ export function NewSampleModal({ isOpen, onClose }: Props) {
                         {field.name} {field.required && <span className="text-red-500">*</span>}
                       </label>
                       
-                      {/* Propriété de type liste déroulante ('select') */}
                       {field.type === 'select' ? (
                         <select 
                           required={field.required}
@@ -251,7 +199,6 @@ export function NewSampleModal({ isOpen, onClose }: Props) {
                           ))}
                         </select>
                       ) : field.type === 'multiselect' ? (
-                        /* Propriété à choix multiples sous forme de badges ('multiselect') */
                         <div className="flex flex-wrap gap-2 mt-2">
                           {field.options?.map(opt => {
                             const currentValues = customData[field.id] || [];
@@ -277,34 +224,13 @@ export function NewSampleModal({ isOpen, onClose }: Props) {
                             );
                           })}
                         </div>
-                      ) : field.type === 'boolean' ? (
-                        /* Propriété booléenne ('boolean') */
-                        <label className="flex items-center gap-2 text-sm text-slate-700 py-1.5">
-                          <input
-                            type="checkbox"
-                            checked={Boolean(customData[field.id])}
-                            onChange={e => handleCustomDataChange(field.id, e.target.checked)}
-                            className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
-                          />
-                          Oui
-                        </label>
-                      ) : field.type === 'date' ? (
-                        /* Propriété date ('date') */
-                        <input
-                          type="date"
-                          required={field.required}
-                          value={customData[field.id] || ''}
-                          onChange={e => handleCustomDataChange(field.id, e.target.value)}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500"
-                        />
                       ) : (
-                        /* Propriété numérique ou textuelle avec affichage optionnel de l'unité physique à droite */
                         <div className="relative">
                           <input 
                             type={field.type === 'number' ? 'number' : 'text'} 
                             required={field.required}
-                            value={customData[field.id] ?? ''} 
-                            onChange={e => handleCustomDataChange(field.id, field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)}
+                            value={customData[field.id] || ''} 
+                            onChange={e => handleCustomDataChange(field.id, field.type === 'number' ? Number(e.target.value) : e.target.value)}
                             className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500"
                           />
                           {field.unit && (

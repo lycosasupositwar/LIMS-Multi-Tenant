@@ -19,49 +19,31 @@ import { useLims } from '../store';
 import { Archive, AlertTriangle, Plus, Minus, Search, Droplet, Layers, Wrench, Settings, Trash2, X } from 'lucide-react';
 import { ConsumableCategory } from '../types';
 
-/**
- * Composant principal de la vue de gestion de l'inventaire des consommables de laboratoire.
- * Permet le suivi des quantités, des dates de péremption, des alertes de seuil critique,
- * ainsi que l'ajustement rapide ou l'ajout de nouvelles références.
- */
 export function Inventory() {
-  // Extraction de la liste des consommables et des actions de mutation depuis le store global LIMS
   const { consumables, updateConsumableStock, addConsumable, deleteConsumable } = useLims();
   
   // États de recherche et filtrage
-  /** Terme de recherche textuelle pour filtrer les consommables par nom, ID ou catégorie */
   const [searchTerm, setSearchTerm] = useState('');
-  /** Contrôle l'ouverture de la fenêtre modale d'ajout d'un nouveau produit */
   const [showNewModal, setShowNewModal] = useState(false);
-  /** Filtre par catégorie de consommable ('all' = toutes les catégories) */
-  const [selectedCategory, setSelectedCategory] = useState<'all' | ConsumableCategory>('all');
-
   
   // État du formulaire de création d'un article
-  /** État contrôlé des champs du formulaire de création d'un nouveau consommable */
   const [newConsumable, setNewConsumable] = useState({
     name: '',
     category: 'Chimie' as ConsumableCategory,
     stockLevel: 0,
     minThreshold: 0,
     unit: 'L',
-    expiryDate: '',
-    lotNumber: '',
-    supplier: '',
   });
 
-  // Filtrage combiné (nom, référence, catégorie) + filtre exact par catégorie sélectionnée
-  const filteredConsumables = consumables.filter(c =>
-    (selectedCategory === 'all' || c.category === selectedCategory) && (
-      c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.category.toLowerCase().includes(searchTerm.toLowerCase())
-    )
+  // Filtrage combiné (nom, référence, catégorie)
+  const filteredConsumables = consumables.filter(c => 
+    c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    c.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    c.category.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   /**
    * Retourne l'icône représentative de la catégorie de consommable
-   * @param category Catégorie du consommable ('Résine', 'Chimie', 'Abrasif', 'Équipement')
    */
   const getCategoryIcon = (category: string) => {
     switch(category) {
@@ -74,10 +56,6 @@ export function Inventory() {
 
   /**
    * Ajuste la quantité en stock avec arrondi au dixième (supporte les volumes liquides et masses)
-   * tout en empêchant un stock négatif (`Math.max(0, ...)`).
-   * @param id Identifiant du consommable
-   * @param currentLevel Quantité actuelle en stock
-   * @param amount Variation à appliquer (ex: -1, -0.1, +1 ou réassort)
    */
   const handleAdjust = (id: string, currentLevel: number, amount: number) => {
     const newLevel = Math.max(0, currentLevel + amount);
@@ -86,14 +64,13 @@ export function Inventory() {
   };
 
   /**
-   * Création d'une nouvelle référence d'inventaire à la soumission du formulaire modal.
-   * @param e Événement de soumission du formulaire
+   * Création d'une nouvelle référence d'inventaire
    */
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newConsumable.name || !newConsumable.unit) return;
     
-    const id = `csm-${crypto.randomUUID().slice(0, 8)}`;
+    const id = `csm-${Math.random().toString(36).substr(2, 6)}`;
     addConsumable({
       id,
       name: newConsumable.name,
@@ -101,10 +78,7 @@ export function Inventory() {
       stockLevel: Number(newConsumable.stockLevel),
       minThreshold: Number(newConsumable.minThreshold),
       unit: newConsumable.unit,
-      lastRestocked: new Date().toISOString(),
-      expiryDate: newConsumable.expiryDate || undefined,
-      lotNumber: newConsumable.lotNumber.trim() || undefined,
-      supplier: newConsumable.supplier.trim() || undefined
+      lastRestocked: new Date().toISOString()
     });
     
     setShowNewModal(false);
@@ -114,13 +88,10 @@ export function Inventory() {
       stockLevel: 0,
       minThreshold: 0,
       unit: 'L',
-      expiryDate: '',
-      lotNumber: '',
-      supplier: '',
     });
   };
 
-  // Calcul du nombre de références sous le seuil d'alerte (affiché dans le bandeau supérieur)
+  // Calcul du nombre de références sous le seuil d'alerte
   const lowStockCount = consumables.filter(c => c.stockLevel <= c.minThreshold).length;
 
   return (
@@ -163,16 +134,11 @@ export function Inventory() {
             />
           </div>
           <div className="flex gap-2 w-full sm:w-auto">
-             <select
-               value={selectedCategory}
-               onChange={(e) => setSelectedCategory(e.target.value as 'all' | ConsumableCategory)}
-               className="w-full sm:w-auto border-slate-300 rounded-md text-sm text-slate-700 focus:ring-blue-500"
-             >
+             <select className="w-full sm:w-auto border-slate-300 rounded-md text-sm text-slate-700 focus:ring-blue-500">
                <option value="all">Toutes les catégories</option>
-               <option value="Résine">Résines</option>
-               <option value="Chimie">Produits Chimiques</option>
-               <option value="Abrasif">Abrasifs</option>
-               <option value="Équipement">Équipements</option>
+               <option value="resine">Résines</option>
+               <option value="chimie">Produits Chimiques</option>
+               <option value="abrasif">Abrasifs</option>
              </select>
           </div>
         </div>
@@ -199,9 +165,7 @@ export function Inventory() {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex flex-col">
                         <span className="text-sm font-semibold text-slate-900">{item.name}</span>
-                        <span className="text-xs text-slate-500 font-mono mt-0.5">
-                          {item.id}{item.lotNumber ? ` • Lot: ${item.lotNumber}` : ''}{item.supplier ? ` • ${item.supplier}` : ''}
-                        </span>
+                        <span className="text-xs text-slate-500 font-mono mt-0.5">{item.id}</span>
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -231,27 +195,8 @@ export function Inventory() {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
-                      <div>Réassort : {new Date(item.lastRestocked).toLocaleDateString('fr-FR')}</div>
-                      {item.expiryDate && (
-                        (() => {
-                          // Normalisation à minuit (heure locale) pour un calcul de jours fiable
-                          const exp = new Date(item.expiryDate);
-                          exp.setHours(0, 0, 0, 0);
-                          const today = new Date();
-                          today.setHours(0, 0, 0, 0);
-                          const diffDays = Math.ceil((exp.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-                          const isExpired = diffDays < 0;
-                          const isSoon = diffDays <= 30 && !isExpired;
-
-                          return (
-                            <div className={`text-xs font-semibold mt-0.5 ${isExpired ? 'text-red-600' : isSoon ? 'text-amber-600' : 'text-slate-500'}`}>
-                              Péremption : {new Date(item.expiryDate).toLocaleDateString('fr-FR')} 
-                              {isExpired ? ' (Périmé)' : isSoon ? ` (Expire dans ${diffDays}j)` : ''}
-                            </div>
-                          );
-                        })()
-                      )}
-                    </td>                    
+                      {new Date(item.lastRestocked).toLocaleDateString('fr-FR')}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center space-x-2">
                         {/* Boutons d'ajustement unitaire & rapide */}
@@ -381,37 +326,6 @@ export function Inventory() {
                   value={newConsumable.minThreshold}
                   onChange={e => setNewConsumable({...newConsumable, minThreshold: Number(e.target.value)})}
                   className="w-full rounded-lg border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">N° de Lot (ISO 17025)</label>
-                  <input
-                    type="text"
-                    value={newConsumable.lotNumber}
-                    onChange={e => setNewConsumable({...newConsumable, lotNumber: e.target.value})}
-                    placeholder="Ex: LOT-2026-884"
-                    className="w-full rounded-lg border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Fournisseur</label>
-                  <input
-                    type="text"
-                    value={newConsumable.supplier}
-                    onChange={e => setNewConsumable({...newConsumable, supplier: e.target.value})}
-                    placeholder="Ex: Struers, Presi..."
-                    className="w-full rounded-lg border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Date de péremption (Optionnel)</label>
-                <input
-                  type="date"
-                  value={newConsumable.expiryDate}
-                  onChange={e => setNewConsumable({...newConsumable, expiryDate: e.target.value})}
-                  className="w-full rounded-lg border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
                 />
               </div>
 

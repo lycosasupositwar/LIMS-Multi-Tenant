@@ -8,6 +8,7 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
+import bcrypt from 'bcryptjs';
 
 /** Instance unique de connexion SQLite (pattern Singleton) */
 let db: DatabaseSync | null = null;
@@ -31,8 +32,8 @@ export function getDb(): DatabaseSync {
  * 2. Table `reset_tokens` : codes temporaires de récupération de mot de passe
  * 3. Table `account_requests` : formulaires de demandes d'accès soumis par les demandeurs
  * 
- * Note : La création du premier compte Super Administrateur s'effectue via `install.sh`
- * ou par insertion initiale dans la table `users`.
+ * Si la table `users` est vide lors du premier lancement, un jeu de comptes
+ * de démonstration représentatif de chaque profil métier est automatiquement injecté.
  */
 export async function initDb() {
   const database = getDb();
@@ -53,20 +54,6 @@ export async function initDb() {
   // Migration douce du schéma si la colonne labId est absente
   try {
     database.exec('ALTER TABLE users ADD COLUMN labId TEXT');
-  } catch (e) {
-    // La colonne existe déjà dans le schéma
-  }
-
-  // Migration douce du schéma pour les habilitations opérateurs (tableau JSON d'IDs d'AnalysisTemplate)
-  try {
-    database.exec('ALTER TABLE users ADD COLUMN qualifiedTemplateIds TEXT');
-  } catch (e) {
-    // La colonne existe déjà dans le schéma
-  }
-
-  // Migration douce du schéma pour les dates d'expiration d'habilitations (objet JSON { templateId: YYYY-MM-DD })
-  try {
-    database.exec('ALTER TABLE users ADD COLUMN qualificationExpiries TEXT');
   } catch (e) {
     // La colonne existe déjà dans le schéma
   }
@@ -92,6 +79,51 @@ export async function initDb() {
     )
   `);
 
+  // Comptes de référence représentatifs de l'architecture multi-laboratoires
+  const referenceUsers = [
+    // 1. Demandeur commun accédant aux deux laboratoires depuis une page unique
+    { id: 'usr-1', email: 'jean.dupont@entreprise.com', name: 'Jean Dupont', role: 'demandeur', company: 'AeroTech Industries', labId: null },
+    // 2. Équipe dédiée du Laboratoire 1 : Métallographie & Microstructure
+    { id: 'usr-2', email: 'sophie.martin@labo.com', name: 'Sophie Martin', role: 'analyste', company: 'Laboratoire Métallographie', labId: 'lab-metallurgie' },
+    { id: 'usr-3', email: 'marc.durand@labo.com', name: 'Dr. Marc Durand', role: 'manager', company: 'Laboratoire Métallographie', labId: 'lab-metallurgie' },
+    // 3. Équipe dédiée du Laboratoire 2 : Essais Mécaniques & Physico-Chimie
+    { id: 'usr-4', email: 'claire.leroy@labo-meca.com', name: 'Claire Leroy', role: 'analyste', company: 'Laboratoire Mécanique', labId: 'lab-mecanique' },
+    { id: 'usr-5', email: 'alexandre.roux@labo-meca.com', name: 'Alexandre Roux', role: 'manager', company: 'Laboratoire Mécanique', labId: 'lab-mecanique' },
+    // 4. Direction générale / Responsable Qualité multi-sites (accès global commutable)
+    { id: 'usr-6', email: 'directeur@groupelabo.com', name: 'Dr. Hélène Voisin', role: 'manager', company: 'Direction des Laboratoires', labId: 'all' },
+  ];
+
+  // Hachage sécurisé du mot de passe initial avec un sel de coût 10
+  const defaultPasswordHash = await bcrypt.hash('password123', 10);
+
+  // Insertion ou mise à niveau des comptes de test sans collision d'ID ou d'email
+  for (const refUser of referenceUsers) {
+    const existingByEmail = database.prepare('SELECT id, labId FROM users WHERE email = ?').get(refUser.email) as { id: string; labId: string } | undefined;
+    if (existingByEmail) {
+      database.prepare('UPDATE users SET name = ?, role = ?, company = ?, labId = ? WHERE email = ?').run(
+        refUser.name,
+        refUser.role,
+        refUser.company || '',
+        refUser.labId,
+        refUser.email
+      );
+    } else {
+      const existingById = database.prepare('SELECT id FROM users WHERE id = ?').get(refUser.id);
+      const safeId = existingById 
+        ? `usr-ref-${refUser.email.split('@')[0].replace(/[^a-zA-Z0-9]/g, '-')}` 
+        : refUser.id;
+
+      database.prepare('INSERT INTO users (id, email, passwordHash, name, role, company, labId) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+        safeId,
+        refUser.email,
+        defaultPasswordHash,
+        refUser.name,
+        refUser.role,
+        refUser.company || '',
+        refUser.labId
+      );
+    }
+  }
 }
 
 /**
@@ -142,39 +174,8 @@ export async function createUser(id: string, email: string, passwordHash: string
  */
 export async function getUsers() {
   const database = getDb();
-  const stmt = database.prepare('SELECT id, email, name, role, company, labId, qualifiedTemplateIds, qualificationExpiries FROM users');
-  return (stmt.all() as any[]).map(u => ({
-    ...u,
-    qualifiedTemplateIds: u.qualifiedTemplateIds ? (() => { try { return JSON.parse(u.qualifiedTemplateIds); } catch { return []; } })() : [],
-    qualificationExpiries: u.qualificationExpiries ? (() => { try { return JSON.parse(u.qualificationExpiries); } catch { return {}; } })() : {}
-  }));
-}
-
-/**
- * Met à jour la liste des modèles d'analyses (`AnalysisTemplate.id`) sur lesquels un opérateur est habilité,
- * ainsi que leurs éventuelles dates d'expiration (ISO 17025 §6.2).
- *
- * @param id Identifiant de l'utilisateur
- * @param templateIds Liste des identifiants de méthodes d'essais habilitées
- * @param expiries Dictionnaire optionnel `{ [templateId]: 'YYYY-MM-DD' }`
- */
-export async function updateUserQualifications(
-  id: string,
-  templateIds: string[],
-  expiries?: Record<string, string>
-) {
-  const database = getDb();
-  if (expiries !== undefined) {
-    const stmt = database.prepare('UPDATE users SET qualifiedTemplateIds = ?, qualificationExpiries = ? WHERE id = ?');
-    stmt.run(
-      JSON.stringify(Array.isArray(templateIds) ? templateIds : []),
-      JSON.stringify(expiries && typeof expiries === 'object' ? expiries : {}),
-      id
-    );
-  } else {
-    const stmt = database.prepare('UPDATE users SET qualifiedTemplateIds = ? WHERE id = ?');
-    stmt.run(JSON.stringify(Array.isArray(templateIds) ? templateIds : []), id);
-  }
+  const stmt = database.prepare('SELECT id, email, name, role, company, labId FROM users');
+  return stmt.all() as any[];
 }
 
 /**
@@ -259,16 +260,5 @@ export async function getAccountRequests() {
 export async function deleteAccountRequest(id: string) {
   const database = getDb();
   const stmt = database.prepare('DELETE FROM account_requests WHERE id = ?');
-  stmt.run(id);
-}
-
-/**
- * Supprime un utilisateur par son identifiant unique.
- *
- * @param id Identifiant utilisateur (ex: 'usr-1')
- */
-export async function deleteUser(id: string) {
-  const database = getDb();
-  const stmt = database.prepare('DELETE FROM users WHERE id = ?');
   stmt.run(id);
 }

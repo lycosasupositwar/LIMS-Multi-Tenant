@@ -8,73 +8,109 @@
  *    - Stepper interactif d'avancement (Réceptionné -> Préparation -> En essai -> Terminé)
  *    - Filiation et traçabilité (lien vers la demande parente et échantillons découpés)
  *    - Paramètres de métallographie (enrobage à chaud/froid, résine, polissage, attaque chimique Nital/Kalling)
- *    - Sous-échantillonnage et découpe (génération automatisée d'enrobages ENR-xx)
+ *    - Sous-échantillonnage et découpe (génération automatisée d'enrobages ENR-xx avec codes-barres Zebra dérivés)
  *    - Galerie micrographique et macrographique rattachée
  *    - Suivi des essais rattachés à l'échantillon
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLims } from '../store';
-import { Search, Filter, MoreHorizontal, FlaskConical, Link as LinkIcon, Image as ImageIcon, X, Plus } from 'lucide-react';
+import { Search, Filter, FlaskConical, Link as LinkIcon, Image as ImageIcon, X, Plus } from 'lucide-react';
 import { Sample, SampleStatus } from '../types';
 
+/**
+ * Composant principal de la vue de gestion des échantillons et de leur préparation métallographique.
+ * Gère l'état d'affichage de la liste, l'inspection détaillée d'un échantillon sélectionné,
+ * l'édition de la fiche d'enrobage/polissage et la découpe en sous-échantillons.
+ */
 export function Samples() {
-  const { 
-    samples, 
-    requests, 
-    materialTemplates, 
-    addSampleImage, 
-    updateSampleStatus, 
-    updateSampleMounting, 
-    globalSearchQuery, 
-    addSample, 
-    labSettings, 
-    analyses, 
-    analysisTemplates, 
-    currentUser 
+  // Extraction des données et actions métier depuis le store global LIMS
+  const {
+    samples,
+    requests,
+    materialTemplates,
+    addSampleImage,
+    updateSampleStatus,
+    updateSampleMounting,
+    updateSampleCustody,
+    consumables,
+    updateConsumableStock,
+    globalSearchQuery,
+    addSample,
+    labSettings,
+    analyses,
+    analysisTemplates,
+    currentUser
   } = useLims();
 
   // États locaux de recherche et de navigation
+  /** Terme de recherche locale saisi dans la barre de filtre de la vue */
   const [searchTerm, setSearchTerm] = useState('');
+  /** Filtre sur le statut d'avancement de l'échantillon ('all' pour tous les statuts) */
   const [filterStatus, setFilterStatus] = useState<SampleStatus | 'all'>('all');
+  /** Contrôle l'ouverture du menu déroulant de filtrage par statut */
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  /** Échantillon actuellement sélectionné pour affichage dans le volet latéral d'inspection */
   const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
-  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-  
+
+  // Maintient le volet latéral synchronisé avec le store global en cas de modification externe
+  useEffect(() => {
+    if (selectedSample) {
+      const fresh = samples.find(s => s.id === selectedSample.id);
+      if (fresh && fresh !== selectedSample) {
+        setSelectedSample(fresh);
+      } else if (!fresh) {
+        setSelectedSample(null);
+      }
+    }
+  }, [samples]);
+
   // États d'édition métallographique et découpe
+  /** Indique si le formulaire d'édition des paramètres d'enrobage est actif */
   const [isEditingMounting, setIsEditingMounting] = useState(false);
+  /** Données temporaires du formulaire de préparation métallographique (méthode, résine, diamètre, attaque) */
   const [mountingData, setMountingData] = useState<Sample['mountingInfo']>();
+  /** Contrôle l'affichage du mini-formulaire de création de sous-échantillons (découpe / enrobages) */
   const [isCreatingEnrobage, setIsCreatingEnrobage] = useState(false);
+  /** Nombre de sous-échantillons (enrobages) à générer lors d'une opération de découpe */
   const [enrobageCount, setEnrobageCount] = useState(2);
-  
+
   // Onglets actifs
+  /** Onglet actif dans le sous-panneau des analyses de l'échantillon ('pending' = en cours, 'history' = terminés) */
   const [activeAnalysisTab, setActiveAnalysisTab] = useState<'pending' | 'history'>('pending');
+  /** Onglet principal du tableau des échantillons ('pending' = actifs, 'history' = archivés/clôturés) */
   const [activeMainTab, setActiveMainTab] = useState<'pending' | 'history'>('pending');
 
   /**
-   * Filtrage combiné : recherche globale, recherche locale, statut et statut d'archivage
+   * Filtrage combiné : recherche globale (incluant barcode), recherche locale (incluant barcode), statut et statut d'archivage.
+   * Permet de croiser la barre de recherche globale de l'application avec les filtres locaux de la vue.
    */
   const filteredSamples = samples.filter(s => {
-    // Filtre global transverse
+    // Filtre global transverse ("Rechercher partout" depuis le Header)
     if (globalSearchQuery) {
       const q = globalSearchQuery.toLowerCase();
-      const matchesGlobal = s.id.toLowerCase().includes(q) || 
-                            s.client.toLowerCase().includes(q) ||
-                            s.project.toLowerCase().includes(q) ||
-                            (s.requestId && s.requestId.toLowerCase().includes(q));
+      const matchesGlobal =
+        s.id.toLowerCase().includes(q) ||
+        (s.barcode && s.barcode.toLowerCase().includes(q)) ||
+        s.client.toLowerCase().includes(q) ||
+        s.project.toLowerCase().includes(q) ||
+        (s.requestId && s.requestId.toLowerCase().includes(q));
       if (!matchesGlobal) return false;
     }
 
-    // Filtre textuel local
-    const matchesSearch = s.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
-      s.client.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      s.project.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (s.requestId && s.requestId.toLowerCase().includes(searchTerm.toLowerCase()));
-    
+    // Filtre textuel local (ID, code-barres Zebra, client, projet, ID de demande)
+    const qLocal = searchTerm.toLowerCase();
+    const matchesSearch =
+      s.id.toLowerCase().includes(qLocal) ||
+      (s.barcode && s.barcode.toLowerCase().includes(qLocal)) ||
+      s.client.toLowerCase().includes(qLocal) ||
+      s.project.toLowerCase().includes(qLocal) ||
+      (s.requestId && s.requestId.toLowerCase().includes(qLocal));
+
     // Filtre par statut spécifique
     const matchesFilter = filterStatus === 'all' || s.status === filterStatus;
-    
-    // Séparation en-cours / historique
+
+    // Séparation en-cours / historique (les échantillons 'termine' ou 'non_conforme' basculent dans l'historique)
     const isHistory = s.status === 'termine' || s.status === 'non_conforme';
     const matchesMainTab = activeMainTab === 'pending' ? !isHistory : isHistory;
 
@@ -82,7 +118,9 @@ export function Samples() {
   });
 
   /**
-   * Ajout d'une micrographie de démonstration pour illustrer le raccordement optique
+   * Ajout d'une micrographie de démonstration pour illustrer le raccordement optique.
+   * Met à jour à la fois le store global et la copie locale `selectedSample` pour un rafraîchissement immédiat.
+   * @param sampleId Identifiant de l'échantillon cible
    */
   const handleMockImageAdd = (sampleId: string) => {
     const mockImages = [
@@ -92,32 +130,35 @@ export function Samples() {
     ];
     const randomImg = mockImages[Math.floor(Math.random() * mockImages.length)];
     addSampleImage(sampleId, randomImg);
-    
+
+    // Synchronisation de l'état local du panneau latéral s'il affiche cet échantillon
     if (selectedSample && selectedSample.id === sampleId) {
-      setSelectedSample({...selectedSample, images: [...selectedSample.images, randomImg]});
+      setSelectedSample({ ...selectedSample, images: [...selectedSample.images, randomImg] });
     }
   };
 
   /**
-   * Rendu visuel du badge de statut d'échantillon
+   * Rendu visuel du badge de statut d'échantillon selon son étape dans le workflow métallographique.
+   * @param status Statut actuel de l'échantillon
    */
   const getStatusBadge = (status: SampleStatus) => {
     switch (status) {
-      case 'receptionne': 
+      case 'receptionne':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-800">Réceptionné</span>;
-      case 'en_preparation': 
+      case 'en_preparation':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">En préparation / Enrobage</span>;
-      case 'en_essai': 
+      case 'en_essai':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">En essai / Métallo</span>;
-      case 'termine': 
+      case 'termine':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">Terminé</span>;
-      case 'non_conforme': 
+      case 'non_conforme':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">Non Conforme</span>;
     }
   };
 
   /**
-   * Rendu du badge de priorité
+   * Rendu du badge de priorité (Urgente, Basse, Normale).
+   * @param priority Niveau de priorité de l'échantillon
    */
   const getPriorityBadge = (priority: string) => {
     if (priority === 'haute') return <span className="text-red-600 font-medium text-xs">Urgente</span>;
@@ -126,7 +167,8 @@ export function Samples() {
   };
 
   /**
-   * Formatage standard de date
+   * Formatage standard de date au format français (ex: 15 avr. 2026).
+   * @param dateString Chaîne ISO de la date à formater
    */
   const formatDate = (dateString: string) => {
     const d = new Date(dateString);
@@ -134,14 +176,16 @@ export function Samples() {
   };
 
   /**
-   * Résolution du libellé d'un modèle d'essai
+   * Résolution du libellé d'un modèle d'essai à partir de son identifiant.
+   * @param templateId Identifiant du modèle d'analyse (AnalysisTemplate)
    */
   const getAnalysisName = (templateId: string) => {
     return analysisTemplates.find(t => t.id === templateId)?.name || templateId;
   };
-  
+
   /**
-   * Résolution du libellé d'un modèle de matériau
+   * Résolution du libellé d'un modèle de matériau à partir de son identifiant.
+   * @param templateId Identifiant du modèle de matériau (MaterialTemplate)
    */
   const getTemplateName = (templateId: string) => {
     return materialTemplates.find(t => t.id === templateId)?.name || templateId;
@@ -161,13 +205,13 @@ export function Samples() {
         <div className={`bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col flex-1 overflow-hidden transition-all duration-300 ${selectedSample ? 'lg:w-2/3 hidden lg:flex' : 'w-full'}`}>
           {/* En-tête des onglets d'état */}
           <div className="flex border-b border-slate-200 bg-slate-50">
-            <button 
+            <button
               onClick={() => setActiveMainTab('pending')}
               className={`flex-1 py-3 text-sm font-bold ${activeMainTab === 'pending' ? 'bg-white text-blue-700 border-b-2 border-blue-600' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
             >
               Échantillons en cours
             </button>
-            <button 
+            <button
               onClick={() => setActiveMainTab('history')}
               className={`flex-1 py-3 text-sm font-bold ${activeMainTab === 'history' ? 'bg-white text-blue-700 border-b-2 border-blue-600' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
             >
@@ -183,14 +227,14 @@ export function Samples() {
               </div>
               <input
                 type="text"
-                placeholder="Rechercher (Nuance, Composition, Client)..."
+                placeholder="Rechercher (ID, Code-barres, Client, Projet)..."
                 className="block w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg leading-5 bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 sm:text-sm"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
             <div className="relative">
-              <button 
+              <button
                 onClick={() => setIsFilterOpen(!isFilterOpen)}
                 className={`flex items-center px-4 py-2 bg-white border ${filterStatus !== 'all' ? 'border-blue-500 text-blue-700 bg-blue-50' : 'border-slate-300 text-slate-700'} rounded-lg text-sm font-medium hover:bg-slate-50`}
               >
@@ -225,14 +269,21 @@ export function Samples() {
               </thead>
               <tbody className="bg-white divide-y divide-slate-200">
                 {filteredSamples.map((sample) => (
-                  <tr 
-                    key={sample.id} 
-                    onClick={() => setSelectedSample(sample)}
+                  <tr
+                    key={sample.id}
+                    onClick={() => {
+                      setSelectedSample(sample);
+                      setIsEditingMounting(false);
+                      setIsCreatingEnrobage(false);
+                    }}
                     className={`cursor-pointer transition-colors ${selectedSample?.id === sample.id ? 'bg-blue-50/50' : 'hover:bg-slate-50'}`}
                   >
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex flex-col">
-                        <span className="text-sm font-semibold text-slate-900">{sample.id}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-slate-900">{sample.id}</span>
+                          {getPriorityBadge(sample.priority)}
+                        </div>
                         <span className="text-xs text-slate-500 font-mono mt-0.5">{sample.barcode}</span>
                       </div>
                     </td>
@@ -264,36 +315,36 @@ export function Samples() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       {sample.status === 'receptionne' && (
-                        <button 
-                          onClick={(e) => { 
-                            e.stopPropagation(); 
-                            updateSampleStatus(sample.id, 'en_preparation'); 
-                            if (selectedSample?.id === sample.id) setSelectedSample({...selectedSample, status: 'en_preparation'}); 
-                          }} 
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            updateSampleStatus(sample.id, 'en_preparation');
+                            if (selectedSample?.id === sample.id) setSelectedSample({ ...selectedSample, status: 'en_preparation' });
+                          }}
                           className="text-xs bg-amber-100 text-amber-800 hover:bg-amber-200 px-3 py-1.5 rounded-md font-medium transition-colors shadow-sm"
                         >
                           Préparer
                         </button>
                       )}
                       {sample.status === 'en_preparation' && (
-                        <button 
-                          onClick={(e) => { 
-                            e.stopPropagation(); 
-                            updateSampleStatus(sample.id, 'en_essai'); 
-                            if (selectedSample?.id === sample.id) setSelectedSample({...selectedSample, status: 'en_essai'}); 
-                          }} 
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            updateSampleStatus(sample.id, 'en_essai');
+                            if (selectedSample?.id === sample.id) setSelectedSample({ ...selectedSample, status: 'en_essai' });
+                          }}
                           className="text-xs bg-blue-100 text-blue-800 hover:bg-blue-200 px-3 py-1.5 rounded-md font-medium transition-colors shadow-sm"
                         >
                           Passer en essai
                         </button>
                       )}
                       {sample.status === 'en_essai' && (
-                        <button 
-                          onClick={(e) => { 
-                            e.stopPropagation(); 
-                            updateSampleStatus(sample.id, 'termine'); 
-                            if (selectedSample?.id === sample.id) setSelectedSample({...selectedSample, status: 'termine'}); 
-                          }} 
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            updateSampleStatus(sample.id, 'termine');
+                            if (selectedSample?.id === sample.id) setSelectedSample({ ...selectedSample, status: 'termine' });
+                          }}
                           className="text-xs bg-emerald-100 text-emerald-800 hover:bg-emerald-200 px-3 py-1.5 rounded-md font-medium transition-colors shadow-sm"
                         >
                           Terminer
@@ -313,13 +364,13 @@ export function Samples() {
         {/* Volet latéral d'inspection détaillée */}
         {selectedSample && (
           <div className="w-full lg:w-1/3 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden animate-in slide-in-from-right-4">
-            
+
             <div className="bg-white border-b border-slate-200 p-4">
               <div className="flex justify-between items-start mb-4">
                 <div>
                   <h3 className="font-display font-bold text-lg text-slate-900">Détails Échantillon</h3>
                   <p className="text-xs text-slate-500 font-mono mt-0.5">
-                    {selectedSample.id} 
+                    {selectedSample.id} &bull; {selectedSample.barcode}
                     {selectedSample.parentSampleId && (
                       <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-800 text-[10px] rounded-md">
                         Découpé de {selectedSample.parentSampleId}
@@ -327,15 +378,15 @@ export function Samples() {
                     )}
                   </p>
                 </div>
-                <button 
-                  onClick={() => setSelectedSample(null)} 
+                <button
+                  onClick={() => setSelectedSample(null)}
                   className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-md transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
-              {/* Stepper de progression normé */}
+              {/* Stepper de progression normé : permet de faire avancer ou reculer le statut de l'échantillon */}
               <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
                 <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Progression / Statut</h4>
                 <div className="flex items-center gap-1">
@@ -348,23 +399,28 @@ export function Samples() {
                     };
                     const statusOrder = ['receptionne', 'en_preparation', 'en_essai', 'termine'];
                     const currentIndex = statusOrder.indexOf(selectedSample.status);
-                    
+
                     let stateClass = "bg-slate-200 text-slate-500 border border-slate-300";
                     let isClickable = false;
-                    
+
+                    // Détermination du style et de l'interactivité selon la position par rapport à l'étape courante
                     if (selectedSample.status === 'non_conforme') {
                       stateClass = "bg-red-50 border border-red-200 text-red-500";
                     } else if (index < currentIndex) {
+                      // Étapes passées : cliquables pour revenir en arrière
                       stateClass = "bg-blue-100 border border-blue-200 text-blue-700";
                       isClickable = true;
                     } else if (index === currentIndex) {
+                      // Étape actuelle
                       stateClass = "bg-blue-600 border border-blue-600 text-white font-bold shadow-sm";
                     } else if (index === currentIndex + 1) {
+                      // Prochaine étape logique : mise en évidence en pointillés
                       stateClass = "bg-white border border-blue-300 text-blue-600 hover:bg-blue-50 cursor-pointer border-dashed";
                       isClickable = true;
                     }
 
-                    if (currentUser?.role === 'manager' && index !== currentIndex) {
+                    // Les responsables (manager / admin) peuvent sauter directement à n'importe quelle étape
+                    if ((currentUser?.role === 'manager' || currentUser?.role === 'admin') && index !== currentIndex) {
                       isClickable = true;
                       if (!stateClass.includes('hover:')) {
                         stateClass += " hover:bg-slate-100 cursor-pointer";
@@ -373,11 +429,11 @@ export function Samples() {
 
                     return (
                       <React.Fragment key={step}>
-                        <button 
+                        <button
                           onClick={() => {
                             if (isClickable) {
                               updateSampleStatus(selectedSample.id, step as SampleStatus);
-                              setSelectedSample({...selectedSample, status: step as SampleStatus});
+                              setSelectedSample({ ...selectedSample, status: step as SampleStatus });
                             }
                           }}
                           disabled={!isClickable && index !== currentIndex}
@@ -390,12 +446,13 @@ export function Samples() {
                     );
                   })}
                 </div>
+                {/* Action rapide pour déclarer une non-conformité à réception ou en cours de préparation */}
                 {selectedSample.status !== 'non_conforme' && selectedSample.status !== 'termine' && (
                   <div className="mt-2 text-right">
-                    <button 
+                    <button
                       onClick={() => {
                         updateSampleStatus(selectedSample.id, 'non_conforme');
-                        setSelectedSample({...selectedSample, status: 'non_conforme'});
+                        setSelectedSample({ ...selectedSample, status: 'non_conforme' });
                       }}
                       className="text-[10px] text-red-500 hover:text-red-700 hover:underline font-medium"
                     >
@@ -403,18 +460,19 @@ export function Samples() {
                     </button>
                   </div>
                 )}
+                {/* Réhabilitation d'un échantillon non conforme vers l'état initial 'receptionne' */}
                 {selectedSample.status === 'non_conforme' && (
-                   <div className="mt-2 text-right">
-                   <button 
-                     onClick={() => {
-                       updateSampleStatus(selectedSample.id, 'receptionne');
-                       setSelectedSample({...selectedSample, status: 'receptionne'});
-                     }}
-                     className="text-[10px] text-slate-500 hover:text-slate-700 hover:underline font-medium"
-                   >
-                     Annuler la non-conformité
-                   </button>
-                 </div>
+                  <div className="mt-2 text-right">
+                    <button
+                      onClick={() => {
+                        updateSampleStatus(selectedSample.id, 'receptionne');
+                        setSelectedSample({ ...selectedSample, status: 'receptionne' });
+                      }}
+                      className="text-[10px] text-slate-500 hover:text-slate-700 hover:underline font-medium"
+                    >
+                      Annuler la non-conformité
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -440,38 +498,107 @@ export function Samples() {
                   <div><span className="block text-slate-500 text-xs">Client</span><span className="font-medium text-slate-900 truncate block">{selectedSample.client}</span></div>
                   <div><span className="block text-slate-500 text-xs">Projet</span><span className="font-medium text-slate-900 truncate block">{selectedSample.project}</span></div>
                   <div><span className="block text-slate-500 text-xs">Date de réception</span><span className="font-medium text-slate-900">{formatDate(selectedSample.receivedAt)}</span></div>
+                  <div><span className="block text-slate-500 text-xs">Priorité</span><span className="font-medium">{getPriorityBadge(selectedSample.priority)}</span></div>
                   <div className="col-span-2"><span className="block text-slate-500 text-xs">Type de Matériau</span><span className="font-medium text-slate-900">{getTemplateName(selectedSample.templateId)} - {selectedSample.materialState}</span></div>
                 </div>
               </section>
 
-              {/* Attributs Métier Personnalisés (CMS) */}
+              {/* Attributs Métier Personnalisés (CMS) reliés au MaterialTemplate */}
               <section>
                 <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Propriétés Matériau</h4>
                 <div className="space-y-2">
-                  {Object.entries(selectedSample.customData).map(([key, value]) => (
-                    <div key={key} className="flex justify-between py-2 border-b border-slate-100 last:border-0 text-sm">
-                      <span className="text-slate-600 capitalize">{key.replace('_', ' ')}</span>
-                      <span className="font-medium text-slate-900 text-right">
-                        {Array.isArray(value) ? (
-                          <div className="flex flex-wrap gap-1.5 justify-end mt-1 sm:mt-0">
-                            {value.map(v => (
-                              <span key={v} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded text-xs font-medium">
-                                {v}
-                              </span>
-                            ))}
+                  {(() => {
+                    const matTemplate = materialTemplates.find(t => t.id === selectedSample.templateId);
+                    const templateFields = matTemplate?.fields || [];
+                    const customData = selectedSample.customData || {};
+
+                    // Si l'échantillon est lié à une demande, on peut aussi récupérer en secours les propriétés dans la demande parente
+                    const parentRequest = selectedSample.requestId
+                      ? requests.find(r => r.id === selectedSample.requestId)
+                      : undefined;
+
+                    if (templateFields.length > 0) {
+                      return templateFields.map(field => {
+                        let value = customData[field.id] !== undefined ? customData[field.id] : customData[field.name];
+
+                        // Fallback automatique depuis la demande parente si l'échantillon avait été généré avec un customData vide
+                        if ((value === undefined || value === '') && parentRequest?.customData && matTemplate) {
+                          for (const [k, v] of Object.entries(parentRequest.customData)) {
+                            if (k.endsWith('__material_properties') && v && typeof v === 'object') {
+                              const propsForMat = (v as any)[matTemplate.id];
+                              if (propsForMat) {
+                                const candidate = propsForMat[field.id] ?? propsForMat[field.name];
+                                if (candidate !== undefined) {
+                                  value = candidate;
+                                  break;
+                                }
+                              }
+                            }
+                          }
+                        }
+
+                        return (
+                          <div key={field.id} className="flex justify-between py-2 border-b border-slate-100 last:border-0 text-sm">
+                            <span className="text-slate-600">
+                              {field.name} {field.unit ? <span className="text-xs text-slate-400">({field.unit})</span> : ''}
+                            </span>
+                            <span className="font-medium text-slate-900 text-right">
+                              {value === undefined || value === null || value === '' ? (
+                                <span className="text-slate-400 italic text-xs">Non renseigné</span>
+                              ) : Array.isArray(value) ? (
+                                <div className="flex flex-wrap gap-1.5 justify-end mt-1 sm:mt-0">
+                                  {value.map(v => (
+                                    <span key={v} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded text-xs font-medium">
+                                      {v}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : typeof value === 'boolean' ? (
+                                value ? 'Oui' : 'Non'
+                              ) : (
+                                `${value}${field.unit ? ` ${field.unit}` : ''}`
+                              )}
+                            </span>
                           </div>
-                        ) : typeof value === 'boolean' ? (
-                          value ? 'Oui' : 'Non'
-                        ) : (
-                          value
-                        )}
-                      </span>
-                    </div>
-                  ))}
+                        );
+                      });
+                    }
+
+                    // Cas où le MaterialTemplate ne définit pas de champs mais que customData possède des clés libres
+                    const entries = Object.entries(customData);
+                    if (entries.length === 0) {
+                      return (
+                        <div className="text-sm text-slate-500 italic bg-slate-50 p-3 rounded-lg border border-slate-100">
+                          Aucune propriété définie pour ce matériau.
+                        </div>
+                      );
+                    }
+
+                    return entries.map(([key, value]) => (
+                      <div key={key} className="flex justify-between py-2 border-b border-slate-100 last:border-0 text-sm">
+                        <span className="text-slate-600 capitalize">{key.replace('_', ' ')}</span>
+                        <span className="font-medium text-slate-900 text-right">
+                          {Array.isArray(value) ? (
+                            <div className="flex flex-wrap gap-1.5 justify-end mt-1 sm:mt-0">
+                              {value.map(v => (
+                                <span key={v} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded text-xs font-medium">
+                                  {v}
+                                </span>
+                              ))}
+                            </div>
+                          ) : typeof value === 'boolean' ? (
+                            value ? 'Oui' : 'Non'
+                          ) : (
+                            value
+                          )}
+                        </span>
+                      </div>
+                    ));
+                  })()}
                 </div>
               </section>
 
-              {/* Fiche de Préparation Métallographique */}
+              {/* Fiche de Préparation Métallographique : saisie et affichage des paramètres d'enrobage, polissage et attaque chimique */}
               <section>
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Préparation Métallographique</h4>
@@ -481,14 +608,15 @@ export function Samples() {
                       <button onClick={() => {
                         if (mountingData) {
                           updateSampleMounting(selectedSample.id, mountingData);
-                          setSelectedSample({...selectedSample, mountingInfo: mountingData});
+                          setSelectedSample({ ...selectedSample, mountingInfo: mountingData });
                         }
                         setIsEditingMounting(false);
                       }} className="text-xs text-blue-600 font-medium hover:underline">Sauvegarder</button>
                     </div>
                   ) : (
                     <button onClick={() => {
-                      setMountingData(selectedSample.mountingInfo || { method: 'A chaud', resinType: '', diameter: 30, polishingSteps: [], etching: '' });
+                      // Initialisation des valeurs par défaut lors de l'ouverture du mode édition
+                      setMountingData(selectedSample.mountingInfo || { method: 'Enrobage à chaud' as any, resinType: '', diameter: 30, polishingSteps: [], etching: '' });
                       setIsEditingMounting(true);
                     }} className="text-xs text-blue-600 font-medium hover:underline">Modifier</button>
                   )}
@@ -497,22 +625,33 @@ export function Samples() {
                   <div className="bg-slate-50 rounded-lg p-3 border border-slate-200 text-sm space-y-3">
                     <div>
                       <label className="block text-xs font-medium text-slate-700 mb-1">Méthode</label>
-                      <select value={mountingData.method} onChange={e => setMountingData({...mountingData, method: e.target.value as any})} className="w-full text-sm border-slate-300 rounded px-2 py-1">
-                        <option value="A chaud">A chaud</option>
-                        <option value="A froid">A froid</option>
+                      <select value={mountingData.method} onChange={e => setMountingData({ ...mountingData, method: e.target.value as any })} className="w-full text-sm border-slate-300 rounded px-2 py-1">
+                        <option value="Enrobage à chaud">Enrobage à chaud</option>
+                        <option value="Enrobage à froid">Enrobage à froid</option>
+                        <option value="Aucun">Aucun</option>
                       </select>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-700 mb-1">Résine</label>
-                      <input type="text" value={mountingData.resinType} onChange={e => setMountingData({...mountingData, resinType: e.target.value})} className="w-full text-sm border-slate-300 rounded px-2 py-1" placeholder="Ex: Phénolique..." />
+                      <input type="text" value={mountingData.resinType} onChange={e => setMountingData({ ...mountingData, resinType: e.target.value })} className="w-full text-sm border-slate-300 rounded px-2 py-1" placeholder="Ex: Phénolique..." />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-700 mb-1">Diamètre (mm)</label>
-                      <input type="number" value={mountingData.diameter} onChange={e => setMountingData({...mountingData, diameter: Number(e.target.value)})} className="w-full text-sm border-slate-300 rounded px-2 py-1" />
+                      <input type="number" value={mountingData.diameter} onChange={e => setMountingData({ ...mountingData, diameter: Number(e.target.value) })} className="w-full text-sm border-slate-300 rounded px-2 py-1" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">Étapes de polissage (séparées par des virgules)</label>
+                      <input
+                        type="text"
+                        value={(mountingData.polishingSteps || []).join(', ')}
+                        onChange={e => setMountingData({ ...mountingData, polishingSteps: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+                        className="w-full text-sm border-slate-300 rounded px-2 py-1"
+                        placeholder="Ex: SiC 320, SiC 800, Diamant 3µm"
+                      />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-700 mb-1">Attaque chimique</label>
-                      <input type="text" value={mountingData.etching || ''} onChange={e => setMountingData({...mountingData, etching: e.target.value})} className="w-full text-sm border-slate-300 rounded px-2 py-1" placeholder="Ex: Nital 3%..." />
+                      <input type="text" value={mountingData.etching || ''} onChange={e => setMountingData({ ...mountingData, etching: e.target.value })} className="w-full text-sm border-slate-300 rounded px-2 py-1" placeholder="Ex: Nital 3%..." />
                     </div>
                   </div>
                 ) : selectedSample.mountingInfo ? (
@@ -529,12 +668,118 @@ export function Samples() {
                 )}
               </section>
 
+              {/* Chaîne de Garde, Localisation Physique, Fin de Vie & Lots de Consommables (ISO 17025) */}
+              <section className="space-y-3 border-t border-slate-200 pt-4">
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Chaîne de Garde & Stockage Physique</h4>
+                <div className="bg-slate-50 rounded-lg p-3 border border-slate-200 space-y-2.5 text-xs">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1">Emplacement physique</label>
+                      <input
+                        type="text"
+                        value={selectedSample.storageLocation || ''}
+                        onChange={e => updateSampleCustody(selectedSample.id, { storageLocation: e.target.value })}
+                        placeholder="Ex: Armoire B / Tiroir 3"
+                        className="w-full px-2 py-1 border border-slate-300 rounded bg-white text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1">Conservation jusqu'au</label>
+                      <input
+                        type="date"
+                        value={selectedSample.retentionUntil || ''}
+                        onChange={e => updateSampleCustody(selectedSample.id, { retentionUntil: e.target.value })}
+                        className="w-full px-2 py-1 border border-slate-300 rounded bg-white text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Lots de consommables utilisés sur l'échantillon */}
+                  <div>
+                    <label className="block font-semibold text-slate-600 mb-1">Traçabilité lots de consommables (résines / réactifs)</label>
+                    <select
+                      defaultValue=""
+                      onChange={e => {
+                        const cons = consumables.find(c => c.id === e.target.value);
+                        if (!cons) return;
+                        const nextLots = [
+                          ...(selectedSample.consumableLotsUsed || []),
+                          { consumableId: cons.id, name: cons.name, lotNumber: cons.lotNumber, usedAt: new Date().toISOString() }
+                        ];
+                        updateSampleCustody(selectedSample.id, { consumableLotsUsed: nextLots });
+                        if (cons.stockLevel > 0) {
+                          updateConsumableStock(cons.id, Math.max(0, Math.round((cons.stockLevel - 0.1) * 10) / 10));
+                        }
+                        e.target.value = '';
+                      }}
+                      className="w-full px-2 py-1 border border-slate-300 rounded bg-white text-xs"
+                    >
+                      <option value="">+ Associer un lot consommable (déstocke 0.1 unité)...</option>
+                      {consumables.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}{c.lotNumber ? ` [Lot: ${c.lotNumber}]` : ''} ({c.stockLevel} {c.unit})
+                        </option>
+                      ))}
+                    </select>
+                    {(selectedSample.consumableLotsUsed || []).length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {(selectedSample.consumableLotsUsed || []).map((u, idx) => (
+                          <span key={idx} className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px]">
+                            {u.name}{u.lotNumber ? ` (${u.lotNumber})` : ''}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Fin de vie tracée : Restitution client ou Destruction */}
+                  {selectedSample.disposalDate ? (
+                    <div className="p-2 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px]">
+                      <strong>Fin de vie enregistrée :</strong> {selectedSample.disposalMethod === 'restitution' ? 'Restitué au client' : 'Détruit / Mis au rebut'} le {new Date(selectedSample.disposalDate).toLocaleDateString('fr-FR')} par {selectedSample.disposalBy || 'Opérateur'}.
+                    </div>
+                  ) : (
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!confirm(`Confirmer la restitution client de ${selectedSample.id} ?`)) return;
+                          updateSampleCustody(selectedSample.id, {
+                            status: 'restitue',
+                            disposalDate: new Date().toISOString(),
+                            disposalMethod: 'restitution',
+                            disposalBy: currentUser?.name || 'Opérateur'
+                          });
+                        }}
+                        className="flex-1 py-1.5 px-2 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded font-semibold hover:bg-emerald-100"
+                      >
+                        Restituer au client
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!confirm(`Confirmer la destruction tracée de ${selectedSample.id} ?`)) return;
+                          updateSampleCustody(selectedSample.id, {
+                            status: 'detruit',
+                            disposalDate: new Date().toISOString(),
+                            disposalMethod: 'destruction',
+                            disposalBy: currentUser?.name || 'Opérateur'
+                          });
+                        }}
+                        className="flex-1 py-1.5 px-2 bg-red-50 text-red-700 border border-red-200 rounded font-semibold hover:bg-red-100"
+                      >
+                        Détruire (Rebut)
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </section>
+
               {/* Galerie Optique & Microscopie */}
               <section>
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Imagerie (Macro/Micro)</h4>
                   <button onClick={() => handleMockImageAdd(selectedSample.id)} className="text-xs text-blue-600 font-medium flex items-center hover:underline">
-                    <Plus className="w-3 h-3 mr-1"/> Ajouter
+                    <Plus className="w-3 h-3 mr-1" /> Ajouter
                   </button>
                 </div>
                 {selectedSample.images.length > 0 ? (
@@ -553,18 +798,18 @@ export function Samples() {
                 )}
               </section>
             </div>
-            
-            {/* Pied de panneau : Découpe en sous-échantillons et Essais rattachés */}
+
+            {/* Pied de panneau : Découpe en sous-échantillons (génération de plots enrobés ENR-xx) et Essais rattachés */}
             <div className="p-4 border-t border-slate-200 bg-slate-50 space-y-3">
               {isCreatingEnrobage ? (
                 <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100">
                   <label className="block text-xs font-semibold text-indigo-900 mb-2">Nombre d'enrobages à créer :</label>
                   <div className="flex gap-2">
-                    <input 
-                      type="number" 
-                      min="1" 
+                    <input
+                      type="number"
+                      min="1"
                       max="20"
-                      value={enrobageCount} 
+                      value={enrobageCount}
                       onChange={(e) => setEnrobageCount(parseInt(e.target.value) || 1)}
                       className="w-20 px-2 py-1.5 border border-indigo-200 rounded-md text-sm font-medium focus:ring-indigo-500 focus:border-indigo-500"
                     />
@@ -572,14 +817,21 @@ export function Samples() {
                       onClick={() => {
                         const num = enrobageCount;
                         if (num > 0) {
+                          // Préfixe configurable dans labSettings (par défaut 'ENR') pour les sous-échantillons
                           const prefix = labSettings?.idPrefixes?.subSample || 'ENR';
-                          const parentIdBase = selectedSample.id.split('-').slice(1).join('-');
+                          const parentIdBase = selectedSample.id.includes('-')
+                            ? selectedSample.id.split('-').slice(1).join('-')
+                            : selectedSample.id;
+                          // Offset calculé depuis les sous-échantillons existants pour éviter toute collision d'ID / code-barres
+                          const existingOffset = samples.filter(s => s.parentSampleId === selectedSample.id).length;
                           for (let i = 1; i <= num; i++) {
-                            const newId = `${prefix}-${parentIdBase}-${i}`;
+                            const seq = existingOffset + i;
+                            const newId = `${prefix}-${parentIdBase}-${seq}`;
+                            // Création du sous-échantillon avec filiation (parentSampleId) et code-barres Zebra dérivé
                             const subSample = {
                               ...selectedSample,
                               id: newId,
-                              barcode: `${selectedSample.barcode}-${i}`,
+                              barcode: `${selectedSample.barcode}-${seq}`,
                               parentSampleId: selectedSample.id,
                               images: [],
                               mountingInfo: undefined,
@@ -595,7 +847,7 @@ export function Samples() {
                     >
                       Confirmer
                     </button>
-                    <button 
+                    <button
                       onClick={() => setIsCreatingEnrobage(false)}
                       className="px-3 py-1.5 bg-white border border-slate-300 text-slate-700 rounded-md text-sm font-medium hover:bg-slate-50 transition-colors"
                     >
@@ -611,17 +863,18 @@ export function Samples() {
                   <Plus className="w-4 h-4 mr-2" /> Créer Enrobages (Découpe)
                 </button>
               )}
-              
+
+              {/* Liste des essais rattachés à l'échantillon (affichée dès que l'échantillon est en essai ou terminé) */}
               {(selectedSample.status === 'en_essai' || selectedSample.status === 'termine') && (
                 <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden flex flex-col mt-4">
                   <div className="flex border-b border-slate-200">
-                    <button 
+                    <button
                       onClick={() => setActiveAnalysisTab('pending')}
                       className={`flex-1 py-2 text-xs font-bold ${activeAnalysisTab === 'pending' ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
                     >
                       Essais en cours
                     </button>
-                    <button 
+                    <button
                       onClick={() => setActiveAnalysisTab('history')}
                       className={`flex-1 py-2 text-xs font-bold ${activeAnalysisTab === 'history' ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-600' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
                     >
@@ -631,9 +884,9 @@ export function Samples() {
                   <div className="p-0 bg-white max-h-48 overflow-y-auto">
                     {(() => {
                       const sampleAnalyses = analyses.filter(a => a.sampleId === selectedSample.id);
-                      const displayed = activeAnalysisTab === 'pending' 
-                        ? sampleAnalyses.filter(a => a.status !== 'terminee')
-                        : sampleAnalyses.filter(a => a.status === 'terminee');
+                      const displayed = activeAnalysisTab === 'pending'
+                        ? sampleAnalyses.filter(a => a.status !== 'termine' && a.status !== 'valide')
+                        : sampleAnalyses.filter(a => a.status === 'termine' || a.status === 'valide');
 
                       if (displayed.length === 0) {
                         return (
@@ -642,7 +895,7 @@ export function Samples() {
                           </div>
                         );
                       }
-                      
+
                       return displayed.map((analysis) => (
                         <div key={analysis.id} className="p-3 border-b border-slate-100 last:border-b-0 hover:bg-slate-50 flex justify-between items-center">
                           <div>
@@ -650,11 +903,15 @@ export function Samples() {
                             <div className="text-[10px] text-slate-500 font-mono mt-0.5">{analysis.id}</div>
                           </div>
                           <div>
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${
-                              analysis.status === 'terminee' ? 'bg-emerald-100 text-emerald-800' : 
-                              analysis.status === 'en_cours' ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-800'
-                            }`}>
-                              {analysis.status === 'terminee' ? 'Terminée' : analysis.status === 'en_cours' ? 'En cours' : 'À planifier'}
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${analysis.status === 'valide' || analysis.status === 'termine' ? 'bg-emerald-100 text-emerald-800' :
+                                analysis.status === 'En Cours' ? 'bg-blue-100 text-blue-800' :
+                                  analysis.status === 'a_valider' ? 'bg-amber-100 text-amber-800' :
+                                    analysis.status === 'rejete' ? 'bg-red-100 text-red-800' : 'bg-slate-100 text-slate-800'
+                              }`}>
+                              {analysis.status === 'valide' || analysis.status === 'termine' ? 'Terminé' :
+                                analysis.status === 'En Cours' ? 'En cours' :
+                                  analysis.status === 'a_valider' ? 'À valider' :
+                                    analysis.status === 'rejete' ? 'Refusé' : 'Planifié'}
                             </span>
                           </div>
                         </div>

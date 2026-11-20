@@ -1,31 +1,33 @@
 /**
  * Fenêtre Modale de Visualisation et d'Export de Rapport d'Essai
  * 
- * Ce composant prend en charge la génération et l'affichage des rapports finaux :
+ * Ce composant prend en charge la génération, l'affichage et l'archivage serveur des rapports finaux :
  * 1. Mode Modèle Word (.docx) :
  *    - Remplacement des variables contextuelles avec Docxtemplater
  *    - Conversion côté serveur en PDF haute fidélité via LibreOffice
- *    - Affichage dans le visualiseur PDF intégré (PdfViewer)
- *    - Téléchargement du DOCX fusionné ou du PDF converti
- * 2. Mode Modèle Standard HTML :
- *    - Rendu d'une mise en page A4 normée (En-tête laboratoire, informations projet,
+ *    - Enregistrement automatique dans le dossier sécurisé storage/reports/
+ * 2. Mode Modèle Standard HTML A4 :
+ *    - Rendu de la mise en page A4 normée (En-tête laboratoire, informations projet,
  *      matrice des échantillons, résultats détaillés, clichés microstructures, conclusion)
- *    - Export PDF via html2pdf et impression directe
+ *    - Capture haute définition (dom-to-image-more + jsPDF) et sauvegarde automatique
+ *      dans le dossier serveur storage/reports/ pour mise à disposition du demandeur.
  */
 
 import React, { useRef, useEffect, useState } from "react";
-import { X, Printer, Download, CheckCircle2 } from "lucide-react";
+import { X, Printer, Download, CheckCircle2, AlertTriangle } from "lucide-react";
 import { Report, AnalysisRequest, Sample, Analysis, AnalysisTemplate, User } from "../types";
 import { useLims } from "../store";
-import html2pdf from "html2pdf.js";
+import domtoimage from "dom-to-image-more";
+import { jsPDF } from "jspdf";
 // @ts-ignore
 import Docxtemplater from "docxtemplater";
 // @ts-ignore
 import PizZip from "pizzip";
 import { PdfViewer } from "./PdfViewer";
+import { createDocxImageModule } from "../utils/docxImageModule";
 
 /**
- * Propriétés attendues par le composant de prévisualisation de rapport
+ * Propriétés de la modale d'aperçu et d'export de rapport d'analyse
  */
 interface ReportPreviewModalProps {
   /** État de visibilité de la modale */
@@ -44,28 +46,58 @@ interface ReportPreviewModalProps {
   analysisTemplates: AnalysisTemplate[];
   /** Liste des utilisateurs (pour la résolution des noms demandeur/technicien) */
   users: User[];
+  /** Déclenche automatiquement le téléchargement PDF à l'ouverture (optionnel) */
+  autoDownload?: boolean;
+  /** Callback appelé une fois le téléchargement automatique lancé */
+  onAutoDownloadComplete?: () => void;
 }
 
-export function ReportPreviewModal({ 
-  isOpen, 
-  onClose, 
-  report, 
-  requests, 
-  samples, 
-  analyses, 
-  analysisTemplates, 
-  users 
+/**
+ * Composant modal de prévisualisation, d'impression, de téléchargement (PDF/DOCX)
+ * et d'archivage automatique côté serveur des rapports d'essais LIMS.
+ *
+ * @param {ReportPreviewModalProps} props - Les propriétés du composant incluant les entités métier liées au rapport.
+ * @returns {JSX.Element | null} Le rendu de la modale d'aperçu ou `null` si fermée.
+ */
+export function ReportPreviewModal({
+  isOpen,
+  onClose,
+  report,
+  requests,
+  samples,
+  analyses,
+  analysisTemplates,
+  users,
+  autoDownload = false,
+  onAutoDownloadComplete
 }: ReportPreviewModalProps) {
-  const { labSettings, reportTemplates } = useLims();
+  // Paramètres visuels/organisationnels du laboratoire actif, modèles Word (.docx) et parc équipements
+  const { labSettings, reportTemplates, allMaterialTemplates, allEquipments, equipments } = useLims();
+  const allKnownEquipments = allEquipments?.length ? allEquipments : (equipments || []);
+
+  // Message d'erreur éventuel lors du parsing Docxtemplater ou de la conversion LibreOffice
   const [docxError, setDocxError] = useState<string | null>(null);
+  // URL (ou DataURL) du PDF généré par le serveur à partir du modèle Word pour affichage dans `<PdfViewer />`
   const [previewPdfUrl, setPreviewPdfUrl] = useState<string | null>(null);
+  // Chaîne Base64 brute du PDF issu de la conversion DOCX (utilisée pour le téléchargement et l'archivage)
   const [previewPdfBase64, setPreviewPdfBase64] = useState<string | null>(null);
+  // Indicateur de chargement pendant la génération/conversion de l'aperçu PDF côté serveur
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
+  // Indicateur d'état pendant la rastérisation HTML -> PDF ou le téléchargement PDF
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  // Indique si le rapport PDF final a bien été archivé dans `storage/reports/` sur le serveur
+  const [isSavedOnServer, setIsSavedOnServer] = useState(false);
+
+  // Référence vers le conteneur DOM reproduisant la feuille A4 HTML pour la capture `dom-to-image-more`
   const pdfRef = useRef<HTMLDivElement>(null);
+  // Mémorise l'identifiant du dernier rapport sauvegardé automatiquement pour éviter les envois redondants
+  const autoSavedReportIdRef = useRef<string | null>(null);
 
   /**
-   * Formatage français des dates
+   * Formatage français des dates (ex: "03 novembre 2026").
+   *
+   * @param {string} dateString - Chaîne ISO de la date à formater.
+   * @returns {string} Date formatée en français.
    */
   const formatDate = (dateString: string) => {
     const d = new Date(dateString);
@@ -74,231 +106,616 @@ export function ReportPreviewModal({
 
   // Filtrage des échantillons associés au rapport
   const reportSamples = samples.filter(s => report?.sampleIds.includes(s.id));
-  
-  // Résolution de la demande d'analyse parente
+
+  // Résolution de la demande d'analyse parente :
+  // 1. Par `report.requestId` explicite
+  // 2. Sinon par correspondance du titre de la demande dans le titre du rapport
+  // 3. Sinon via le `requestId` du premier échantillon rattaché
   let guessedRequestId = report?.requestId;
   if (!guessedRequestId && report?.title) {
     const matchedReq = requests.find(r => report.title.includes(r.title));
     if (matchedReq) guessedRequestId = matchedReq.id;
   }
 
-  const request = guessedRequestId 
+  const request = guessedRequestId
     ? requests.find(r => r.id === guessedRequestId)
-    : (reportSamples.length > 0 && reportSamples[0].requestId 
-        ? requests.find(r => r.id === reportSamples[0].requestId) 
-        : null);
+    : (reportSamples.length > 0 && reportSamples[0].requestId
+      ? requests.find(r => r.id === reportSamples[0].requestId)
+      : null);
 
+  // Identification du client demandeur et du responsable technique (manager du laboratoire émetteur)
   const client = request ? users.find(u => u.id === request.requesterId) : null;
-  const manager = users.find(u => u.role === 'manager');
-  
+  const manager =
+    users.find(u => u.role === 'manager' && report?.labId && u.labId === report.labId) ||
+    users.find(u => u.role === 'manager' && (!u.labId || u.labId === 'all')) ||
+    users.find(u => u.role === 'manager' || u.role === 'admin');
+
+  /** Nettoie une couleur hexadécimale pour OpenXML (Word exige 6 caractères hex sans '#') */
+  const cleanHex = (value: string | undefined, fallback: string) => {
+    const hex = String(value || '').replace(/[^0-9A-Fa-f]/g, '');
+    return hex.length === 6 ? hex.toUpperCase() : fallback;
+  };
+
   // Analyses réalisées sur les échantillons du rapport
   const reportAnalyses = analyses.filter(a => report?.sampleIds.includes(a.sampleId));
 
+  // Liste dédupliquée des équipements utilisés pour les essais du rapport (traçabilité métrologique ISO 17025)
+  const reportEquipments = Array.from(
+    new Map(
+      reportAnalyses
+        .map(a => (a.equipmentId ? allKnownEquipments.find(eq => eq.id === a.equipmentId) : undefined))
+        .filter((eq): eq is NonNullable<typeof eq> => Boolean(eq))
+        .map(eq => [eq.id, eq])
+    ).values()
+  );
+
   // Identification du modèle Word personnalisé associé
   const template = report?.templateId ? reportTemplates?.find((t: any) => t.id === report.templateId) : null;
+  // Indique si le rapport s'appuie sur un fichier Word (.docx) encodé en Base64 plutôt que sur le gabarit HTML standard
   const isDocx = !!(template && template.fileData);
 
   /**
-   * Construit la structure de données complète injectée dans le moteur de gabarit Word
+   * Envoie le fichier PDF (en Base64) au serveur pour stockage dans le dossier sécurisé `storage/reports/`.
+   * Cet archivage permet au portail Demandeur de télécharger directement le PDF officiel.
+   *
+   * @param {string} pdfBase64 - Contenu binaire du fichier PDF encodé en Base64 (sans préfixe DataURI).
+   */
+  const savePdfToServerStorage = async (pdfBase64: string) => {
+    if (!report) return;
+    try {
+      const res = await fetch('/api/reports/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reportId: report.id,
+          requestId: request?.id || report.requestId,
+          fileBase64: pdfBase64,
+          format: 'PDF',
+          title: report.title
+        })
+      });
+      if (res.ok) {
+        setIsSavedOnServer(true);
+      }
+    } catch (e) {
+      console.error('Erreur lors de la sauvegarde automatique du rapport sur le serveur :', e);
+    }
+  };
+
+  /**
+   * Génère un PDF A4 multi-pages propre à partir de l'aperçu HTML (`pdfRef`) :
+   * - Répète l'en-tête (`.pdf-header`) et le pied de page (`.pdf-footer`) sur chaque feuille
+   * - Ne coupe jamais un bloc d'analyse ou de texte (`.pdf-block`) en deux entre deux pages
+   * - Ajoute la numérotation des pages (`Page X / Y`) en bas à droite
+   *
+   * @returns {Promise<jsPDF | null>} L'instance `jsPDF` prête à être sauvegardée/exportée, ou `null` si le DOM est absent.
+   */
+  const buildPdfFromHtmlPreview = async (): Promise<jsPDF | null> => {
+    const container = pdfRef.current;
+    if (!container) return null;
+
+    // Facteur de sur-échantillonnage (x2) pour garantir la netteté des textes et tableaux lors de la capture JPEG
+    const scale = 2;
+    const pdf = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4'
+    });
+
+    const pageWidth = pdf.internal.pageSize.getWidth(); // 210 mm
+    const pageHeight = pdf.internal.pageSize.getHeight(); // 297 mm
+    const marginX = 12; // Marge horizontale en mm
+    const marginTop = 10; // Marge haute en mm
+    const marginBottom = 15; // Espace réservé au pied de page en mm
+    const contentWidth = pageWidth - marginX * 2;
+
+    // Fonction utilitaire pour capturer un élément DOM en image Haute Définition et calculer sa hauteur équivalente en mm
+    const captureElement = async (el: HTMLElement) => {
+      const rect = el.getBoundingClientRect();
+      const w = Math.ceil(rect.width || el.offsetWidth);
+      const h = Math.ceil(rect.height || el.offsetHeight);
+
+      const dataUrl = await domtoimage.toJpeg(el, {
+        quality: 0.98,
+        bgcolor: '#ffffff',
+        width: w * scale,
+        height: h * scale,
+        style: {
+          transform: `scale(${scale})`,
+          transformOrigin: 'top left',
+          width: `${w}px`,
+          height: `${h}px`,
+        },
+      });
+      const heightMm = (h * contentWidth) / w;
+      return { dataUrl, heightMm };
+    };
+
+    // Sélection des éléments structurants de la page A4 HTML
+    const headerEl = container.querySelector('.pdf-header') as HTMLElement | null;
+    const footerEl = container.querySelector('.pdf-footer') as HTMLElement | null;
+    const blockEls = Array.from(container.querySelectorAll('.pdf-block')) as HTMLElement[];
+
+    const headerImg = headerEl ? await captureElement(headerEl) : null;
+    const footerImg = footerEl ? await captureElement(footerEl) : null;
+
+    // Ordonnée maximale (en mm) avant d'entrer dans la zone réservée au pied de page
+    const maxContentY = pageHeight - marginBottom - (footerImg ? footerImg.heightMm + 2 : 0);
+    let currentY = marginTop;
+
+    // Fonction pour dessiner l'en-tête en haut de la page courante
+    const drawHeader = () => {
+      if (headerImg) {
+        pdf.addImage(headerImg.dataUrl, 'JPEG', marginX, marginTop, contentWidth, headerImg.heightMm);
+        currentY = marginTop + headerImg.heightMm + 4;
+      } else {
+        currentY = marginTop;
+      }
+    };
+
+    // Initialisation de la première page
+    drawHeader();
+
+    // Placement séquentiel de chaque bloc sans coupure
+    for (const block of blockEls) {
+      if (block.offsetHeight === 0) continue;
+      const blockImg = await captureElement(block);
+
+      // Si le bloc dépasse le bas de la feuille et qu'on n'est pas déjà tout en haut sous l'en-tête :
+      // on crée une nouvelle page A4 avec un nouvel en-tête
+      const topAfterHeader = marginTop + (headerImg ? headerImg.heightMm + 4 : 0);
+      if (currentY + blockImg.heightMm > maxContentY && currentY > topAfterHeader + 1) {
+        pdf.addPage();
+        drawHeader();
+      }
+
+      // Si un bloc unique est exceptionnellement plus grand qu'une page entière, on l'ajuste pour ne pas le tronquer
+      const availableHeight = maxContentY - currentY;
+      if (blockImg.heightMm > availableHeight) {
+        const ratio = availableHeight / blockImg.heightMm;
+        const scaledW = contentWidth * ratio;
+        const centeredX = marginX + (contentWidth - scaledW) / 2;
+        pdf.addImage(blockImg.dataUrl, 'JPEG', centeredX, currentY, scaledW, availableHeight);
+        currentY += availableHeight + 3;
+      } else {
+        pdf.addImage(blockImg.dataUrl, 'JPEG', marginX, currentY, contentWidth, blockImg.heightMm);
+        currentY += blockImg.heightMm + 3;
+      }
+    }
+
+    // Ajout du pied de page et de la numérotation "Page X / Y" sur toutes les pages
+    const totalPages = pdf.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      pdf.setPage(i);
+      if (footerImg) {
+        pdf.addImage(
+          footerImg.dataUrl,
+          'JPEG',
+          marginX,
+          pageHeight - marginBottom - footerImg.heightMm,
+          contentWidth,
+          footerImg.heightMm
+        );
+      }
+      pdf.setFontSize(8);
+      pdf.setTextColor(100, 116, 139);
+      pdf.text(
+        `Rapport ${report?.id || ''} — Page ${i} / ${totalPages}`,
+        pageWidth - marginX,
+        pageHeight - 6,
+        { align: 'right' }
+      );
+    }
+
+    return pdf;
+  };
+
+  /**
+   * Construit la structure de données complète injectée dans le moteur de gabarit Word (`Docxtemplater`).
+   * Prépare à la fois :
+   * - Les balises simples et imbriquées (`demande`, `demandeur`, `echantillon`, `analyses`, `micrographies`)
+   * - Les statistiques automatiques (moyenne, écart-type) pour les séries de mesures (`number_series`)
+   * - Les tableaux Word natifs en OpenXML (`<w:tbl>`) pour `tables_series`, `tables_verticales` et `tables_analyses`
+   *
+   * @returns {Record<string, any>} Le dictionnaire de contexte transmis à `doc.render()`.
    */
   const getDocData = () => {
     const todayFormatted = new Intl.DateTimeFormat("fr-FR").format(new Date());
 
-    // Construction des objets d'analyses avec statistiques
+    // Normalise un libellé en identifiant de clé sans accents ni caractères spéciaux (ex: "Limite d'élasticité" -> "limite_d_elasticite")
+    const sanitizeKey = (str: string) =>
+      str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
+
+    // Élimine les entrées vides d'une série de mesures
+    const filterNonEmptySeries = (arr: any[]): any[] =>
+      arr.filter(val => val !== '' && val !== null && val !== undefined && String(val).trim() !== '');
+
+    // Convertit une série brute en tableau de nombres valides pour les calculs statistiques
+    const parseValidNumbers = (arr: any[]): number[] =>
+      filterNonEmptySeries(arr).map(Number).filter((n: number) => !isNaN(n));
+
+    // Formate n'importe quel type de résultat d'analyse (image, tableau vertical, série ou scalaire) en chaîne lisible
+    const formatResultValueAsText = (v: any, expected?: any): string => {
+      if (v && typeof v === 'object' && Array.isArray(v.images)) {
+        return `${v.images.length} image(s) de micrographie`;
+      }
+      if (expected?.type === 'vertical_table' && Array.isArray(v)) {
+        const filled = v.filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''));
+        return filled.map((r: any) => `${r.element || '-'}: ${r.value !== '' && r.value !== undefined ? r.value : '-'}${r.unit || expected?.unit ? ' ' + (r.unit || expected.unit) : ''}`).join(', ');
+      }
+      if (Array.isArray(v)) {
+        return filterNonEmptySeries(v).join(', ');
+      }
+      return v !== undefined && v !== null ? String(v) : '';
+    };
+
+    // Transformation de chaque analyse du rapport en objet structuré pour les boucles Word `{{#analyses}}...{{/analyses}}`
     const analysesData = reportAnalyses.map((a: any) => {
       const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
-      
+      const eq = a.equipmentId ? allKnownEquipments.find((e: any) => e.id === a.equipmentId) : null;
+      const safeAnalysisName = sanitizeKey(t?.name || "inconnu");
+
       const baseObj: any = {
         nom: t?.name || "Non défini",
         norme: t?.standardRef || "Non défini",
-        technicien: a.technician && a.technician !== 'Non assigné' 
-          ? a.technician 
+        technicien: a.technician && a.technician !== 'Non assigné'
+          ? a.technician
           : (users.find((u: any) => u.id === request?.assignedTo)?.name || "Non défini"),
+        equipement: eq
+          ? `${eq.code} — ${eq.name}${eq.serialNumber ? ` (S/N ${eq.serialNumber})` : ''}`
+          : "Non renseigné",
+        equipement_code: eq?.code || "N/A",
+        equipement_nom: eq?.name || "Non renseigné",
+        equipement_fabricant: eq?.manufacturer || "N/A",
+        equipement_modele: eq?.model || "N/A",
+        equipement_serie: eq?.serialNumber || "N/A",
+        equipement_etalonnage: eq?.nextCalibrationDate
+          ? new Intl.DateTimeFormat("fr-FR").format(new Date(eq.nextCalibrationDate))
+          : "N/A",
         remarques: a.notes || "Aucune",
         echantillon: a.sampleId,
         date: a.date ? new Intl.DateTimeFormat("fr-FR").format(new Date(a.date)) : todayFormatted,
-        valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ 
-          cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, 
-          valeur: Array.isArray(v) ? v.join(', ') : v 
-        }))
+        valeurs: Object.entries(a.results || {}).map(([k, v]) => {
+          const expected = t?.expectedResults?.find((er: any) => er.id === k);
+          return {
+            cle: expected?.name || k,
+            valeur: formatResultValueAsText(v, expected)
+          };
+        }),
+        // Drapeau booléen permettant des conditions ciblées dans Word (ex: `{{#is_essai_de_traction}}`)
+        [`is_${safeAnalysisName}`]: true,
+        // Extraction à plat des clichés micrographiques avec leurs métadonnées et DataURL
+        micrographies: Object.entries(a.results || {}).flatMap(([k, v]) => {
+          const expected = t?.expectedResults?.find((er: any) => er.id === k);
+          const images = v && typeof v === 'object' && Array.isArray((v as any).images) ? (v as any).images : [];
+          return images.map((img: any, index: number) => ({
+            analyse: t?.name || 'Micrographie',
+            champ: expected?.name || k,
+            echantillon: a.sampleId || '',
+            numero: index + 1,
+            nom: img.name || `Image ${index + 1}`,
+            commentaire: img.comment || '',
+            image: img.dataUrl || ''
+          }));
+        })
       };
-      
-      // Extraction dynamique des séries de mesures (ex: dureté vickers répétée)
-      const sanitizeKey = (str: string) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
+
       const series_resultats: any[] = [];
-      
+      const tableaux_verticaux: any[] = [];
+
+      // Enrichissement de `baseObj` avec les accès directs par nom de paramètre (`res_<nom>`) et statistiques de séries
       Object.entries(a.results || {}).forEach(([k, v]) => {
-         const expected = t?.expectedResults?.find((er: any) => er.id === k);
-         const fieldName = expected?.name || k;
-         const safeName = sanitizeKey(fieldName);
-         
-         baseObj[`res_${safeName}`] = Array.isArray(v) ? v.join(', ') : v;
-         
-         if (Array.isArray(v)) {
-            v.forEach((val, i) => {
-               baseObj[`res_${safeName}_v${i+1}`] = val;
+        const expected = t?.expectedResults?.find((er: any) => er.id === k);
+        const fieldName = expected?.name || k;
+        const safeName = sanitizeKey(fieldName);
+
+        baseObj[`res_${safeName}`] = formatResultValueAsText(v, expected);
+
+        if (expected?.type === 'vertical_table' && Array.isArray(v)) {
+          const filledRows = v
+            .filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''))
+            .map((r: any) => ({
+              element: r.element || '-',
+              valeur: r.value !== undefined && r.value !== '' ? String(r.value) : '-',
+              unite: r.unit || expected.unit || ''
+            }));
+          baseObj[`lignes_${safeName}`] = filledRows;
+          tableaux_verticaux.push({
+            nom_parametre: fieldName,
+            echantillon: a.sampleId,
+            lignes: filledRows
+          });
+        } else if (Array.isArray(v)) {
+          const cleanVals = filterNonEmptySeries(v);
+          cleanVals.forEach((val, i) => {
+            baseObj[`res_${safeName}_v${i + 1}`] = val;
+          });
+          // Calcul de la moyenne et de l'écart-type d'échantillon (n - 1) sur les valeurs numériques
+          const numVals = parseValidNumbers(v);
+          let mean: number | null = null;
+          let stdDev: number | null = null;
+          if (numVals.length > 0) {
+            mean = numVals.reduce((sum: number, n: number) => sum + n, 0) / numVals.length;
+            baseObj[`res_${safeName}_moyenne`] = mean.toFixed(2);
+            const variance = numVals.length > 1
+              ? numVals.reduce((sum: number, n: number) => sum + Math.pow(n - mean!, 2), 0) / (numVals.length - 1)
+              : 0;
+            stdDev = numVals.length > 1 ? Math.sqrt(variance) : 0;
+            baseObj[`res_${safeName}_ecart`] = stdDev.toFixed(2);
+            baseObj[`res_${safeName}_stats`] = `${mean.toFixed(2)} ± ${stdDev.toFixed(2)}`;
+          }
+
+          if (expected?.type === 'number_series') {
+            series_resultats.push({
+              nom_parametre: fieldName,
+              echantillon: a.sampleId,
+              v1: cleanVals[0] !== undefined ? cleanVals[0] : "-",
+              v2: cleanVals[1] !== undefined ? cleanVals[1] : "-",
+              v3: cleanVals[2] !== undefined ? cleanVals[2] : "-",
+              v4: cleanVals[3] !== undefined ? cleanVals[3] : "-",
+              v5: cleanVals[4] !== undefined ? cleanVals[4] : "-",
+              v6: cleanVals[5] !== undefined ? cleanVals[5] : "-",
+              v7: cleanVals[6] !== undefined ? cleanVals[6] : "-",
+              v8: cleanVals[7] !== undefined ? cleanVals[7] : "-",
+              v9: cleanVals[8] !== undefined ? cleanVals[8] : "-",
+              v10: cleanVals[9] !== undefined ? cleanVals[9] : "-",
+              stats: mean !== null && stdDev !== null ? `${mean.toFixed(2)} ± ${stdDev!.toFixed(2)}` : "-",
+              moyenne: mean !== null ? mean.toFixed(2) : "-",
+              ecart_type: stdDev !== null ? stdDev.toFixed(2) : "-"
             });
-            const numVals = v.map(Number).filter((n: number) => !isNaN(n));
-            let mean: number | null = null;
-            let stdDev: number | null = null;
-            if (numVals.length > 0) {
-               mean = numVals.reduce((sum: number, n: number) => sum + n, 0) / numVals.length;
-               baseObj[`res_${safeName}_moyenne`] = mean.toFixed(2);
-               const variance = numVals.length > 1 
-                 ? numVals.reduce((sum: number, n: number) => sum + Math.pow(n - mean!, 2), 0) / (numVals.length - 1) 
-                 : 0;
-               stdDev = numVals.length > 1 ? Math.sqrt(variance) : 0;
-               baseObj[`res_${safeName}_ecart`] = stdDev.toFixed(2);
-               baseObj[`res_${safeName}_stats`] = `${mean.toFixed(2)} ± ${stdDev.toFixed(2)}`;
-            }
-            
-            if (expected?.type === 'number_series') {
-               series_resultats.push({
-                  nom_parametre: fieldName,
-                  echantillon: a.sampleId,
-                  v1: v[0] !== undefined ? v[0] : "-",
-                  v2: v[1] !== undefined ? v[1] : "-",
-                  v3: v[2] !== undefined ? v[2] : "-",
-                  v4: v[3] !== undefined ? v[3] : "-",
-                  v5: v[4] !== undefined ? v[4] : "-",
-                  v6: v[5] !== undefined ? v[5] : "-",
-                  v7: v[6] !== undefined ? v[6] : "-",
-                  v8: v[7] !== undefined ? v[7] : "-",
-                  v9: v[8] !== undefined ? v[8] : "-",
-                  v10: v[9] !== undefined ? v[9] : "-",
-                  stats: mean !== null && stdDev !== null ? `${mean.toFixed(2)} ± ${stdDev!.toFixed(2)}` : "-",
-                  moyenne: mean !== null ? mean.toFixed(2) : "-",
-                  ecart_type: stdDev !== null ? stdDev.toFixed(2) : "-"
-               });
-            }
-         }
+          }
+        }
       });
-      
+
       baseObj.series_resultats = series_resultats;
       baseObj.has_series = series_resultats.length > 0;
-      
+      baseObj.tableaux_verticaux = tableaux_verticaux;
+      baseObj.has_vertical_table = tableaux_verticaux.length > 0;
+
       return baseObj;
     });
 
+    // Génération des tableaux OpenXML (`{@xml}`) regroupant les séries de mesures multi-échantillons
     const tables_series: any[] = [];
     const seriesGroups: Record<string, { paramName: string, rows: any[] }> = {};
+    // Échappement des caractères réservés XML pour prévenir toute corruption du document Word (.docx)
     const escapeXML = (str: string) => {
       if (str === null || str === undefined) return "";
       return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
     };
 
-    // Regroupement des séries de mesures par paramètre
     reportAnalyses.forEach((a: any) => {
-        const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
-        if (!t) return;
-        Object.entries(a.results || {}).forEach(([k, v]) => {
-            const expected = t.expectedResults?.find((er: any) => er.id === k);
-            if (Array.isArray(v) && v.length > 0) {
-                if (!seriesGroups[k]) seriesGroups[k] = { paramName: expected?.name || k, rows: [] };
-                const numVals = v.map(Number).filter((n: number) => !isNaN(n));
-                let stats = "-";
-                if (numVals.length > 0) {
-                   const mean = numVals.reduce((sum: number, n: number) => sum + n, 0) / numVals.length;
-                   const variance = numVals.length > 1 ? numVals.reduce((sum: number, n: number) => sum + Math.pow(n - mean, 2), 0) / (numVals.length - 1) : 0;
-                   const stdDev = numVals.length > 1 ? Math.sqrt(variance) : 0;
-                   stats = `${mean.toFixed(2)} ± ${stdDev.toFixed(2)}`;
-                }
-                seriesGroups[k].rows.push({ echantillon: a.sampleId, valeurs: v, stats: stats });
-            }
-        });
-    });
-
-    // Génération du XML Word OpenXML pour les tableaux de séries
-    Object.values(seriesGroups).forEach(group => {
-        let maxVals = 0;
-        group.rows.forEach(r => { if (r.valeurs.length > maxVals) maxVals = r.valeurs.length; });
-        if (maxVals > 0) {
-            const tColor = labSettings?.tableStyles?.borderColor || "000000";
-            const tSize = labSettings?.tableStyles?.borderSize ?? 4;
-            let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
-            xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-            const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${labSettings?.tableStyles?.headerBgColor || "E2E8F0"}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
-            addHeaderCell("Echantillon");
-            for (let i = 1; i <= maxVals; i++) addHeaderCell(`Mesure ${i}`);
-            addHeaderCell("Moyenne");
-            xml += `</w:tr>`;
-            group.rows.forEach(r => {
-                xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-                const addDataCell = (text: string) => { xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
-                addDataCell(r.echantillon);
-                for (let i = 0; i < maxVals; i++) addDataCell(r.valeurs[i] !== undefined ? String(r.valeurs[i]) : "-");
-                addDataCell(r.stats);
-                xml += `</w:tr>`;
-            });
-            xml += `</w:tbl>`;
-            tables_series.push({ titre: group.paramName, xml: xml });
+      const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
+      if (!t) return;
+      Object.entries(a.results || {}).forEach(([k, v]) => {
+        const expected = t.expectedResults?.find((er: any) => er.id === k);
+        if (expected?.type === 'number_series' && Array.isArray(v) && v.length > 0) {
+          const cleanVals = filterNonEmptySeries(v);
+          if (cleanVals.length === 0) return;
+          if (!seriesGroups[k]) seriesGroups[k] = { paramName: expected?.name || k, rows: [] };
+          const numVals = parseValidNumbers(v);
+          let stats = "-";
+          if (numVals.length > 0) {
+            const mean = numVals.reduce((sum: number, n: number) => sum + n, 0) / numVals.length;
+            const variance = numVals.length > 1 ? numVals.reduce((sum: number, n: number) => sum + Math.pow(n - mean, 2), 0) / (numVals.length - 1) : 0;
+            const stdDev = numVals.length > 1 ? Math.sqrt(variance) : 0;
+            stats = `${mean.toFixed(2)} ± ${stdDev.toFixed(2)}`;
+          }
+          seriesGroups[k].rows.push({ echantillon: a.sampleId, valeurs: cleanVals, stats: stats });
         }
+      });
     });
 
+    Object.values(seriesGroups).forEach(group => {
+      let maxVals = 0;
+      group.rows.forEach(r => { if (r.valeurs.length > maxVals) maxVals = r.valeurs.length; });
+      if (maxVals > 0) {
+        const tColor = cleanHex(labSettings?.tableStyles?.borderColor, "000000");
+        const tSize = labSettings?.tableStyles?.borderSize ?? 4;
+        let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
+        xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
+        const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${cleanHex(labSettings?.tableStyles?.headerBgColor, "E2E8F0")}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+        addHeaderCell("Echantillon");
+        for (let i = 1; i <= maxVals; i++) addHeaderCell(`Mesure ${i}`);
+        addHeaderCell("Moyenne");
+        xml += `</w:tr>`;
+        group.rows.forEach(r => {
+          xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
+          const addDataCell = (text: string) => { xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+          addDataCell(r.echantillon);
+          for (let i = 0; i < maxVals; i++) addDataCell(r.valeurs[i] !== undefined ? String(r.valeurs[i]) : "-");
+          addDataCell(r.stats);
+          xml += `</w:tr>`;
+        });
+        xml += `</w:tbl>`;
+        tables_series.push({ titre: group.paramName, xml: xml });
+      }
+    });
+
+    // Génération des tableaux verticaux Word natifs (ex: ICP 30 éléments)
+    const tables_verticales: any[] = [];
+    reportAnalyses.forEach((a: any) => {
+      const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
+      if (!t) return;
+      Object.entries(a.results || {}).forEach(([k, v]) => {
+        const expected = t.expectedResults?.find((er: any) => er.id === k);
+        if (expected?.type === 'vertical_table' && Array.isArray(v) && v.length > 0) {
+          const filledRows = v.filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''));
+          if (filledRows.length === 0) return;
+
+          const tColor = cleanHex(labSettings?.tableStyles?.borderColor, "000000");
+          const tSize = labSettings?.tableStyles?.borderSize ?? 4;
+          const headerBg = cleanHex(labSettings?.tableStyles?.headerBgColor, "E2E8F0");
+
+          let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
+
+          const addHeaderCell = (text: string) => {
+            xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${headerBg}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`;
+          };
+          const addDataCell = (text: string, align: 'left' | 'center' = 'center', bold = false) => {
+            xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="${align}"/></w:pPr><w:r>${bold ? '<w:rPr><w:b/></w:rPr>' : ''}<w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`;
+          };
+
+          xml += `<w:tr><w:trPr><w:trHeight w:val="360"/></w:trPr>`;
+          addHeaderCell("Élément / Paramètre");
+          addHeaderCell("Résultat");
+          addHeaderCell("Unité");
+          xml += `</w:tr>`;
+
+          filledRows.forEach((row: any) => {
+            xml += `<w:tr><w:trPr><w:trHeight w:val="320"/></w:trPr>`;
+            addDataCell(row.element || "-", 'left', true);
+            addDataCell(row.value !== undefined && row.value !== "" ? String(row.value) : "-", 'center', false);
+            addDataCell(row.unit || expected.unit || "-", 'center', false);
+            xml += `</w:tr>`;
+          });
+
+          xml += `</w:tbl>`;
+          tables_verticales.push({
+            titre: expected.name,
+            echantillon: a.sampleId,
+            lignes: filledRows.map((r: any) => ({
+              element: r.element || '-',
+              valeur: r.value !== undefined && r.value !== '' ? String(r.value) : '-',
+              unite: r.unit || expected.unit || '-'
+            })),
+            xml
+          });
+        }
+      });
+    });
+
+    // Génération des tableaux récapitulatifs d'analyses classiques (colonnes = résultats attendus, lignes = échantillons)
     const tables_analyses: any[] = [];
     const analysesGroups: Record<string, { templateName: string, columns: any[], rows: any[] }> = {};
-    
-    // Regroupement des analyses par modèle standard
+
     reportAnalyses.forEach((a: any) => {
-        const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
-        if (!t) return;
-        
-        if (!analysesGroups[a.templateId]) {
-            const hasSeries = (t.expectedResults || []).some((er: any) => er.type === 'number_series');
-            if (hasSeries) return; 
-            
-            const columns = (t.expectedResults || []).filter((er: any) => er.type !== 'image');
-            if (columns.length === 0) return;
-            analysesGroups[a.templateId] = { templateName: t.name, columns: columns, rows: [] };
-        }
-        
-        analysesGroups[a.templateId].rows.push(a);
+      const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
+      if (!t) return;
+
+      if (!analysesGroups[a.templateId]) {
+        const hasSeriesOrVertical = (t.expectedResults || []).some(
+          (er: any) => er.type === 'number_series' || er.type === 'vertical_table'
+        );
+        if (hasSeriesOrVertical) return;
+
+        const columns = (t.expectedResults || []).filter(
+          (er: any) => er.type !== 'image' && er.type !== 'micrography' && er.type !== 'vertical_table'
+        );
+        if (columns.length === 0) return;
+        analysesGroups[a.templateId] = { templateName: t.name, columns: columns, rows: [] };
+      }
+
+      analysesGroups[a.templateId].rows.push(a);
     });
 
     Object.values(analysesGroups).forEach(group => {
-        if (group.rows.length > 0 && group.columns.length > 0) {
-            const tColor = labSettings?.tableStyles?.borderColor || "000000";
-            const tSize = labSettings?.tableStyles?.borderSize ?? 4;
-            let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
-            xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-            const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${labSettings?.tableStyles?.headerBgColor || "E2E8F0"}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
-            const addDataCell = (text: string) => { xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
-            
-            addHeaderCell("Echantillon");
-            group.columns.forEach(col => addHeaderCell(col.name));
-            xml += `</w:tr>`;
-            
-            group.rows.forEach(r => {
-                xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-                let sampleStr = r.sampleId;
-                const sObj = reportSamples.find((s: any) => s.id === r.sampleId);
-                if (sObj) {
-                    sampleStr = sObj.barcode || sObj.id;
-                }
-                
-                addDataCell(sampleStr);
-                
-                group.columns.forEach(col => {
-                    const v = (r.results || {})[col.id];
-                    let textVal = "-";
-                    if (v !== undefined && v !== null && v !== "") {
-                        textVal = Array.isArray(v) ? v.join(", ") : String(v);
-                    }
-                    addDataCell(textVal);
-                });
-                
-                xml += `</w:tr>`;
-            });
-            xml += `</w:tbl>`;
-            tables_analyses.push({ titre: group.templateName, xml: xml });
-        }
+      if (group.rows.length > 0 && group.columns.length > 0) {
+        const tColor = cleanHex(labSettings?.tableStyles?.borderColor, "000000");
+        const tSize = labSettings?.tableStyles?.borderSize ?? 4;
+        let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
+        xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
+        const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${cleanHex(labSettings?.tableStyles?.headerBgColor, "E2E8F0")}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+        const addDataCell = (text: string) => { xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+
+        addHeaderCell("Echantillon");
+        group.columns.forEach(col => addHeaderCell(col.name));
+        xml += `</w:tr>`;
+
+        group.rows.forEach(r => {
+          xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
+          let sampleStr = r.sampleId;
+          const sObj = reportSamples.find((s: any) => s.id === r.sampleId);
+          if (sObj) {
+            sampleStr = sObj.barcode || sObj.id;
+          }
+
+          addDataCell(sampleStr);
+
+          group.columns.forEach(col => {
+            const v = (r.results || {})[col.id];
+            let textVal = "-";
+            if (v !== undefined && v !== null && v !== "") {
+              textVal = formatResultValueAsText(v, col) || "-";
+            }
+            addDataCell(textVal);
+          });
+
+          xml += `</w:tr>`;
+        });
+        xml += `</w:tbl>`;
+        tables_analyses.push({ titre: group.templateName, xml: xml });
+      }
     });
 
+    // Préparation des données et du tableau OpenXML des équipements utilisés (traçabilité métrologique ISO 17025)
+    const equipementsData = reportEquipments.map(eq => ({
+      id: eq.id,
+      code: eq.code,
+      nom: eq.name,
+      categorie: eq.category,
+      fabricant: eq.manufacturer || "N/A",
+      modele: eq.model || "N/A",
+      serie: eq.serialNumber || "N/A",
+      localisation: eq.location || "N/A",
+      dernier_etalonnage: eq.lastCalibrationDate
+        ? new Intl.DateTimeFormat("fr-FR").format(new Date(eq.lastCalibrationDate))
+        : "N/A",
+      prochain_etalonnage: eq.nextCalibrationDate
+        ? new Intl.DateTimeFormat("fr-FR").format(new Date(eq.nextCalibrationDate))
+        : "N/A",
+      statut: eq.status
+    }));
+
+    let table_equipements = `<w:p><w:r><w:t>Aucun équipement renseigné.</w:t></w:r></w:p>`;
+    if (equipementsData.length > 0) {
+      const tColor = cleanHex(labSettings?.tableStyles?.borderColor, "000000");
+      const tSize = labSettings?.tableStyles?.borderSize ?? 4;
+      const headerBg = cleanHex(labSettings?.tableStyles?.headerBgColor, "E2E8F0");
+      let eqXml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
+      const addEqHeader = (text: string) => {
+        eqXml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${headerBg}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`;
+      };
+      const addEqCell = (text: string, align: 'left' | 'center' = 'left') => {
+        eqXml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="${align}"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`;
+      };
+      eqXml += `<w:tr><w:trPr><w:trHeight w:val="380"/></w:trPr>`;
+      addEqHeader("Code");
+      addEqHeader("Désignation");
+      addEqHeader("Fabricant / Modèle");
+      addEqHeader("N° de Série");
+      addEqHeader("Validité Étalonnage");
+      eqXml += `</w:tr>`;
+      equipementsData.forEach(eq => {
+        eqXml += `<w:tr><w:trPr><w:trHeight w:val="340"/></w:trPr>`;
+        addEqCell(eq.code, 'center');
+        addEqCell(eq.nom, 'left');
+        addEqCell(`${eq.fabricant} ${eq.modele}`.trim(), 'left');
+        addEqCell(eq.serie, 'center');
+        addEqCell(eq.prochain_etalonnage, 'center');
+        eqXml += `</w:tr>`;
+      });
+      eqXml += `</w:tbl>`;
+      table_equipements = eqXml;
+    }
+
+    const equipementsListeText = equipementsData.length > 0
+      ? equipementsData.map(eq => `- ${eq.code} : ${eq.nom} (${eq.fabricant} ${eq.modele}, S/N ${eq.serie} — Étalonnage valide jusqu'au ${eq.prochain_etalonnage})`).join('\n')
+      : "Aucun équipement renseigné.";
+
+    // Dictionnaire final exposé aux balises du document Word (supporte à la fois la notation à plat "demande.id" et l'objet imbriqué `demande`)
     return {
       "echantillons": reportSamples.map((s: any) => ({ ...s, materiau: s.materialState })),
+      "equipements": equipementsData,
+      "has_equipements": equipementsData.length > 0,
+      "table_equipements": table_equipements,
+      "equipements.liste": equipementsListeText,
       "tables_series": tables_series,
+      "tables_verticales": tables_verticales,
       "tables_analyses": tables_analyses,
       "demande.id": request?.id || "N/A",
+      "demande.titre": request?.title || "",
+      "demande.conclusion": request?.conclusion || "Aucune conclusion renseignée.",
       "date.jour": todayFormatted,
       "demandeur.nom": client?.name || reportSamples[0]?.client || "Non renseigné",
       "demandeur.email": client?.email || "Non renseigné",
@@ -308,22 +725,27 @@ export function ReportPreviewModal({
       "echantillon.materiau": reportSamples[0]?.materialState || "N/A",
       "echantillon.projet": reportSamples[0]?.project || "N/A",
       "manager.nom": manager?.name || "Responsable non défini",
-      
-      // Variables textuelles simples
+
       "analyse.nom": analysesData[0]?.nom || "Aucune analyse",
       "analyse.norme": analysesData[0]?.norme || "N/A",
       "analyse.technicien": analysesData.find(a => a.technicien && a.technicien !== 'Non assigné')?.technicien || users.find(u => u.id === request?.assignedTo)?.name || analysesData[0]?.technicien || "Non défini",
+      "analyse.equipement": analysesData.find(a => a.equipement && a.equipement !== 'Non renseigné')?.equipement || "Non renseigné",
+      "analyse.equipement_code": analysesData.find(a => a.equipement_code && a.equipement_code !== 'N/A')?.equipement_code || "N/A",
+      "analyse.equipement_etalonnage": analysesData.find(a => a.equipement_etalonnage && a.equipement_etalonnage !== 'N/A')?.equipement_etalonnage || "N/A",
       "resultats.tableau": reportAnalyses.length > 0 ? reportAnalyses.map((a: any) => {
         const t = analysisTemplates.find(tpl => tpl.id === a.templateId);
         return Object.entries(a.results || {}).map(([k, v]) => {
-          const fieldName = t?.expectedResults?.find(er => er.id === k)?.name || k;
-          return `${fieldName}: ${v}`;
+          const expected = t?.expectedResults?.find(er => er.id === k);
+          const fieldName = expected?.name || k;
+          return `${fieldName}: ${formatResultValueAsText(v, expected)}`;
         }).join("\n");
       }).join("\n---\n") : "Aucun résultat",
-      
-      // Variables hiérarchiques et sous-objets
-      demande: { 
+
+      demande: {
         id: request?.id || "N/A",
+        titre: request?.title || "",
+        conclusion: request?.conclusion || "Aucune conclusion renseignée.",
+        // Résolution des identifiants d'analyses en noms lisibles dans `demande.custom`
         custom: Object.fromEntries(
           Object.entries(request?.customData || {}).map(([k, v]) => {
             if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'string' && v[0].includes('-')) {
@@ -344,7 +766,7 @@ export function ReportPreviewModal({
       echantillon: {
         id: reportSamples[0]?.id || "N/A",
         barcode: reportSamples[0]?.barcode || "N/A",
-        materiau: reportSamples[0]?.materialState || "N/A",        
+        materiau: reportSamples[0]?.materialState || "N/A",
         projet: reportSamples[0]?.project || "N/A",
         custom: reportSamples[0]?.customData || {}
       },
@@ -352,20 +774,25 @@ export function ReportPreviewModal({
         nom: manager?.name || "Responsable non défini"
       },
       analyses: analysesData,
-      resultats: analysesData
+      resultats: analysesData,
+      micrographies: analysesData.flatMap((a: any) => a.micrographies || [])
     };
   };
 
   /**
    * Effet déclenchant la conversion du modèle DOCX en PDF lors de l'ouverture
+   * et sa sauvegarde automatique dans storage/reports/
    */
   useEffect(() => {
-    if (isDocx && report?.templateId) {
+    if (!isOpen || !report) return;
+    setIsSavedOnServer(false);
+    if (isDocx && report.templateId) {
       const currentTemplate = reportTemplates?.find((t: any) => t.id === report.templateId);
       if (currentTemplate && currentTemplate.fileData) {
         setIsGeneratingPreview(true);
         setDocxError(null);
         try {
+          // Décodage du fichier Word modèle (.docx) stocké en DataURL Base64
           const base64Data = currentTemplate.fileData.split(",")[1];
           const binaryString = atob(base64Data);
           const len = binaryString.length;
@@ -373,42 +800,50 @@ export function ReportPreviewModal({
           for (let i = 0; i < len; i++) {
             bytes[i] = binaryString.charCodeAt(i);
           }
+          // Décompression de l'archive ZIP OpenXML et initialisation de Docxtemplater avec le module d'images
           const zip = new PizZip(bytes);
           const doc = new Docxtemplater(zip, {
+            modules: [createDocxImageModule()],
             paragraphLoop: true,
             linebreaks: true,
-            delimiters: { start: "{{", end: "}}" }, 
+            delimiters: { start: "{{", end: "}}" },
             nullGetter: () => ""
           });
-          
+
+          // Fusion des données LIMS dans le document Word et re-génération en Base64
           const docData = getDocData();
           doc.render(docData);
           const out = doc.getZip().generate({ type: "base64" });
-          
-          // Appel de l'API de conversion LibreOffice
+
+          // Appel à l'API backend (LibreOffice headless) pour convertir le DOCX fusionné en PDF
           fetch('/api/convert-pdf', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ docxBase64: out })
           })
-          .then(res => res.json())
-          .then(data => {
-            if (data.pdfUrl) {
-              setPreviewPdfUrl(data.pdfUrl);
-              setPreviewPdfBase64(data.pdfBase64);
-            } else if (data.error) {
-              setDocxError("Erreur API de conversion : " + data.error);
-            }
-          })
-          .catch(e => {
-            console.error(e);
-            setDocxError("Erreur réseau lors de la génération de l'aperçu PDF.");
-          })
-          .finally(() => setIsGeneratingPreview(false));
+            .then(res => res.json())
+            .then(data => {
+              if (data.pdfUrl) {
+                setPreviewPdfUrl(data.pdfUrl);
+                setPreviewPdfBase64(data.pdfBase64);
+                // Archivage automatique du PDF converti sur le serveur pour le portail client
+                if (data.pdfBase64) {
+                  void savePdfToServerStorage(data.pdfBase64);
+                }
+              } else if (data.error) {
+                setDocxError("Erreur API de conversion : " + data.error);
+              }
+            })
+            .catch(e => {
+              console.error(e);
+              setDocxError("Erreur réseau lors de la génération de l'aperçu PDF.");
+            })
+            .finally(() => setIsGeneratingPreview(false));
 
         } catch (e: any) {
           console.warn("Erreur de rendu Docx :", e);
           setIsGeneratingPreview(false);
+          // Extraction détaillée des erreurs de syntaxe de balises Word (multi-erreurs Docxtemplater)
           if (e.properties && e.properties.errors instanceof Array) {
             const errorMessages = e.properties.errors.map((err: any) => err.properties.explanation || err.message).join(", ");
             setDocxError("Erreur dans le modèle Word : " + errorMessages);
@@ -418,10 +853,39 @@ export function ReportPreviewModal({
         }
       }
     }
-  }, [report, isDocx]);
+  }, [isOpen, report, isDocx]);
 
   /**
-   * Génération et téléchargement direct du fichier Word DOCX
+   * Sauvegarde automatique en arrière-plan du rendu A4 HTML exact dans storage/reports/
+   * dès que la modale d'aperçu est affichée (pour que le demandeur ait exactement ce rapport).
+   */
+  useEffect(() => {
+    if (!isOpen || !report || isDocx) return;
+
+    // Temporisation de 500 ms pour laisser le DOM et les images (logos, micrographies) finir leur rendu initial
+    const timer = setTimeout(async () => {
+      try {
+        if (autoDownload) {
+          await generatePDF();
+          if (onAutoDownloadComplete) onAutoDownloadComplete();
+        } else if (autoSavedReportIdRef.current !== report.id) {
+          const pdf = await buildPdfFromHtmlPreview();
+          if (pdf) {
+            const pdfBase64 = pdf.output('datauristring').split(',')[1];
+            await savePdfToServerStorage(pdfBase64);
+            autoSavedReportIdRef.current = report.id;
+          }
+        }
+      } catch (e) {
+        console.error('Erreur lors de la capture PDF automatique :', e);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [isOpen, report, autoDownload, isDocx]);
+
+  /**
+   * Génération et téléchargement direct du fichier Word DOCX éditable sur le poste de l'opérateur.
    */
   const generateDOCX = () => {
     if (report?.templateId) {
@@ -437,20 +901,24 @@ export function ReportPreviewModal({
           }
           const zip = new PizZip(bytes);
           const doc = new Docxtemplater(zip, {
+            modules: [createDocxImageModule()],
             paragraphLoop: true,
             linebreaks: true,
-            delimiters: { start: "{{", end: "}}" }, 
+            delimiters: { start: "{{", end: "}}" },
             nullGetter: () => ""
           });
-          
+
           const docData = getDocData();
           doc.render(docData);
           const out = doc.getZip().generate({ type: "blob" });
-          
+
+          // Déclenchement du téléchargement navigateur via un lien éphémère puis libération mémoire
+          const blobUrl = URL.createObjectURL(out);
           const a = document.createElement("a");
-          a.href = URL.createObjectURL(out);
+          a.href = blobUrl;
           a.download = `Rapport_${report.id}.docx`;
           a.click();
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
         } catch (e) {
           console.error('Erreur export DOCX :', e);
         }
@@ -459,36 +927,81 @@ export function ReportPreviewModal({
   };
 
   /**
-   * Impression directe du document
+   * Impression directe du document PDF (et non de la fenêtre de l'application)
+   * via l'injection d'une `<iframe>` invisible chargée avec le Blob PDF.
    */
-  const handlePrint = () => {
-    if (isDocx && previewPdfUrl) {
+  const handlePrint = async () => {
+    /**
+     * Charge une URL de PDF dans une iframe cachée et appelle la boîte de dialogue d'impression native.
+     *
+     * @param {string} urlToPrint - URL ou Blob URL du document PDF à imprimer.
+     * @param {boolean} revokeAfter - Indique s'il faut révoquer le Blob URL après impression.
+     */
+    const printPdfBlobUrl = (urlToPrint: string, revokeAfter = false) => {
       const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = previewPdfUrl;
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      iframe.src = urlToPrint;
       document.body.appendChild(iframe);
+
       iframe.onload = () => {
         try {
+          iframe.contentWindow?.focus();
           iframe.contentWindow?.print();
-          setTimeout(() => {
-            document.body.removeChild(iframe);
-          }, 10000);
         } catch (e) {
-          console.error('Erreur impression :', e);
-          window.print();
+          console.error('Erreur lors du lancement de l\'impression PDF :', e);
+        } finally {
+          // Nettoyage différé (15s) pour laisser le spouleur d'impression du navigateur récupérer le flux PDF
+          setTimeout(() => {
+            if (document.body.contains(iframe)) {
+              document.body.removeChild(iframe);
+            }
+            if (revokeAfter) {
+              URL.revokeObjectURL(urlToPrint);
+            }
+          }, 15000);
         }
       };
-    } else {
-      window.print();
+    };
+
+    // En mode Word (.docx), l'aperçu PDF déjà généré par LibreOffice est directement imprimé
+    if (isDocx && previewPdfUrl) {
+      printPdfBlobUrl(previewPdfUrl, false);
+      return;
+    }
+
+    // Mode PDF Générique : on génère le PDF multi-pages et on l'imprime directement
+    setIsDownloadingPdf(true);
+    try {
+      const pdf = await buildPdfFromHtmlPreview();
+      if (pdf) {
+        const blob = pdf.output('blob');
+        const blobUrl = URL.createObjectURL(blob);
+        printPdfBlobUrl(blobUrl, true);
+      }
+    } catch (e) {
+      console.error('Erreur lors de la préparation du PDF pour impression :', e);
+    } finally {
+      setIsDownloadingPdf(false);
     }
   };
 
   /**
-   * Téléchargement du fichier PDF généré
+   * Téléchargement du fichier PDF généré ET enregistrement dans `storage/reports/`.
+   * Gère de manière transparente les deux moteurs (PDF issu de Word ou PDF capturé depuis la feuille A4 HTML).
    */
   const generatePDF = async () => {
-    if (isDocx && report?.templateId) {
+    if (!report) return;
+
+    if (isDocx && report.templateId) {
+      // Cas 1 : Modèle Word converti en PDF côté serveur
       if (previewPdfBase64) {
+        await savePdfToServerStorage(previewPdfBase64);
+
         const byteCharacters = atob(previewPdfBase64);
         const byteNumbers = new Array(byteCharacters.length);
         for (let i = 0; i < byteCharacters.length; i++) {
@@ -508,23 +1021,37 @@ export function ReportPreviewModal({
         alert("Veuillez patienter pendant la génération de l'aperçu PDF.");
       }
     } else {
-      const element = pdfRef.current;
-      if (!element) {
+      // Cas 2 : Modèle HTML A4 standard converti à la volée via dom-to-image-more + jsPDF
+      if (!pdfRef.current) {
         alert("Aperçu non disponible pour la conversion PDF.");
         return;
       }
+
       setIsDownloadingPdf(true);
-      const opt = {
-        margin:       10,
-        filename:     `rapport-${report.id}.pdf`,
-        image:        { type: 'jpeg' as const, quality: 0.98 },
-        html2canvas:  { scale: 2, useCORS: true, logging: false },
-        jsPDF:        { unit: 'mm' as const, format: 'a4' as const, orientation: 'portrait' as const }
-      };
-      html2pdf().set(opt).from(element).save().then(() => setIsDownloadingPdf(false));
+      try {
+        const pdf = await buildPdfFromHtmlPreview();
+        if (pdf) {
+          // 1. Enregistre exactement ce PDF dans storage/reports/ pour le portail demandeur
+          const pdfBase64 = pdf.output('datauristring').split(',')[1];
+          await savePdfToServerStorage(pdfBase64);
+          autoSavedReportIdRef.current = report.id;
+
+          // 2. Télécharge le PDF sur le poste de l'utilisateur
+          pdf.save(`Rapport_${report.id}.pdf`);
+        }
+      } catch (err) {
+        console.error("Erreur lors de la génération du PDF générique :", err);
+        alert("La conversion directe a rencontré un problème. L'outil d'impression PDF va s'ouvrir en alternative.");
+        setTimeout(() => {
+          window.print();
+        }, 500);
+      } finally {
+        setIsDownloadingPdf(false);
+      }
     }
   };
 
+  // Court-circuit si la modale est fermée ou qu'aucun rapport n'est sélectionné
   if (!isOpen || !report) return null;
 
   return (
@@ -537,36 +1064,44 @@ export function ReportPreviewModal({
               <CheckCircle2 className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-slate-900">Aperçu du Rapport - {report.id}</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-bold text-slate-900">Aperçu du Rapport - {report.id}</h2>
+                {isSavedOnServer && (
+                  <span className="text-[11px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-semibold">
+                    Mis à disposition du demandeur
+                  </span>
+                )}
+              </div>
               <p className="text-sm text-slate-500">Document généré le {formatDate(report.createdAt)}</p>
             </div>
           </div>
+          {/* Barre d'outils d'export : Impression, Téléchargement DOCX (si applicable), Téléchargement PDF et Fermeture */}
           <div className="flex items-center space-x-2">
-            <button 
-              onClick={handlePrint} 
-              className="p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors" 
+            <button
+              onClick={handlePrint}
+              className="p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
               title="Imprimer"
             >
               <Printer className="w-5 h-5" />
             </button>
-            <button 
-              onClick={generateDOCX} 
+            <button
+              onClick={generateDOCX}
               className={isDocx ? "flex items-center px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors mr-2" : "hidden"}
             >
               <Download className="w-4 h-4 mr-2" />
               Télécharger DOCX
             </button>
-            <button 
-              onClick={generatePDF} 
-              disabled={isDownloadingPdf} 
+            <button
+              onClick={generatePDF}
+              disabled={isDownloadingPdf}
               className="flex items-center px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
             >
               <Download className="w-4 h-4 mr-2" />
               {isDownloadingPdf ? "Conversion..." : "Télécharger PDF"}
             </button>
             <div className="w-px h-6 bg-slate-300 mx-1"></div>
-            <button 
-              onClick={onClose} 
+            <button
+              onClick={onClose}
               className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
             >
               <X className="w-5 h-5" />
@@ -575,12 +1110,32 @@ export function ReportPreviewModal({
         </div>
 
         {/* Zone de prévisualisation (DOCX converti ou gabarit HTML A4) */}
-        <div className="flex-1 overflow-y-auto bg-slate-200 p-4 sm:p-8 flex justify-center custom-scrollbar">
+        <div className="flex-1 overflow-y-auto bg-slate-200 p-4 sm:p-8 custom-scrollbar">
           {isDocx ? (
-            <div className="w-full flex justify-center flex-col items-center max-w-[1000px]">
+            /* Branche A : Affichage via PdfViewer du document Word converti par LibreOffice */
+            <div className="w-full flex justify-center flex-col items-center max-w-[1000px] mx-auto">
               {docxError && (
-                <div className="text-red-500 mb-4 bg-red-100 p-4 rounded-lg font-bold">
-                  {docxError}
+                <div className="w-full max-w-2xl bg-amber-50 border border-amber-200 text-amber-900 p-5 rounded-xl shadow-xs mb-6 text-sm">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-amber-950 text-base mb-1">Aperçu PDF indisponible</h4>
+                      <p className="text-amber-800 leading-relaxed mb-3">{docxError}</p>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={generateDOCX}
+                          className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg shadow-xs transition-colors"
+                        >
+                          <Download className="w-4 h-4" />
+                          Télécharger le document Word (.docx)
+                        </button>
+                        <span className="text-xs text-amber-700">
+                          Le document Word fusionné avec vos données reste 100 % valide et téléchargeable.
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
               {isGeneratingPreview ? (
@@ -598,12 +1153,23 @@ export function ReportPreviewModal({
               )}
             </div>
           ) : (
-            <div ref={pdfRef} className="bg-white w-full max-w-[210mm] min-h-[297mm] shadow-lg p-10 sm:p-14 text-slate-900" style={{ fontFamily: '"Inter", sans-serif' }}>
-              {/* En-tête officiel du laboratoire */}
-              <header className="flex justify-between items-start border-b-2 border-blue-900 pb-6 mb-8">
+            /* Branche B : Rendu de la feuille A4 HTML standard (ciblée par `pdfRef` pour la découpe en blocs PDF) */
+            <div
+              ref={pdfRef}
+              className="bg-white w-full max-w-[210mm] min-h-[297mm] h-fit mx-auto shadow-lg p-10 sm:p-14 text-slate-900"
+              style={{ fontFamily: '"Inter", sans-serif' }}
+            >
+              {/* En-tête officiel du laboratoire (répété sur chaque page du PDF grâce à la classe `.pdf-header`) */}
+              <header className="pdf-header flex justify-between items-start border-b-2 border-blue-900 pb-6 mb-6 bg-white">
                 <div>
                   {labSettings.logoUrl ? (
-                    <img src={labSettings.logoUrl} alt="Logo Laboratoire" className="h-12 object-contain mb-2" />
+                    <img
+                      src={labSettings.logoUrl}
+                      alt="Logo Laboratoire"
+                      crossOrigin="anonymous"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                      className="h-12 object-contain mb-2"
+                    />
                   ) : null}
                   <h1 className="text-3xl font-black text-blue-900 uppercase tracking-wider">{labSettings.labName}</h1>
                   <div className="mt-4 text-xs text-slate-600 whitespace-pre-line">
@@ -625,8 +1191,10 @@ export function ReportPreviewModal({
               </header>
 
               {/* 1. Informations Générales */}
-              <section className="mb-8">
-                <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-4 text-slate-800">1. Informations Générales</h2>
+              <section className="pdf-block mb-6 pb-2 bg-white">
+                <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-4 text-slate-800">
+                  1. Informations Générales
+                </h2>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div><span className="font-semibold text-slate-600">Titre de l'étude :</span> {report.title}</div>
                   <div><span className="font-semibold text-slate-600">ID Demande :</span> {request?.id || 'N/A'}</div>
@@ -636,8 +1204,10 @@ export function ReportPreviewModal({
               </section>
 
               {/* 2. Matrice des Échantillons */}
-              <section className="mb-8">
-                <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-4 text-slate-800">2. Matrice des Échantillons</h2>
+              <section className="pdf-block mb-6 pb-2 break-inside-avoid bg-white">
+                <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-4 text-slate-800">
+                  2. Matrice des Échantillons
+                </h2>
                 <table className="w-full text-sm border-collapse border border-slate-200">
                   <thead>
                     <tr className="bg-slate-100">
@@ -651,7 +1221,7 @@ export function ReportPreviewModal({
                     {reportSamples.map(sample => (
                       <tr key={sample.id}>
                         <td className="border border-slate-200 p-2 font-mono text-xs">{sample.id}</td>
-                        <td className="border border-slate-200 p-2">{sample.project}</td>
+                        <td className="border border-slate-200 p-2">{allMaterialTemplates.find(m => m.id === sample.templateId)?.name || sample.project}</td>
                         <td className="border border-slate-200 p-2">{sample.materialState}</td>
                         <td className="border border-slate-200 p-2 text-xs">
                           {sample.mountingInfo?.method || 'Aucune'}
@@ -665,66 +1235,139 @@ export function ReportPreviewModal({
               </section>
 
               {/* 3. Résultats des Analyses */}
-              <section className="mb-8">
-                <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-4 text-slate-800">3. Résultats des Analyses</h2>
-                
+              <section className="mb-6">
+                <div className="pdf-block bg-white pb-2">
+                  <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-2 text-slate-800">
+                    3. Résultats des Analyses
+                  </h2>
+                </div>
+
                 {reportSamples.map(sample => {
                   const sampleAnalyses = reportAnalyses.filter(a => a.sampleId === sample.id);
                   if (sampleAnalyses.length === 0) return null;
-                  
+
                   return (
-                    <div key={sample.id} className="mb-6">
-                      <h3 className="text-md font-semibold text-slate-700 mb-3 bg-slate-50 p-2 border-l-4 border-blue-500">
-                        Échantillon {sample.id}
-                      </h3>
-                      
+                    <div key={sample.id} className="mb-4">
+                      <div className="pdf-block bg-white py-2">
+                        <h3 className="text-md font-semibold text-slate-700 bg-slate-50 p-2 border-l-4 border-blue-500">
+                          Échantillon {sample.id}
+                        </h3>
+                      </div>
+
                       {sampleAnalyses.map(analysis => {
                         const tpl = analysisTemplates.find(t => t.id === analysis.templateId);
                         if (!tpl) return null;
-                        
+                        const eq = analysis.equipmentId
+                          ? allKnownEquipments.find(e => e.id === analysis.equipmentId)
+                          : null;
+
                         return (
-                          <div key={analysis.id} className="ml-4 mb-4">
-                            <h4 className="text-sm font-bold text-slate-800 mb-2">{tpl.name}</h4>
-                            <table className="w-full text-sm border-collapse border border-slate-100 mb-3">
+                          <div key={analysis.id} className="pdf-block pl-4 py-2 mb-3 break-inside-avoid bg-white">
+                            <div className="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+                              <h4 className="text-sm font-bold text-slate-800">{tpl.name}</h4>
+                              {eq && (
+                                <span className="text-[11px] text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded">
+                                  Équipement : <strong className="font-mono text-slate-800">{eq.code}</strong> — {eq.name}
+                                  {eq.serialNumber ? ` (S/N ${eq.serialNumber})` : ''}
+                                  {eq.nextCalibrationDate ? ` • Étal. valide jusqu'au ${new Date(eq.nextCalibrationDate).toLocaleDateString('fr-FR')}` : ''}
+                                </span>
+                              )}
+                            </div>
+                            <table className="w-full text-sm border-collapse border border-slate-200 mb-3">
                               <tbody>
                                 {tpl.expectedResults.map(expected => (
                                   <tr key={expected.id}>
-                                    <td className="border border-slate-100 p-2 text-slate-600 bg-slate-50 w-1/2">{expected.name}</td>
-                                    <td className="border border-slate-100 p-2 font-medium">
+                                    <td className="border border-slate-200 p-2 text-slate-600 bg-slate-50 w-1/3 align-top">{expected.name}</td>
+                                    <td className="border border-slate-200 p-2 font-medium w-2/3">
+                                      {/* Rendu polymorphe selon le type de résultat attendu (micrographie, tableau vertical, série de nombres, booléen, multiselect ou scalaire) */}
                                       {analysis.results[expected.id] !== undefined ? (
-                                        expected.type === 'number_series'
+                                        expected.type === 'micrography'
                                           ? (() => {
-                                              const vals = Array.isArray(analysis.results[expected.id]) ? analysis.results[expected.id] : [];
-                                              const numVals = vals.map((v: any) => Number(v)).filter((v: number) => !isNaN(v));
+                                            const microValue = analysis.results[expected.id];
+                                            const microImages = Array.isArray(microValue?.images) ? microValue.images : [];
+                                            if (microImages.length === 0) return <span className="text-slate-400">Aucune image</span>;
+                                            return (
+                                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                {microImages.map((img: any, idx: number) => (
+                                                  <div key={img.id || idx} className="min-w-0 rounded border border-slate-200 p-2 break-inside-avoid bg-white">
+                                                    <img src={img.dataUrl} alt={img.name || `Micrographie ${idx + 1}`} className="w-full max-h-56 object-contain bg-slate-50" />
+                                                    <div className="mt-1 text-xs font-semibold text-slate-600">Image {idx + 1}{img.name ? ` — ${img.name}` : ''}</div>
+                                                    {img.comment?.trim() && <p className="mt-1 whitespace-pre-wrap text-xs font-normal text-slate-700">{img.comment}</p>}
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            );
+                                          })()
+                                          : expected.type === 'vertical_table'
+                                            ? (() => {
+                                              const rows = Array.isArray(analysis.results[expected.id])
+                                                ? analysis.results[expected.id].filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''))
+                                                : [];
+                                              if (rows.length === 0) return '-';
+                                              return (
+                                                <table className="w-full text-xs border-collapse border border-slate-200 my-1">
+                                                  <thead>
+                                                    <tr className="bg-slate-100 text-slate-700">
+                                                      <th className="border border-slate-200 py-1 px-2 text-left font-semibold">Élément</th>
+                                                      <th className="border border-slate-200 py-1 px-2 text-center font-semibold">Résultat</th>
+                                                      <th className="border border-slate-200 py-1 px-2 text-center font-semibold">Unité</th>
+                                                    </tr>
+                                                  </thead>
+                                                  <tbody>
+                                                    {rows.map((r: any, idx: number) => (
+                                                      <tr key={idx}>
+                                                        <td className="border border-slate-200 py-1 px-2 font-semibold text-slate-800">{r.element || '-'}</td>
+                                                        <td className="border border-slate-200 py-1 px-2 text-center text-slate-900">{r.value !== '' && r.value !== undefined ? r.value : '-'}</td>
+                                                        <td className="border border-slate-200 py-1 px-2 text-center text-slate-500">{r.unit || expected.unit || '-'}</td>
+                                                      </tr>
+                                                    ))}
+                                                  </tbody>
+                                                </table>
+                                              );
+                                            })()
+                                          : expected.type === 'number_series'
+                                            ? (() => {
+                                              const rawVals = Array.isArray(analysis.results[expected.id]) ? analysis.results[expected.id] : [];
+                                              const validStrings = rawVals.filter((v: any) => v !== '' && v !== null && v !== undefined && String(v).trim() !== '');
+                                              const numVals = validStrings.map((v: any) => Number(v)).filter((v: number) => !isNaN(v));
                                               if (numVals.length === 0) return '-';
                                               const mean = numVals.reduce((a: number, b: number) => a + b, 0) / numVals.length;
                                               const variance = numVals.length > 1 ? numVals.reduce((a: number, b: number) => a + Math.pow(b - mean, 2), 0) / (numVals.length - 1) : null;
                                               const stdDev = variance !== null ? Math.sqrt(variance) : null;
-                                              return `Moy: ${mean.toFixed(2)} ${expected.unit || ''} (σ: ${stdDev ? stdDev.toFixed(2) : '-'}) [${vals.join(', ')}]`;
+                                              return `Moy: ${mean.toFixed(2)} ${expected.unit || ''} (σ: ${stdDev !== null ? stdDev.toFixed(2) : '-'}) [${validStrings.join(', ')}]`;
                                             })()
-                                          : expected.type === 'boolean' 
-                                            ? (analysis.results[expected.id] ? 'Conforme / Oui' : 'Non Conforme / Non')
-                                            : expected.type === 'multiselect' && Array.isArray(analysis.results[expected.id])
-                                              ? analysis.results[expected.id].join(', ')
-                                              : `${analysis.results[expected.id]} ${expected.unit || ''}`
+                                            : expected.type === 'boolean'
+                                              ? (analysis.results[expected.id] ? 'Conforme / Oui' : 'Non Conforme / Non')
+                                              : expected.type === 'multiselect' && Array.isArray(analysis.results[expected.id])
+                                                ? analysis.results[expected.id].join(', ')
+                                                : `${analysis.results[expected.id]} ${expected.unit || ''}`
                                       ) : '-'}
                                     </td>
                                   </tr>
                                 ))}
                               </tbody>
                             </table>
-                            
+
+                            {/* Affichage des images globales rattachées à l'analyse */}
                             {analysis.images.length > 0 && (
                               <div className="grid grid-cols-2 gap-4 mt-3">
                                 {analysis.images.map((img, idx) => (
-                                  <div key={idx} className="border border-slate-200 p-1">
-                                    <img src={img} alt={`Micrographie ${idx}`} className="w-full h-auto object-contain bg-slate-100" style={{ maxHeight: '200px' }} />
-                                    <div className="text-center text-xs text-slate-500 mt-1 italic">Fig {idx+1}. {tpl.name}</div>
+                                  <div key={idx} className="border border-slate-200 p-1 break-inside-avoid bg-white">
+                                    <img
+                                      src={img}
+                                      alt={`Micrographie ${idx + 1}`}
+                                      crossOrigin="anonymous"
+                                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                                      className="w-full h-auto object-contain bg-slate-100"
+                                      style={{ maxHeight: '200px' }}
+                                    />
+                                    <div className="text-center text-xs text-slate-500 mt-1 italic">Fig {idx + 1}. {tpl.name}</div>
                                   </div>
                                 ))}
                               </div>
                             )}
-                            
+
+                            {/* Observations éventuelles de l'analyste sur cet essai */}
                             {analysis.notes && (
                               <div className="text-sm mt-2 p-3 bg-blue-50/50 border border-blue-100 rounded text-slate-700 italic">
                                 <span className="font-semibold block mb-1 text-blue-900 not-italic text-xs uppercase">Observations</span>
@@ -737,18 +1380,68 @@ export function ReportPreviewModal({
                     </div>
                   );
                 })}
-                
+
                 {reportAnalyses.length === 0 && (
-                  <p className="text-sm text-slate-500 italic">Aucun résultat d'analyse disponible pour les échantillons de ce rapport.</p>
+                  <p className="pdf-block text-sm text-slate-500 italic bg-white py-2">
+                    Aucun résultat d'analyse disponible pour les échantillons de ce rapport.
+                  </p>
                 )}
               </section>
-              
-              {/* 4. Conclusion & Approbation */}
-              <section className="mt-12 pt-8 border-t-2 border-slate-200 page-break-inside-avoid">
-                <h2 className="text-lg font-bold mb-4 text-slate-800">4. Conclusion & Approbation</h2>
-                <div className="flex justify-between">
+
+              {/* 4. Moyens d'Essais & Traçabilité Métrologique (si au moins un équipement est affecté) */}
+              {reportEquipments.length > 0 && (
+                <section className="pdf-block mb-6 pb-2 break-inside-avoid bg-white">
+                  <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-4 text-slate-800">
+                    4. Moyens d'Essais & Traçabilité Métrologique
+                  </h2>
+                  <table className="w-full text-xs border-collapse border border-slate-200">
+                    <thead>
+                      <tr className="bg-slate-100">
+                        <th className="border border-slate-200 p-2 text-left font-semibold text-slate-700">Code</th>
+                        <th className="border border-slate-200 p-2 text-left font-semibold text-slate-700">Désignation</th>
+                        <th className="border border-slate-200 p-2 text-left font-semibold text-slate-700">Fabricant / Modèle</th>
+                        <th className="border border-slate-200 p-2 text-left font-semibold text-slate-700">N° de Série</th>
+                        <th className="border border-slate-200 p-2 text-center font-semibold text-slate-700">Validité Étalonnage</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportEquipments.map(eq => (
+                        <tr key={eq.id}>
+                          <td className="border border-slate-200 p-2 font-mono font-semibold text-slate-800">{eq.code}</td>
+                          <td className="border border-slate-200 p-2">{eq.name}</td>
+                          <td className="border border-slate-200 p-2">{[eq.manufacturer, eq.model].filter(Boolean).join(' ') || '-'}</td>
+                          <td className="border border-slate-200 p-2 font-mono">{eq.serialNumber || '-'}</td>
+                          <td className="border border-slate-200 p-2 text-center">
+                            {eq.nextCalibrationDate ? new Date(eq.nextCalibrationDate).toLocaleDateString('fr-FR') : '-'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              )}
+
+              {/* Conclusion & Approbation (avec pb-6 et pr-3 pour ne jamais tronquer le tampon incliné APPROUVÉ) */}
+              <section className="pdf-block mt-8 pt-6 pb-6 pr-3 border-t-2 border-slate-200 break-inside-avoid bg-white">
+                <h2 className="text-lg font-bold mb-4 text-slate-800">
+                  {reportEquipments.length > 0 ? '5. Conclusion & Approbation' : '4. Conclusion & Approbation'}
+                </h2>
+
+                {/* Encadré de la conclusion technique de la demande */}
+                <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                    Conclusion de l'étude
+                  </div>
+                  <p className="text-sm text-slate-800 whitespace-pre-line leading-relaxed">
+                    {request?.conclusion?.trim()
+                      ? request.conclusion
+                      : "Aucune conclusion particulière n'a été renseignée pour ce dossier."}
+                  </p>
+                </div>
+
+                <div className="flex justify-between items-start">
                   <div className="w-1/2 pr-4">
-                    <p className="text-sm text-slate-600 mb-6">
+                    <p className="text-sm text-slate-600 mb-4">
                       Les résultats consignés dans le présent document ne se rapportent qu'aux objets soumis à l'essai. La reproduction de ce rapport d'essai n'est autorisée que sous la forme de fac-similé photographique intégral.
                     </p>
                   </div>
@@ -756,9 +1449,9 @@ export function ReportPreviewModal({
                     <div className="text-sm text-slate-600 mb-1">Validé par :</div>
                     <div className="font-bold text-slate-900">{manager?.name || 'Responsable Laboratoire'}</div>
                     <div className="text-xs text-slate-500">Manager Technique</div>
-                    
+
                     {report.status === 'genere' ? (
-                      <div className="mt-4 border-2 border-green-600 text-green-600 p-2 font-black uppercase text-xl rotate-[-5deg] opacity-70">
+                      <div className="mt-5 mb-2 mr-2 border-2 border-green-600 text-green-600 px-3 py-1.5 font-black uppercase text-xl rotate-[-5deg] opacity-80 inline-block">
                         APPROUVÉ
                       </div>
                     ) : (
@@ -767,14 +1460,13 @@ export function ReportPreviewModal({
                   </div>
                 </div>
               </section>
-              
-              {/* Pied de page des accréditations */}
+
+              {/* Pied de page des accréditations (capturé par `.pdf-footer` pour répétition sur chaque page PDF) */}
               {labSettings.isoCertifications.length > 0 && (
-                <footer className="mt-16 pt-4 border-t border-slate-200 text-center text-xs text-slate-500 font-medium tracking-wide">
+                <footer className="pdf-footer mt-8 pt-4 pb-2 border-t border-slate-200 text-center text-xs text-slate-500 font-medium tracking-wide bg-white">
                   CERTIFICATIONS LABORATOIRE : {labSettings.isoCertifications.join(' • ')}
                 </footer>
               )}
-
             </div>
           )}
         </div>

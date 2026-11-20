@@ -108,6 +108,8 @@ export function RequestsInternal() {
   const [reviewStaffOk, setReviewStaffOk] = useState(true);
   // Message d'erreur affiché si une tentative d'assignation échoue faute d'habilitation ISO 17025
   const [assignError, setAssignError] = useState<string | null>(null);
+  // Sous-onglet actif dans le volet de détail du dossier sélectionné (évite le défilement infini et les débordements)
+  const [activeDetailTab, setActiveDetailTab] = useState<'overview' | 'samples' | 'contract' | 'activity'>('overview');
 
   useEffect(() => {
     setAssignError(null);
@@ -555,46 +557,78 @@ export function RequestsInternal() {
     handleStatusChange('En Cours');
   };
 
+  const activeCount = requests.filter(r => {
+    if (r.status === 'terminee' || r.status === 'rejetee') return false;
+    if (currentUser?.role === 'analyste') return r.assignedTo === currentUser.id;
+    return true;
+  }).length;
+  const historyCount = requests.filter(r => {
+    if (r.status !== 'terminee' && r.status !== 'rejetee') return false;
+    if (currentUser?.role === 'analyste') return r.assignedTo === currentUser.id;
+    return true;
+  }).length;
+
+  const isManager = currentUser?.role === 'manager' || currentUser?.role === 'admin';
+  const selectedRequester = selectedRequest ? users.find(u => u.id === selectedRequest.requesterId) : null;
+  const selectedReqSamples = selectedRequest ? samples.filter(s => s.requestId === selectedRequest.id) : [];
+
   return (
-    <div className="space-y-6 h-full flex flex-col">
-      <div className="flex justify-between items-center shrink-0">
+    <div className="space-y-4 h-full flex flex-col min-w-0">
+      <div className="flex flex-wrap justify-between items-center gap-2 shrink-0">
         <div>
           <h2 className="text-2xl font-display font-bold text-slate-900">Workflow & Demandes Clients</h2>
-          <p className="text-sm text-slate-500 mt-1">
-            Gestion des assignations, revue des mandats et conformité (Audit Trail 21 CFR Part 11).
+          <p className="text-sm text-slate-500 mt-0.5">
+            Pilotage des dossiers, revue de contrat ISO 17025, réception d'échantillons et traçabilité.
           </p>
         </div>
       </div>
 
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-0">
-        {/* Volet de gauche : Liste des Demandes */}
-        <div className="lg:col-span-1 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden">
-          <div className="flex border-b border-slate-200 bg-slate-50">
+      <div className="flex-1 grid grid-cols-1 xl:grid-cols-12 gap-5 min-h-0 min-w-0">
+        {/* ============================================================ */}
+        {/* VOLET GAUCHE : LISTE DES DEMANDES (4/12)                     */}
+        {/* ============================================================ */}
+        <div className="xl:col-span-4 bg-white border border-slate-200 rounded-xl shadow-xs flex flex-col overflow-hidden min-w-0">
+          <div className="grid grid-cols-2 border-b border-slate-200 bg-slate-50/80 shrink-0">
             <button
+              type="button"
               onClick={() => setFilterMode('actives')}
-              className={`flex-1 py-3 text-sm font-semibold transition-colors border-b-2 ${filterMode === 'actives' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
-                }`}
+              className={`py-3 px-2 text-xs font-bold transition-colors border-b-2 flex items-center justify-center gap-1.5 ${
+                filterMode === 'actives'
+                  ? 'border-blue-600 text-blue-700 bg-white'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
             >
-              En cours / À traiter
+              <span>À traiter</span>
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-blue-100 text-blue-700">{activeCount}</span>
             </button>
             <button
+              type="button"
               onClick={() => setFilterMode('terminees')}
-              className={`flex-1 py-3 text-sm font-semibold transition-colors border-b-2 ${filterMode === 'terminees' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
-                }`}
+              className={`py-3 px-2 text-xs font-bold transition-colors border-b-2 flex items-center justify-center gap-1.5 ${
+                filterMode === 'terminees'
+                  ? 'border-blue-600 text-blue-700 bg-white'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
             >
-              Historique
+              <span>Historique</span>
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-200 text-slate-600">{historyCount}</span>
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto p-2 space-y-2">
+
+          <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
             {visibleRequests.length === 0 ? (
-              <div className="text-center p-6 text-slate-500 text-sm">Aucune demande assignée ou visible.</div>
+              <div className="text-center py-10 px-4 text-slate-400 text-sm italic">
+                Aucune demande dans cette catégorie.
+              </div>
             ) : (
               visibleRequests.map(req => {
                 const requester = users.find(u => u.id === req.requesterId);
+                const assignedOp = req.assignedTo ? users.find(u => u.id === req.assignedTo) : null;
                 const isSelected = selectedRequest?.id === req.id;
                 return (
                   <button
                     key={req.id}
+                    type="button"
                     onClick={() => {
                       setSelectedRequest(req);
                       setIsEditing(false);
@@ -604,7 +638,6 @@ export function RequestsInternal() {
                       setConclusionText(req.conclusion || '');
                       setShowAudit(false);
 
-                      // Pré-sélectionne automatiquement le premier matériau choisi par le client dans le formulaire
                       const reqTpl = requestTemplates.find(t => t.id === req.templateId);
                       const matField = reqTpl?.fields.find(f => f.type === 'materials');
                       if (matField && req.customData?.[matField.id]) {
@@ -616,17 +649,32 @@ export function RequestsInternal() {
                         }
                       }
                     }}
-                    className={`w-full text-left p-4 rounded-lg border transition-all ${isSelected ? 'bg-blue-50 border-blue-300 shadow-sm' : 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-sm'
-                      }`}
+                    className={`w-full text-left p-3.5 rounded-xl border transition-all min-w-0 ${
+                      isSelected
+                        ? 'bg-blue-50/80 border-blue-400 ring-1 ring-blue-200 shadow-xs'
+                        : 'bg-white border-slate-200 hover:border-blue-300 hover:bg-slate-50/60'
+                    }`}
                   >
-                    <div className="flex justify-between items-start mb-2">
-                      <span className="text-xs font-mono font-bold text-slate-500">{req.id}</span>
-                      {getStatusBadge(req.status)}
+                    <div className="flex items-center justify-between gap-2 mb-1.5 min-w-0">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-xs font-mono font-bold text-blue-700 truncate">{req.id}</span>
+                        {req.priority === 'haute' && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-red-100 text-red-700 shrink-0">
+                            Urgent
+                          </span>
+                        )}
+                      </div>
+                      <div className="shrink-0">{getStatusBadge(req.status)}</div>
                     </div>
-                    <div className="font-semibold text-slate-900 text-sm mb-1 line-clamp-1">{req.title}</div>
-                    <div className="text-xs text-slate-500 flex items-center mt-2">
-                      <User className="w-3 h-3 mr-1" />
-                      {requester?.company || requester?.name}
+                    <div className="font-semibold text-slate-900 text-sm line-clamp-1 break-words">{req.title}</div>
+                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 mt-2 min-w-0">
+                      <span className="flex items-center truncate">
+                        <User className="w-3 h-3 mr-1 shrink-0" />
+                        <span className="truncate">{requester?.company || requester?.name || 'Client'}</span>
+                      </span>
+                      <span className="shrink-0 text-[10px] font-medium text-slate-400">
+                        {assignedOp ? assignedOp.name.split(' ')[0] : 'Non assigné'}
+                      </span>
                     </div>
                   </button>
                 );
@@ -635,938 +683,755 @@ export function RequestsInternal() {
           </div>
         </div>
 
-        {/* Volet de droite : Détails du Dossier, Workflow et Traçabilité */}
-        <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden">
+        {/* ============================================================ */}
+        {/* VOLET DROIT : DÉTAIL STRUCTURÉ PAR ONGLETS (8/12)            */}
+        {/* ============================================================ */}
+        <div className="xl:col-span-8 bg-white border border-slate-200 rounded-xl shadow-xs flex flex-col overflow-hidden min-w-0">
           {selectedRequest ? (
             <>
-              {/* En-tête du dossier avec assignation */}
-              <div className="p-5 border-b border-slate-200 bg-slate-50 flex justify-between items-start shrink-0">
-                <div>
-                  <div className="flex items-center gap-3 mb-1">
-                    <h3 className="font-bold text-lg text-slate-900 font-mono">{selectedRequest.id}</h3>
-                    {getStatusBadge(selectedRequest.status)}
+              {/* EN-TÊTE COMPACT ET SANS DÉBORDEMENT */}
+              <div className="p-4 sm:p-5 border-b border-slate-200 bg-slate-50/80 space-y-3.5 shrink-0 min-w-0">
+                {/* Ligne 1 : Identité du dossier + métadonnées clés */}
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2 min-w-0">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-bold text-lg text-slate-900 font-mono">{selectedRequest.id}</h3>
+                      {getStatusBadge(selectedRequest.status)}
+                      {selectedRequest.priority === 'haute' && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-red-100 text-red-700 border border-red-200">
+                          Urgence Haute
+                        </span>
+                      )}
+                    </div>
+                    <h4 className="text-sm font-semibold text-slate-800 mt-1 break-words">{selectedRequest.title}</h4>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 mt-1">
+                      <span>Client : <strong className="text-slate-700">{selectedRequester?.company || selectedRequester?.name || 'N/A'}</strong></span>
+                      <span>• Soumis le {formatDate(selectedRequest.createdAt)}</span>
+                      {selectedRequest.sampleCount && <span>• {selectedRequest.sampleCount} éch.</span>}
+                      {selectedRequest.estimatedHours && <span>• ~{selectedRequest.estimatedHours}h</span>}
+                      {selectedRequest.committedDueDate && (
+                        <span className="text-indigo-700 font-semibold">
+                          • Échéance : {new Date(selectedRequest.committedDueDate).toLocaleDateString('fr-FR')}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <h4 className="text-md font-medium text-slate-800">{selectedRequest.title}</h4>
-                  <p className="text-xs text-slate-500 mt-1">Soumis le {formatDate(selectedRequest.createdAt)}</p>
                 </div>
-                {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
-                  <div className="flex flex-wrap gap-3">
-                    <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
-                      <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
-                        Priorité
-                      </label>
-                      <select
-                        value={selectedRequest.priority || samplePriority}
-                        onChange={(e) => {
-                          const newPrio = e.target.value as 'basse' | 'normale' | 'haute';
-                          setSamplePriority(newPrio);
-                          updateRequestData(selectedRequest.id, { priority: newPrio }, `Priorité passée à : ${newPrio}`);
-                          setSelectedRequest({ ...selectedRequest, priority: newPrio });
-                        }}
-                        className="w-full text-sm border-slate-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
-                      >
-                        <option value="basse">Basse</option>
-                        <option value="normale">Normale</option>
-                        <option value="haute">Urgente (Haute)</option>
-                      </select>
-                    </div>
 
-                    <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
-                      <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
-                        Assignation Analyste (Contrôle Habilitations)
-                      </label>
-                      {(() => {
-                        const neededTplIds = getRequestRequiredTemplateIds(selectedRequest);
-                        const getMissingTplNames = (userId: string) =>
-                          neededTplIds
-                            .filter(tid => !isUserQualifiedForTemplate(userId, tid))
-                            .map(tid => analysisTemplates.find(t => t.id === tid)?.name || tid);
+                {/* Ligne 2 : Barre de pilotage Manager/Admin (Grille 3 colonnes propres, zéro débordement) */}
+                {isManager && (() => {
+                  const neededTplIds = getRequestRequiredTemplateIds(selectedRequest);
+                  const getMissingTplNames = (userId: string) =>
+                    neededTplIds
+                      .filter(tid => !isUserQualifiedForTemplate(userId, tid))
+                      .map(tid => analysisTemplates.find(t => t.id === tid)?.name || tid);
+                  const currentMissingNames = selectedRequest.assignedTo
+                    ? getMissingTplNames(selectedRequest.assignedTo)
+                    : [];
 
-                        const currentMissingNames = selectedRequest.assignedTo
-                          ? getMissingTplNames(selectedRequest.assignedTo)
-                          : [];
-
-                        return (
-                          <>
-                            <select
-                              value={selectedRequest.assignedTo || ''}
-                              onChange={(e) => {
-                                const targetId = e.target.value;
-                                if (!targetId) {
-                                  setAssignError(null);
-                                  assignRequest(selectedRequest.id, '');
-                                  setSelectedRequest({ ...selectedRequest, assignedTo: '' });
-                                  return;
-                                }
-                                const candidate = analysts.find(a => a.id === targetId);
-                                const missing = getMissingTplNames(targetId);
-                                if (missing.length > 0) {
-                                  setAssignError(
-                                    `Assignation bloquée (ISO 17025 §6.2) : ${candidate?.name || 'cet opérateur'} n'est pas habilité (ou habilitation expirée) pour : ${missing.join(', ')}.`
-                                  );
-                                  return;
-                                }
-                                setAssignError(null);
-                                assignRequest(selectedRequest.id, targetId);
-                                setSelectedRequest({ ...selectedRequest, assignedTo: targetId });
-                              }}
-                              className="w-full text-sm border-slate-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
-                            >
-                              <option value="">-- Non assigné --</option>
-                              {analysts.map(a => {
-                                const missing = getMissingTplNames(a.id);
-                                const isQualified = missing.length === 0;
-                                const isCurrentlyAssigned = a.id === selectedRequest.assignedTo;
-                                return (
-                                  <option
-                                    key={a.id}
-                                    value={a.id}
-                                    disabled={!isQualified && !isCurrentlyAssigned}
-                                  >
-                                    {a.name}{' '}
-                                    {neededTplIds.length === 0
-                                      ? `(${(a.qualifiedTemplateIds || []).length} habilit.)`
-                                      : isQualified
-                                        ? '— ✓ Habilité'
-                                        : `— ⛔ Non habilité (${missing.length} méthode(s) manquante(s))`}
-                                  </option>
-                                );
-                              })}
-                            </select>
-
-                            {assignError && (
-                              <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5 mt-1.5 font-medium">
-                                ⛔ {assignError}
-                              </p>
-                            )}
-
-                            {!assignError && currentMissingNames.length > 0 && (
-                              <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5 mt-1.5">
-                                ⛔ Opérateur non habilité (ISO 17025 §6.2) pour : <strong>{currentMissingNames.join(', ')}</strong>. Veuillez réassigner le dossier ou mettre à jour ses habilitations dans Paramètres.
-                              </p>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </div>
-                    <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
-                      <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
-                        Forcer l'étape du Workflow
-                      </label>
-                      <select
-                        value={selectedRequest.status}
-                        onChange={(e) => {
-                          const targetStatus = e.target.value as RequestStatus;
-                          handleStatusChange(targetStatus);
-                        }}
-                        className="w-full text-sm border-slate-300 rounded-md focus:ring-blue-500 focus:border-blue-500 font-medium text-blue-700"
-                      >
-                        <option value="soumise">1. Soumise</option>
-                        <option value="En Revue">2. En Revue</option>
-                        <option value="validee">3. Validée</option>
-                        <option value="assignee">4. Assignée</option>
-                        <option value="En Cours">5. En Cours</option>
-                        <option value="En Validation">6. En Validation finale</option>
-                        <option value="terminee">7. Terminée</option>
-                        <option value="rejetee">Rejetée</option>
-                      </select>
-                    </div>
-
-                    {/* Option Devis PDF Commercial (affichée uniquement si activée dans Paramètres → Laboratoire) */}
-                    {labSettings?.enableQuotes && (
-                      <div className="bg-emerald-50/60 border border-emerald-200 p-3 rounded-lg shadow-sm sm:col-span-2 lg:col-span-3 flex flex-wrap items-center justify-between gap-3">
-                        <div className="space-y-0.5">
-                          <div className="text-xs font-bold uppercase tracking-wider text-emerald-900">
-                            Devis Commercial (Optionnel){selectedRequest.quoteNumber ? ` — ${selectedRequest.quoteNumber}` : ''}
-                          </div>
-                          <div className="text-xs text-emerald-800">
-                            Montant estimé : <strong>{(selectedRequest.estimatedCost || 0).toLocaleString('fr-FR')} € HT</strong>
-                            {selectedRequest.quoteGeneratedAt && ` • Généré le ${new Date(selectedRequest.quoteGeneratedAt).toLocaleDateString('fr-FR')}`}
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2">
+                  return (
+                    <div className="space-y-2 min-w-0">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                        {/* Priorité */}
+                        <div className="bg-white border border-slate-200 px-3 py-2 rounded-lg min-w-0">
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            Priorité
+                          </label>
                           <select
-                            value={selectedRequest.quoteStatus || 'aucun'}
-                            onChange={e => {
-                              const nextSt = e.target.value as NonNullable<AnalysisRequest['quoteStatus']>;
-                              updateRequestData(selectedRequest.id, { quoteStatus: nextSt }, `Statut devis passé à : ${nextSt}`);
+                            value={selectedRequest.priority || samplePriority}
+                            onChange={(e) => {
+                              const newPrio = e.target.value as 'basse' | 'normale' | 'haute';
+                              setSamplePriority(newPrio);
+                              updateRequestData(selectedRequest.id, { priority: newPrio }, `Priorité passée à : ${newPrio}`);
+                              setSelectedRequest({ ...selectedRequest, priority: newPrio });
                             }}
-                            className="text-xs border border-emerald-300 rounded-md px-2 py-1.5 bg-white text-slate-700"
+                            className="w-full text-xs border-slate-300 rounded-md py-1.5 focus:ring-blue-500 focus:border-blue-500"
                           >
-                            <option value="aucun">Devis : Non émis</option>
-                            <option value="genere">Devis généré</option>
-                            <option value="envoye">Devis envoyé au client</option>
-                            <option value="approuve">Accord / BC reçu ✓</option>
-                            <option value="refuse">Devis refusé</option>
+                            <option value="basse">Basse</option>
+                            <option value="normale">Normale</option>
+                            <option value="haute">Urgente (Haute)</option>
                           </select>
-                          <input
-                            type="text"
-                            placeholder="N° Bon de commande..."
-                            defaultValue={selectedRequest.purchaseOrderRef || ''}
-                            onBlur={e => {
-                              if (e.target.value !== (selectedRequest.purchaseOrderRef || '')) {
-                                updateRequestData(selectedRequest.id, { purchaseOrderRef: e.target.value }, `Bon de commande renseigné : ${e.target.value}`);
+                        </div>
+
+                        {/* Assignation Analyste */}
+                        <div className="bg-white border border-slate-200 px-3 py-2 rounded-lg min-w-0">
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 truncate">
+                            Analyste assigné (Habilitations)
+                          </label>
+                          <select
+                            value={selectedRequest.assignedTo || ''}
+                            onChange={(e) => {
+                              const targetId = e.target.value;
+                              if (!targetId) {
+                                setAssignError(null);
+                                assignRequest(selectedRequest.id, '');
+                                setSelectedRequest({ ...selectedRequest, assignedTo: '' });
+                                return;
                               }
+                              const candidate = analysts.find(a => a.id === targetId);
+                              const missing = getMissingTplNames(targetId);
+                              if (missing.length > 0) {
+                                setAssignError(
+                                  `Assignation bloquée (ISO 17025 §6.2) : ${candidate?.name || 'cet opérateur'} n'est pas habilité (ou habilitation expirée) pour : ${missing.join(', ')}.`
+                                );
+                                return;
+                              }
+                              setAssignError(null);
+                              assignRequest(selectedRequest.id, targetId);
+                              setSelectedRequest({ ...selectedRequest, assignedTo: targetId });
                             }}
-                            className="text-xs border border-emerald-300 rounded-md px-2 py-1.5 bg-white w-40"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleGenerateQuotePdf(selectedRequest)}
-                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-md shadow-xs"
+                            className="w-full text-xs border-slate-300 rounded-md py-1.5 focus:ring-blue-500 focus:border-blue-500 truncate"
                           >
-                            Générer Devis PDF
-                          </button>
+                            <option value="">-- Non assigné --</option>
+                            {analysts.map(a => {
+                              const missing = getMissingTplNames(a.id);
+                              const isQualified = missing.length === 0;
+                              const isCurrentlyAssigned = a.id === selectedRequest.assignedTo;
+                              return (
+                                <option
+                                  key={a.id}
+                                  value={a.id}
+                                  disabled={!isQualified && !isCurrentlyAssigned}
+                                >
+                                  {a.name}{' '}
+                                  {neededTplIds.length === 0
+                                    ? `(${(a.qualifiedTemplateIds || []).length} hab.)`
+                                    : isQualified
+                                      ? '✓'
+                                      : `⛔ (${missing.length} manq.)`}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+
+                        {/* Étape Workflow */}
+                        <div className="bg-white border border-slate-200 px-3 py-2 rounded-lg min-w-0">
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            Étape du Workflow
+                          </label>
+                          <select
+                            value={selectedRequest.status}
+                            onChange={(e) => handleStatusChange(e.target.value as RequestStatus)}
+                            className="w-full text-xs border-slate-300 rounded-md py-1.5 font-semibold text-blue-700 focus:ring-blue-500 focus:border-blue-500"
+                          >
+                            <option value="soumise">1. Soumise</option>
+                            <option value="En Revue">2. En Revue</option>
+                            <option value="validee">3. Validée</option>
+                            <option value="assignee">4. Assignée</option>
+                            <option value="En Cours">5. En Cours</option>
+                            <option value="En Validation">6. En Validation</option>
+                            <option value="terminee">7. Terminée</option>
+                            <option value="rejetee">Rejetée</option>
+                          </select>
                         </div>
                       </div>
-                    )}
-                  </div>
-                )}
+
+                      {assignError && (
+                        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 font-medium">
+                          ⛔ {assignError}
+                        </div>
+                      )}
+                      {!assignError && currentMissingNames.length > 0 && (
+                        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                          ⛔ Opérateur non habilité (ISO 17025 §6.2) pour : <strong>{currentMissingNames.join(', ')}</strong>.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
-              <div className="flex-1 overflow-y-auto p-6 space-y-8">
-                {/* Actions de changement d'état du Workflow */}
-                {selectedRequest.status !== 'rejetee' && selectedRequest.status !== 'terminee' && (
-                  <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-5">
-                    <h4 className="text-sm font-bold text-blue-900 uppercase tracking-wider mb-3 flex items-center">
-                      <Shield className="w-4 h-4 mr-2" />
-                      Validation & Changement de Statut
-                    </h4>
-                    <div className="flex gap-3 items-start flex-wrap">
-                      <input
-                        type="text"
-                        placeholder="Justification ou commentaire (obligatoire pour Refus)..."
-                        value={statusComment}
-                        onChange={e => setStatusComment(e.target.value)}
-                        className="flex-1 min-w-[250px] text-sm border-slate-300 rounded-md"
-                      />
-                      <div className="flex gap-2 flex-wrap">
-                        {selectedRequest.status === 'soumise' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
-                          <button
-                            onClick={() => handleStatusChange('En Revue')}
-                            className="bg-purple-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-purple-700 transition-colors shadow-sm"
-                          >
-                            Passer en Revue
-                          </button>
-                        )}
-                        {selectedRequest.status === 'En Revue' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
-                          <>
-                            <button
-                              disabled={!statusComment}
-                              onClick={handleReject}
-                              className="bg-red-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors shadow-sm flex items-center"
-                            >
-                              <XCircle className="w-4 h-4 mr-1.5" /> Refuser la demande
-                            </button>
-                            <button
-                              onClick={() => handleStatusChange('validee')}
-                              className="bg-emerald-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm flex items-center"
-                            >
-                              <CheckCircle className="w-4 h-4 mr-1.5" /> Valider la demande
-                            </button>
-                          </>
-                        )}
-                        {(selectedRequest.status === 'assignee' || selectedRequest.status === 'validee') && (
-                          <button
-                            onClick={() => handleStatusChange('En Cours')}
-                            className="bg-amber-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-amber-700 transition-colors shadow-sm flex items-center"
-                          >
-                            <PlayCircle className="w-4 h-4 mr-1.5" /> Démarrer les essais sans échantillon
-                          </button>
-                        )}
-                        {selectedRequest.status === 'En Cours' && (
-                          <button
-                            onClick={() => handleStatusChange('En Validation')}
-                            className="bg-orange-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-orange-700 transition-colors shadow-sm flex items-center"
-                          >
-                            <CheckCircle className="w-4 h-4 mr-1.5" /> Soumettre pour validation
-                          </button>
-                        )}
-                        {selectedRequest.status === 'En Validation' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
-                          <button
-                            onClick={() => handleStatusChange('terminee')}
-                            className="bg-emerald-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm flex items-center"
-                          >
-                            <Shield className="w-4 h-4 mr-1.5" /> Approuver (Libération)
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
+              {/* BARRE D'ONGLETS DU DOSSIER (NAVIGATION CLAIRE EN 4 SECTIONS) */}
+              <div className="flex overflow-x-auto border-b border-slate-200 bg-white px-4 shrink-0 gap-1">
+                {[
+                  { id: 'overview' as const, label: 'Synthèse & Données' },
+                  { id: 'samples' as const, label: `Échantillons & Essais (${selectedReqSamples.length})` },
+                  { id: 'contract' as const, label: labSettings?.enableQuotes ? 'Revue Contrat & Devis' : 'Revue de Contrat' },
+                  { id: 'activity' as const, label: `Discussion & Audit (${(selectedRequest.comments || []).length})` }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActiveDetailTab(tab.id)}
+                    className={`px-3.5 py-2.5 text-xs font-bold whitespace-nowrap border-b-2 transition-colors ${
+                      activeDetailTab === tab.id
+                        ? 'border-blue-600 text-blue-700'
+                        : 'border-transparent text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
 
-                {/* Option de réouverture pour les managers */}
-                {(selectedRequest.status === 'terminee' || selectedRequest.status === 'rejetee') && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
-                  <div className="bg-amber-50/50 border border-amber-100 rounded-xl p-5">
-                    <h4 className="text-sm font-bold text-amber-900 uppercase tracking-wider mb-3 flex items-center">
-                      <History className="w-4 h-4 mr-2" />
-                      Actions de Gestion (Manager)
-                    </h4>
-                    <button
-                      onClick={() => handleStatusChange('En Cours')}
-                      className="bg-white border border-amber-300 text-amber-700 px-4 py-2 rounded-md text-sm font-medium hover:bg-amber-50 transition-colors shadow-sm flex items-center"
-                    >
-                      <PlayCircle className="w-4 h-4 mr-1.5" /> Réouvrir le dossier (Passer En Cours)
-                    </button>
-                  </div>
-                )}
+              {/* CORPS DÉFILANT DE L'ONGLET ACTIF */}
+              <div className="flex-1 overflow-y-auto p-5 space-y-5 min-w-0">
 
-                {/* Module de génération rapide des échantillons physiques */}
-                {(selectedRequest.status === 'validee' || selectedRequest.status === 'assignee' || (selectedRequest.status === 'En Cours' && (currentUser?.role === 'manager' || currentUser?.role === 'admin'))) && (
-                  <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-5">
-                    <h4 className="text-sm font-bold text-indigo-900 uppercase tracking-wider mb-3 flex items-center">
-                      <Box className="w-4 h-4 mr-2" />
-                      Réception & Création d'Échantillons
-                    </h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-4">
-                      <div>
-                        <label className="block text-xs font-medium text-indigo-800 mb-1">Modèle Matériau (CMS)</label>
-                        <select
-                          value={sampleMaterialTemplateId}
-                          onChange={e => setSampleMaterialTemplateId(e.target.value)}
-                          className="w-full text-sm border-indigo-200 rounded-md"
-                        >
-                          {activeMaterialTemplates.map(t => (
-                            <option key={t.id} value={t.id}>{t.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-indigo-800 mb-1">État Physique</label>
-                        <select
-                          value={sampleMaterialState}
-                          onChange={e => setSampleMaterialState(e.target.value as any)}
-                          className="w-full text-sm border-indigo-200 rounded-md"
-                        >
-                          <option value="Massif">Massif</option>
-                          <option value="Fritté">Fritté</option>
-                          <option value="Poudre">Poudre</option>
-                          <option value="Liquide">Liquide</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-indigo-800 mb-1">Priorité</label>
-                        <select
-                          value={samplePriority}
-                          onChange={e => setSamplePriority(e.target.value as 'basse' | 'normale' | 'haute')}
-                          className="w-full text-sm border-indigo-200 rounded-md"
-                        >
-                          <option value="basse">Basse</option>
-                          <option value="normale">Normale</option>
-                          <option value="haute">Urgente (Haute)</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-indigo-800 mb-1">Nombre d'échantillons</label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="50"
-                          value={sampleQuantity}
-                          onChange={e => setSampleQuantity(Number(e.target.value))}
-                          className="w-full text-sm border-indigo-200 rounded-md"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Champs dynamiques du Modèle Matériau sélectionné */}
-                    {(() => {
-                      const selectedMatTpl = materialTemplates.find(t => t.id === sampleMaterialTemplateId);
-                      if (!selectedMatTpl || selectedMatTpl.fields.length === 0) return null;
-                      return (
-                        <div className="mb-4 pt-3 border-t border-indigo-200/60">
-                          <span className="block text-xs font-bold text-indigo-900 uppercase tracking-wider mb-2">
-                            Propriétés du matériau ({selectedMatTpl.name})
-                          </span>
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                            {selectedMatTpl.fields.map(field => (
-                              <div key={field.id}>
-                                <label className="block text-xs font-medium text-indigo-800 mb-1">
-                                  {field.name} {field.unit ? `(${field.unit})` : ''}
-                                </label>
-                                {field.type === 'select' ? (
-                                  <select
-                                    value={sampleCustomData[field.name] ?? ''}
-                                    onChange={e => setSampleCustomData({ ...sampleCustomData, [field.name]: e.target.value })}
-                                    className="w-full text-sm border-indigo-200 rounded-md bg-white px-2 py-1.5"
-                                  >
-                                    <option value="">-- Sélectionner --</option>
-                                    {field.options?.map(opt => (
-                                      <option key={opt} value={opt}>{opt}</option>
-                                    ))}
-                                  </select>
-                                ) : field.type === 'multiselect' ? (
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {field.options?.map(opt => {
-                                      const currentVals = Array.isArray(sampleCustomData[field.name]) ? sampleCustomData[field.name] : [];
-                                      const isChecked = currentVals.includes(opt);
-                                      return (
-                                        <button
-                                          key={opt}
-                                          type="button"
-                                          onClick={() => {
-                                            const nextVals = isChecked
-                                              ? currentVals.filter((v: string) => v !== opt)
-                                              : [...currentVals, opt];
-                                            setSampleCustomData({ ...sampleCustomData, [field.name]: nextVals });
-                                          }}
-                                          className={`px-2 py-1 rounded text-xs font-medium border ${
-                                            isChecked
-                                              ? 'bg-indigo-600 text-white border-indigo-600'
-                                              : 'bg-white text-slate-700 border-indigo-200'
-                                          }`}
-                                        >
-                                          {opt}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                ) : field.type === 'boolean' ? (
-                                  <label className="inline-flex items-center gap-2 text-sm text-indigo-900 mt-1">
-                                    <input
-                                      type="checkbox"
-                                      checked={Boolean(sampleCustomData[field.name])}
-                                      onChange={e => setSampleCustomData({ ...sampleCustomData, [field.name]: e.target.checked })}
-                                      className="rounded border-indigo-300 text-indigo-600"
-                                    />
-                                    Oui
-                                  </label>
-                                ) : (
-                                  <input
-                                    type={field.type === 'number' ? 'number' : field.type === 'date' ? 'date' : 'text'}
-                                    value={sampleCustomData[field.name] ?? ''}
-                                    placeholder={field.unit ? `Valeur en ${field.unit}...` : 'Saisir...'}
-                                    onChange={e => setSampleCustomData({
-                                      ...sampleCustomData,
-                                      [field.name]: field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value
-                                    })}
-                                    className="w-full text-sm border-indigo-200 rounded-md bg-white px-2 py-1.5"
-                                  />
-                                )}
-                              </div>
-                            ))}
-                          </div>
+                {/* ====================================================== */}
+                {/* ONGLET 1 : SYNTHÈSE, WORKFLOW, DONNÉES & CONCLUSION    */}
+                {/* ====================================================== */}
+                {activeDetailTab === 'overview' && (
+                  <>
+                    {/* Actions rapides de transition de statut */}
+                    {selectedRequest.status !== 'rejetee' && selectedRequest.status !== 'terminee' ? (
+                      <div className="bg-blue-50/60 border border-blue-200/80 rounded-xl p-4 space-y-3">
+                        <div className="text-xs font-bold text-blue-900 uppercase tracking-wider flex items-center gap-1.5">
+                          <Shield className="w-4 h-4" /> Actions Workflow
                         </div>
-                      );
-                    })()}
-                    <button
-                      onClick={handleGenerateSamples}
-                      className="bg-indigo-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm flex items-center"
-                    >
-                      <Plus className="w-4 h-4 mr-2" /> Générer {sampleQuantity} échantillon(s) LIMS
-                    </button>
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  {/* Détails et Attributs du Formulaire */}
-                  <div>
-                    <div className="flex justify-between items-center mb-4">
-                      <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center">
-                        <FileText className="w-4 h-4 mr-2" />
-                        Données Client
-                      </h4>
-                      {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
-                        isEditing ? (
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => {
-                                setIsEditing(false);
-                                setEditedData(selectedRequest.customData);
-                              }}
-                              className="text-xs px-2 py-1 bg-slate-100 text-slate-600 rounded hover:bg-slate-200"
-                            >
-                              Annuler
-                            </button>
-                            <button
-                              onClick={() => {
-                                updateRequestData(selectedRequest.id, { customData: editedData }, 'Modification des données de la demande.');
-                                setSelectedRequest(prev => prev ? { ...prev, customData: editedData } : null);
-                                setIsEditing(false);
-                              }}
-                              className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center"
-                            >
-                              <Save className="w-3 h-3 mr-1" /> Enregistrer
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => setIsEditing(true)}
-                            className="text-xs px-2 py-1 bg-slate-100 text-slate-600 rounded hover:bg-slate-200 flex items-center"
-                          >
-                            <Edit2 className="w-3 h-3 mr-1" /> Modifier
-                          </button>
-                        )
-                      )}
-                    </div>
-
-                    <dl className="space-y-4">
-                      {Object.entries(selectedRequest.customData).map(([key, value]) => {
-                        // On masque les clés techniques de sous-propriétés matériaux car elles sont affichées directement sous le champ 'materials'
-                        if (key.endsWith('__material_properties') || key.startsWith('matprop_')) {
-                          return null;
-                        }
-
-                        const template = requestTemplates.find(t => t.id === selectedRequest.templateId);
-                        const field = template?.fields.find(f => f.id === key);
-
-                        // Helper pour résoudre le nom d'un matériau depuis son ID
-                        const resolveMaterialName = (idOrName: string) =>
-                          materialTemplates.find(m => m.id === idOrName || m.name === idOrName)?.name || idOrName;
-
-                        let displayValue = value;
-                        if (typeof value === 'boolean') {
-                          displayValue = value ? 'Oui' : 'Non';
-                        } else if (field?.type === 'analyses' && Array.isArray(value)) {
-                          displayValue = value.map(id => analysisTemplates.find(a => a.id === id)?.name || id).join(', ');
-                        } else if (field?.type === 'materials') {
-                          displayValue = Array.isArray(value)
-                            ? value.map(resolveMaterialName).join(', ')
-                            : resolveMaterialName(String(value));
-                        } else if (Array.isArray(value)) {
-                          displayValue = value.join(', ');
-                        }
-
-                        // Si c'est un champ de type 'materials', on récupère les modèles sélectionnés et leurs propriétés associées
-                        const selectedMatTemplates = field?.type === 'materials'
-                          ? (Array.isArray(value) ? value : [value])
-                              .map(v => materialTemplates.find(m => m.id === v || m.name === v))
-                              .filter(Boolean)
-                          : [];
-
-                        const propertiesKey = `${key}__material_properties`;
-                        const materialPropertiesContainer = isEditing
-                          ? (editedData[propertiesKey] || {})
-                          : (selectedRequest.customData[propertiesKey] || {});
-
-                        return (
-                          <div key={key} className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                            <dt className="text-xs font-medium text-slate-500 mb-1">{field?.name || key}</dt>
-                            <dd className="text-sm text-slate-900 font-medium">
-                              {isEditing && field?.type !== 'materials' && field?.type !== 'analyses' ? (
-                                typeof value === 'boolean' ? (
-                                  <input
-                                    type="checkbox"
-                                    checked={editedData[key] || false}
-                                    onChange={e => setEditedData({ ...editedData, [key]: e.target.checked })}
-                                    className="rounded border-slate-300"
-                                  />
-                                ) : Array.isArray(value) ? (
-                                  <span className="text-xs text-slate-400 italic">Non modifiable (Tableau)</span>
-                                ) : field?.type === 'date' ? (
-                                  <input
-                                    type="date"
-                                    value={editedData[key] || ''}
-                                    onChange={e => setEditedData({ ...editedData, [key]: e.target.value })}
-                                    className="w-full text-sm border-slate-300 rounded px-2 py-1"
-                                  />
-                                ) : (
-                                  <input
-                                    type="text"
-                                    value={editedData[key] || ''}
-                                    onChange={e => setEditedData({ ...editedData, [key]: e.target.value })}
-                                    className="w-full text-sm border-slate-300 rounded px-2 py-1"
-                                  />
-                                )
-                              ) : Array.isArray(value) ? (
-                                <div className="flex flex-wrap gap-1.5 mt-1">
-                                  {value.map(v => (
-                                    <span
-                                      key={v}
-                                      className={`px-2 py-0.5 rounded text-xs font-medium border ${
-                                        field?.type === 'materials'
-                                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                          : 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                      }`}
-                                    >
-                                      {field?.type === 'analyses'
-                                        ? (analysisTemplates.find(a => a.id === v)?.name || v)
-                                        : field?.type === 'materials'
-                                          ? resolveMaterialName(v)
-                                          : v}
-                                    </span>
-                                  ))}
-                                </div>
-                              ) : field?.type === 'date' && displayValue ? (
-                                new Date(displayValue as string).toLocaleDateString('fr-FR')
-                              ) : (
-                                displayValue
-                              )}
-
-                              {/* Affichage et édition des propriétés des matériaux sélectionnés */}
-                              {selectedMatTemplates.length > 0 && (
-                                <div className="mt-3 pt-2 border-t border-slate-200 space-y-2.5">
-                                  {selectedMatTemplates.map(matTpl => {
-                                    const matPropsForTpl = materialPropertiesContainer[matTpl!.id] || {};
-                                    return (
-                                      <div key={matTpl!.id} className="bg-white rounded-lg border border-emerald-200 p-2.5 text-xs space-y-1.5">
-                                        <span className="font-bold text-emerald-900 uppercase tracking-wider block">
-                                          Propriétés — {matTpl!.name}
-                                        </span>
-                                        {matTpl!.fields.length === 0 ? (
-                                          <span className="text-slate-400 italic">Aucune propriété configurée sur ce modèle.</span>
-                                        ) : (
-                                          <div className="space-y-1">
-                                            {matTpl!.fields.map(matField => {
-                                              const propVal =
-                                                matPropsForTpl[matField.id] ??
-                                                matPropsForTpl[matField.name] ??
-                                                getMaterialPropFromRequest(selectedRequest, matTpl!.id, matField.id, matField.name);
-
-                                              return (
-                                                <div key={matField.id} className="flex items-center justify-between bg-slate-50 px-2.5 py-1.5 rounded border border-slate-100 gap-2">
-                                                  <span className="text-slate-600">
-                                                    {matField.name} {matField.unit ? `(${matField.unit})` : ''}
-                                                  </span>
-                                                  {isEditing ? (
-                                                    <input
-                                                      type={matField.type === 'number' ? 'number' : 'text'}
-                                                      value={propVal !== undefined ? String(propVal) : ''}
-                                                      onChange={e => {
-                                                        const updatedVal = matField.type === 'number'
-                                                          ? (e.target.value === '' ? '' : Number(e.target.value))
-                                                          : e.target.value;
-                                                        setEditedData({
-                                                          ...editedData,
-                                                          [propertiesKey]: {
-                                                            ...materialPropertiesContainer,
-                                                            [matTpl!.id]: {
-                                                              ...matPropsForTpl,
-                                                              [matField.id]: updatedVal
-                                                            }
-                                                          }
-                                                        });
-                                                      }}
-                                                      className="w-36 text-xs border border-slate-300 rounded px-2 py-1 bg-white text-right"
-                                                    />
-                                                  ) : (
-                                                    <span className="font-semibold text-slate-900 text-right">
-                                                      {propVal !== undefined && propVal !== '' ? (
-                                                        Array.isArray(propVal)
-                                                          ? propVal.join(', ')
-                                                          : typeof propVal === 'boolean'
-                                                            ? (propVal ? 'Oui' : 'Non')
-                                                            : `${propVal}${matField.unit ? ` ${matField.unit}` : ''}`
-                                                      ) : (
-                                                        <span className="text-slate-400 italic font-normal">Non renseigné</span>
-                                                      )}
-                                                    </span>
-                                                  )}
-                                                </div>
-                                              );
-                                            })}
-                                          </div>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </dd>
-                          </div>
-                        );
-                      })}
-                    </dl>
-                  </div>
-
-                  {/* Audit Trail et Traçabilité Complète (Masqué par défaut) */}
-                  <div>
-                    <div className="flex items-center justify-between mb-4">
-                      <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center m-0">
-                        <History className="w-4 h-4 mr-2" />
-                        Audit Trail (Traçabilité)
-                      </h4>
-                      <button
-                        type="button"
-                        onClick={() => setShowAudit(!showAudit)}
-                        className="text-xs font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 transition-colors cursor-pointer"
-                      >
-                        {showAudit ? 'Masquer l\'audit' : 'Afficher l\'audit'}
-                      </button>
-                    </div>
-
-                    {showAudit && (
-                      <div className="relative border-l border-slate-200 ml-3 space-y-6 pt-2 animate-in fade-in duration-200">
-                        {selectedRequest.auditTrail && selectedRequest.auditTrail.length > 0 ? (
-                          selectedRequest.auditTrail.map((audit, i) => {
-                            const user = users.find(u => u.id === audit.userId);
-                            return (
-                              <div key={audit.id || i} className="relative pl-5">
-                                <div className="absolute w-2.5 h-2.5 bg-blue-500 rounded-full -left-[5px] top-1.5 ring-4 ring-white"></div>
-                                <div className="text-xs text-slate-400 mb-0.5">{formatDate(audit.timestamp)}</div>
-                                <div className="text-sm font-semibold text-slate-800">{audit.action}</div>
-                                <div className="text-sm text-slate-600 mt-1">{audit.details}</div>
-                                <div className="text-xs font-medium text-slate-500 mt-2 flex items-center">
-                                  <User className="w-3 h-3 mr-1" />
-                                  Par : {user?.name || audit.userId}
-                                </div>
-                              </div>
-                            );
-                          })
-                        ) : (
-                          <div className="text-xs text-slate-400 italic pl-5">Aucun historique d'audit pour ce dossier.</div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Encart Conclusion Générale pour les Rapports */}
-                <div className="mt-8 border-t border-slate-200 pt-6">
-                  <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-5">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-                      <div>
-                        <h4 className="text-sm font-bold text-emerald-950 uppercase tracking-wider flex items-center">
-                          <FileText className="w-4 h-4 mr-2 text-emerald-700" />
-                          Conclusion Générale & Avis Technique (Rapport)
-                        </h4>
-                        <p className="text-xs text-emerald-700 mt-0.5">
-                          Cette conclusion sera automatiquement injectable dans vos rapports Word/PDF via la balise <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-emerald-200">{"{{demande.conclusion}}"}</code>.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          updateRequestData(selectedRequest.id, { conclusion: conclusionText }, 'Mise à jour de la conclusion du rapport');
-                          setSelectedRequest(prev => prev ? { ...prev, conclusion: conclusionText } : null);
-                        }}
-                        className="shrink-0 bg-emerald-600 text-white px-4 py-2 rounded-lg text-xs font-semibold hover:bg-emerald-700 transition-colors shadow-xs flex items-center"
-                      >
-                        <Save className="w-3.5 h-3.5 mr-1.5" />
-                        Enregistrer la conclusion
-                      </button>
-                    </div>
-                    <textarea
-                      rows={4}
-                      value={conclusionText}
-                      onChange={e => setConclusionText(e.target.value)}
-                      placeholder="Rédigez ici la conclusion générale de l'expertise, la conformité des échantillons ou les recommandations techniques..."
-                      className="w-full rounded-lg border border-emerald-300 bg-white p-3 text-sm text-slate-800 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 focus:outline-none"
-                    />
-                  </div>
-
-                  {/* Revue de Contrat ISO 17025 §7.1, Date Engagée & Valorisation Financière */}
-                  {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
-                    <div className="mt-5 bg-indigo-50/50 border border-indigo-200 rounded-xl p-5 space-y-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <h4 className="text-xs font-bold text-indigo-950 uppercase tracking-wider">Revue de Demande / Contrat (ISO 17025 §7.1)</h4>
-                          {selectedRequest.contractReview && (
-                            <p className="text-[11px] text-indigo-700 mt-0.5">
-                              Validée par {selectedRequest.contractReview.reviewedBy} le {new Date(selectedRequest.contractReview.reviewedAt).toLocaleDateString('fr-FR')}
-                              {selectedRequest.committedDueDate ? ` • Échéance engagée : ${new Date(selectedRequest.committedDueDate).toLocaleDateString('fr-FR')}` : ''}
-                            </p>
-                          )}
-                        </div>
-                        {(() => {
-                          const reqAnas = analyses.filter(a => samples.some(s => s.requestId === selectedRequest.id && s.id === a.sampleId));
-                          const totalCost = reqAnas.reduce((sum, a) => sum + (analysisTemplates.find(t => t.id === a.templateId)?.unitPrice || 0), 0) || selectedRequest.estimatedCost || 0;
-                          const estHours = selectedRequest.estimatedHours || reqAnas.reduce((sum, a) => sum + (analysisTemplates.find(t => t.id === a.templateId)?.estimatedHours || 2), 0);
-                          return (
-                            <div className="flex flex-wrap items-center gap-2">
-                              {selectedRequest.sampleCount && (
-                                <span className="px-2.5 py-1 rounded-full bg-white border border-indigo-200 text-xs font-semibold text-indigo-800">
-                                  {selectedRequest.sampleCount} échantillon(s) déclaré(s)
-                                </span>
-                              )}
-                              {estHours > 0 && (
-                                <span className="px-2.5 py-1 rounded-full bg-white border border-blue-200 text-xs font-bold text-blue-800">
-                                  Temps estimé : ~{estHours}h
-                                </span>
-                              )}
-                              {totalCost > 0 && (
-                                <span className="px-2.5 py-1 rounded-full bg-white border border-emerald-200 text-xs font-bold text-emerald-800">
-                                  Valorisation : {totalCost} € HT
-                                </span>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
-                        <label className="flex items-center gap-2 text-xs text-slate-700">
-                          <input type="checkbox" checked={reviewMethodsOk} onChange={e => setReviewMethodsOk(e.target.checked)} className="rounded text-indigo-600" />
-                          Méthodes adaptées
-                        </label>
-                        <label className="flex items-center gap-2 text-xs text-slate-700">
-                          <input type="checkbox" checked={reviewResourcesOk} onChange={e => setReviewResourcesOk(e.target.checked)} className="rounded text-indigo-600" />
-                          Moyens / équipements OK
-                        </label>
-                        <label className="flex items-center gap-2 text-xs text-slate-700">
-                          <input type="checkbox" checked={reviewStaffOk} onChange={e => setReviewStaffOk(e.target.checked)} className="rounded text-indigo-600" />
-                          Personnel habilité
-                        </label>
-                        <div>
-                          <label className="block text-[11px] font-semibold text-indigo-900 mb-1">Date engagée labo</label>
+                        <div className="flex flex-col sm:flex-row gap-2.5">
                           <input
-                            type="date"
-                            value={committedDateDraft || selectedRequest.committedDueDate || ''}
-                            onChange={e => setCommittedDateDraft(e.target.value)}
-                            className="w-full px-2 py-1 text-xs border border-indigo-300 rounded bg-white"
+                            type="text"
+                            placeholder="Commentaire ou motif (obligatoire en cas de refus)..."
+                            value={statusComment}
+                            onChange={e => setStatusComment(e.target.value)}
+                            className="flex-1 min-w-0 text-xs border-slate-300 rounded-lg bg-white px-3 py-2"
                           />
-                        </div>
-                      </div>
-                      <div className="flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            saveContractReview(
-                              selectedRequest.id,
-                              { methodsAdequate: reviewMethodsOk, resourcesAvailable: reviewResourcesOk, staffQualified: reviewStaffOk },
-                              committedDateDraft || selectedRequest.committedDueDate || undefined
-                            );
-                          }}
-                          className="px-3.5 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700"
-                        >
-                          Enregistrer la revue de contrat
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Fil de discussion intégré client / laboratoire */}
-                  <div className="mt-5 bg-white border border-slate-200 rounded-xl p-5 space-y-3">
-                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                      Fil de discussion du dossier ({(selectedRequest.comments || []).length})
-                    </h4>
-                    <div className="space-y-2 max-h-52 overflow-y-auto">
-                      {(selectedRequest.comments || []).length === 0 ? (
-                        <p className="text-xs text-slate-400 italic">Aucun échange pour le moment.</p>
-                      ) : (
-                        (selectedRequest.comments || []).map(c => (
-                          <div key={c.id} className={`p-2.5 rounded-lg text-xs border ${c.isInternal ? 'bg-amber-50/70 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
-                            <div className="flex items-center justify-between text-[11px] text-slate-500 mb-1">
-                              <span className="font-semibold text-slate-800">
-                                {c.authorName} <span className="uppercase text-[10px] text-slate-400">({c.authorRole})</span>
-                                {c.isInternal && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-200 text-amber-900 rounded text-[9px] font-bold">NOTE INTERNE</span>}
-                              </span>
-                              <span>{new Date(c.createdAt).toLocaleString('fr-FR')}</span>
-                            </div>
-                            <p className="text-slate-700 whitespace-pre-wrap">{c.message}</p>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                    <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-slate-100">
-                      <input
-                        type="text"
-                        value={newCommentText}
-                        onChange={e => setNewCommentText(e.target.value)}
-                        placeholder="Écrire un message au client ou une note interne..."
-                        className="flex-1 px-3 py-2 text-xs border border-slate-300 rounded-lg"
-                      />
-                      <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 px-2">
-                        <input type="checkbox" checked={isInternalComment} onChange={e => setIsInternalComment(e.target.checked)} className="rounded text-amber-600" />
-                        Interne
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!newCommentText.trim()) return;
-                          addRequestComment(selectedRequest.id, newCommentText, isInternalComment);
-                          setNewCommentText('');
-                        }}
-                        className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800"
-                      >
-                        Envoyer
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Échantillons et Essais Rattachés (avec Impression Zebra & ZPL) */}
-                <div className="mt-8 border-t border-slate-200 pt-6">
-                  {(() => {
-                    const isManager = currentUser?.role === 'manager' || currentUser?.role === 'admin';
-                    const reqSamples = samples.filter(s => s.requestId === selectedRequest.id);
-                    const activeAnalysisTpls = analysisTemplates.filter(t => t.isActive !== false);
-
-                    const buildLabelPayload = (targetSamples: Sample[]) =>
-                      targetSamples.map(s => {
-                        // On cherche le laboratoire associé à l'échantillon
-                        const lab = laboratories.find(l => l.id === s.labId);
-                        return {
-                          sample: s,
-                          materialName: materialTemplates.find(m => m.id === s.templateId)?.name || s.templateId,
-                          // On passe lab.code (ex: 'MET') au lieu de s.labId
-                          labCode: lab?.code || s.labId?.toUpperCase() || 'LIMS'
-                        };
-                      });
-
-                    return (
-                      <>
-                        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                          <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center">
-                            <Database className="w-4 h-4 mr-2" />
-                            Échantillons & Analyses Générés ({reqSamples.length})
-                          </h4>
-
-                          {reqSamples.length > 0 && (
-                            <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap gap-2 shrink-0">
+                            {selectedRequest.status === 'soumise' && isManager && (
                               <button
                                 type="button"
-                                onClick={() => printZebraLabelsWindow(buildLabelPayload(reqSamples))}
-                                className="text-xs px-3 py-1.5 bg-slate-900 text-white hover:bg-slate-800 rounded-lg font-semibold flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
-                                title="Imprimer toutes les étiquettes de cette demande sur imprimante Zebra (50x30mm)"
+                                onClick={() => handleStatusChange('En Revue')}
+                                className="bg-purple-600 text-white px-3.5 py-2 rounded-lg text-xs font-semibold hover:bg-purple-700"
                               >
-                                <Printer className="w-3.5 h-3.5" />
-                                Imprimer Étiquettes Zebra ({reqSamples.length})
+                                Passer en Revue
                               </button>
+                            )}
+                            {selectedRequest.status === 'En Revue' && isManager && (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={!statusComment}
+                                  onClick={handleReject}
+                                  className="bg-red-600 text-white px-3.5 py-2 rounded-lg text-xs font-semibold hover:bg-red-700 disabled:opacity-40 flex items-center gap-1"
+                                >
+                                  <XCircle className="w-3.5 h-3.5" /> Refuser
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleStatusChange('validee')}
+                                  className="bg-emerald-600 text-white px-3.5 py-2 rounded-lg text-xs font-semibold hover:bg-emerald-700 flex items-center gap-1"
+                                >
+                                  <CheckCircle className="w-3.5 h-3.5" /> Valider
+                                </button>
+                              </>
+                            )}
+                            {(selectedRequest.status === 'assignee' || selectedRequest.status === 'validee') && (
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange('En Cours')}
+                                className="bg-amber-600 text-white px-3.5 py-2 rounded-lg text-xs font-semibold hover:bg-amber-700 flex items-center gap-1"
+                              >
+                                <PlayCircle className="w-3.5 h-3.5" /> Démarrer
+                              </button>
+                            )}
+                            {selectedRequest.status === 'En Cours' && (
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange('En Validation')}
+                                className="bg-orange-600 text-white px-3.5 py-2 rounded-lg text-xs font-semibold hover:bg-orange-700 flex items-center gap-1"
+                              >
+                                <CheckCircle className="w-3.5 h-3.5" /> Soumettre validation
+                              </button>
+                            )}
+                            {selectedRequest.status === 'En Validation' && isManager && (
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange('terminee')}
+                                className="bg-emerald-600 text-white px-3.5 py-2 rounded-lg text-xs font-semibold hover:bg-emerald-700 flex items-center gap-1"
+                              >
+                                <Shield className="w-3.5 h-3.5" /> Libérer (Terminer)
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : isManager && (
+                      <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-amber-900">
+                          Ce dossier est clôturé ({selectedRequest.status}).
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleStatusChange('En Cours')}
+                          className="bg-white border border-amber-300 text-amber-800 px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-amber-100 flex items-center gap-1.5"
+                        >
+                          <PlayCircle className="w-3.5 h-3.5" /> Réouvrir (En Cours)
+                        </button>
+                      </div>
+                    )}
 
+                    {/* Données Client du Formulaire */}
+                    <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+                        <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+                          <FileText className="w-4 h-4 text-slate-400" /> Données de la Demande
+                        </h4>
+                        {isManager && (
+                          isEditing ? (
+                            <div className="flex gap-1.5">
                               <button
                                 type="button"
                                 onClick={() => {
-                                  const zpl = generateZplForSamples(buildLabelPayload(reqSamples));
-                                  navigator.clipboard?.writeText(zpl);
-                                  alert('Code ZPL copié dans le presse-papiers !\n\nAperçu :\n' + zpl.slice(0, 350) + '...');
+                                  setIsEditing(false);
+                                  setEditedData(selectedRequest.customData);
                                 }}
-                                className="text-xs px-2.5 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-300 rounded-lg font-mono font-semibold flex items-center gap-1 cursor-pointer transition-colors"
-                                title="Copier le code ZPL II natif pour imprimante Zebra"
+                                className="text-xs px-2.5 py-1 bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200"
                               >
-                                <QrCode className="w-3.5 h-3.5" />
-                                ZPL
+                                Annuler
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  updateRequestData(selectedRequest.id, { customData: editedData }, 'Modification des données de la demande.');
+                                  setSelectedRequest(prev => prev ? { ...prev, customData: editedData } : null);
+                                  setIsEditing(false);
+                                }}
+                                className="text-xs px-2.5 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center gap-1"
+                              >
+                                <Save className="w-3 h-3" /> Enregistrer
                               </button>
                             </div>
-                          )}
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setIsEditing(true)}
+                              className="text-xs px-2.5 py-1 bg-slate-100 text-slate-600 rounded-md hover:bg-slate-200 flex items-center gap-1"
+                            >
+                              <Edit2 className="w-3 h-3" /> Modifier
+                            </button>
+                          )
+                        )}
+                      </div>
+
+                      <dl className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {Object.entries(selectedRequest.customData).map(([key, value]) => {
+                          if (key.endsWith('__material_properties') || key.startsWith('matprop_')) return null;
+
+                          const template = requestTemplates.find(t => t.id === selectedRequest.templateId);
+                          const field = template?.fields.find(f => f.id === key);
+                          const resolveMaterialName = (idOrName: string) =>
+                            materialTemplates.find(m => m.id === idOrName || m.name === idOrName)?.name || idOrName;
+
+                          let displayValue = value;
+                          if (typeof value === 'boolean') displayValue = value ? 'Oui' : 'Non';
+                          else if (field?.type === 'analyses' && Array.isArray(value)) {
+                            displayValue = value.map(id => analysisTemplates.find(a => a.id === id)?.name || id).join(', ');
+                          } else if (field?.type === 'materials') {
+                            displayValue = Array.isArray(value)
+                              ? value.map(resolveMaterialName).join(', ')
+                              : resolveMaterialName(String(value));
+                          } else if (Array.isArray(value)) {
+                            displayValue = value.join(', ');
+                          }
+
+                          const selectedMatTemplates = field?.type === 'materials'
+                            ? (Array.isArray(value) ? value : [value])
+                                .map(v => materialTemplates.find(m => m.id === v || m.name === v))
+                                .filter(Boolean)
+                            : [];
+                          const propertiesKey = `${key}__material_properties`;
+                          const materialPropertiesContainer = isEditing
+                            ? (editedData[propertiesKey] || {})
+                            : (selectedRequest.customData[propertiesKey] || {});
+                          const isFullWidth = selectedMatTemplates.length > 0 || field?.type === 'analyses';
+
+                          return (
+                            <div
+                              key={key}
+                              className={`bg-slate-50/80 p-3 rounded-lg border border-slate-100 min-w-0 ${isFullWidth ? 'md:col-span-2' : ''}`}
+                            >
+                              <dt className="text-[11px] font-semibold text-slate-500 mb-1">{field?.name || key}</dt>
+                              <dd className="text-xs text-slate-900 font-medium break-words">
+                                {isEditing && field?.type !== 'materials' && field?.type !== 'analyses' ? (
+                                  typeof value === 'boolean' ? (
+                                    <input
+                                      type="checkbox"
+                                      checked={editedData[key] || false}
+                                      onChange={e => setEditedData({ ...editedData, [key]: e.target.checked })}
+                                      className="rounded border-slate-300"
+                                    />
+                                  ) : Array.isArray(value) ? (
+                                    <span className="text-xs text-slate-400 italic">Non modifiable</span>
+                                  ) : field?.type === 'date' ? (
+                                    <input
+                                      type="date"
+                                      value={editedData[key] || ''}
+                                      onChange={e => setEditedData({ ...editedData, [key]: e.target.value })}
+                                      className="w-full text-xs border-slate-300 rounded px-2 py-1"
+                                    />
+                                  ) : (
+                                    <input
+                                      type="text"
+                                      value={editedData[key] || ''}
+                                      onChange={e => setEditedData({ ...editedData, [key]: e.target.value })}
+                                      className="w-full text-xs border-slate-300 rounded px-2 py-1"
+                                    />
+                                  )
+                                ) : Array.isArray(value) ? (
+                                  <div className="flex flex-wrap gap-1.5 mt-1">
+                                    {value.map(v => (
+                                      <span
+                                        key={v}
+                                        className={`px-2 py-0.5 rounded text-[11px] font-medium border ${
+                                          field?.type === 'materials'
+                                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                            : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                        }`}
+                                      >
+                                        {field?.type === 'analyses'
+                                          ? (analysisTemplates.find(a => a.id === v)?.name || v)
+                                          : field?.type === 'materials'
+                                            ? resolveMaterialName(v)
+                                            : v}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : field?.type === 'date' && displayValue ? (
+                                  new Date(displayValue as string).toLocaleDateString('fr-FR')
+                                ) : (
+                                  displayValue || <span className="text-slate-400 italic">-</span>
+                                )}
+
+                                {selectedMatTemplates.length > 0 && (
+                                  <div className="mt-2.5 pt-2 border-t border-slate-200 space-y-2">
+                                    {selectedMatTemplates.map(matTpl => {
+                                      const matPropsForTpl = materialPropertiesContainer[matTpl!.id] || {};
+                                      return (
+                                        <div key={matTpl!.id} className="bg-white rounded-lg border border-emerald-200 p-2.5 text-xs space-y-1.5">
+                                          <span className="font-bold text-emerald-900 uppercase tracking-wider block text-[10px]">
+                                            Propriétés — {matTpl!.name}
+                                          </span>
+                                          {matTpl!.fields.length === 0 ? (
+                                            <span className="text-slate-400 italic">Aucune propriété configurée.</span>
+                                          ) : (
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                              {matTpl!.fields.map(matField => {
+                                                const propVal =
+                                                  matPropsForTpl[matField.id] ??
+                                                  matPropsForTpl[matField.name] ??
+                                                  getMaterialPropFromRequest(selectedRequest, matTpl!.id, matField.id, matField.name);
+                                                return (
+                                                  <div key={matField.id} className="flex items-center justify-between bg-slate-50 px-2 py-1 rounded border border-slate-100 gap-2 min-w-0">
+                                                    <span className="text-slate-600 truncate">
+                                                      {matField.name} {matField.unit ? `(${matField.unit})` : ''}
+                                                    </span>
+                                                    {isEditing ? (
+                                                      <input
+                                                        type={matField.type === 'number' ? 'number' : 'text'}
+                                                        value={propVal !== undefined ? String(propVal) : ''}
+                                                        onChange={e => {
+                                                          const updatedVal = matField.type === 'number'
+                                                            ? (e.target.value === '' ? '' : Number(e.target.value))
+                                                            : e.target.value;
+                                                          setEditedData({
+                                                            ...editedData,
+                                                            [propertiesKey]: {
+                                                              ...materialPropertiesContainer,
+                                                              [matTpl!.id]: {
+                                                                ...matPropsForTpl,
+                                                                [matField.id]: updatedVal
+                                                              }
+                                                            }
+                                                          });
+                                                        }}
+                                                        className="w-28 text-xs border border-slate-300 rounded px-1.5 py-0.5 bg-white text-right"
+                                                      />
+                                                    ) : (
+                                                      <span className="font-semibold text-slate-900 text-right truncate">
+                                                        {propVal !== undefined && propVal !== '' ? (
+                                                          Array.isArray(propVal)
+                                                            ? propVal.join(', ')
+                                                            : typeof propVal === 'boolean'
+                                                              ? (propVal ? 'Oui' : 'Non')
+                                                              : `${propVal}${matField.unit ? ` ${matField.unit}` : ''}`
+                                                        ) : (
+                                                          <span className="text-slate-400 italic font-normal">-</span>
+                                                        )}
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                );
+                                              })}
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </dd>
+                            </div>
+                          );
+                        })}
+                      </dl>
+                    </div>
+
+                    {/* Conclusion Générale pour les Rapports */}
+                    <div className="bg-emerald-50/50 border border-emerald-200 rounded-xl p-4 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h4 className="text-xs font-bold text-emerald-950 uppercase tracking-wider flex items-center gap-1.5">
+                            <FileText className="w-4 h-4 text-emerald-700" />
+                            Conclusion Générale & Avis Technique (Rapport)
+                          </h4>
+                          <p className="text-[11px] text-emerald-700 mt-0.5">
+                            Balise Word : <code className="font-mono bg-white px-1 py-0.5 rounded border border-emerald-200">{"{{demande.conclusion}}"}</code>
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateRequestData(selectedRequest.id, { conclusion: conclusionText }, 'Mise à jour de la conclusion du rapport');
+                            setSelectedRequest(prev => prev ? { ...prev, conclusion: conclusionText } : null);
+                          }}
+                          className="bg-emerald-600 text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold hover:bg-emerald-700 flex items-center gap-1.5"
+                        >
+                          <Save className="w-3.5 h-3.5" /> Enregistrer
+                        </button>
+                      </div>
+                      <textarea
+                        rows={3}
+                        value={conclusionText}
+                        onChange={e => setConclusionText(e.target.value)}
+                        placeholder="Rédigez la conclusion technique et la conformité globale pour le rapport..."
+                        className="w-full rounded-lg border border-emerald-300 bg-white p-2.5 text-xs text-slate-800 focus:border-emerald-500 focus:outline-none"
+                      />
+                    </div>
+                  </>
+                )}
+
+                {/* ====================================================== */}
+                {/* ONGLET 2 : RÉCEPTION, ÉCHANTILLONS & ESSAIS            */}
+                {/* ====================================================== */}
+                {activeDetailTab === 'samples' && (
+                  <>
+                    {(selectedRequest.status === 'validee' || selectedRequest.status === 'assignee' || (selectedRequest.status === 'En Cours' && isManager)) && (
+                      <div className="bg-indigo-50/70 border border-indigo-200 rounded-xl p-4 space-y-3">
+                        <h4 className="text-xs font-bold text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
+                          <Box className="w-4 h-4 text-indigo-600" />
+                          Réception & Génération d'Échantillons LIMS
+                        </h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                          <div>
+                            <label className="block text-[11px] font-semibold text-indigo-900 mb-1">Modèle Matériau</label>
+                            <select
+                              value={sampleMaterialTemplateId}
+                              onChange={e => setSampleMaterialTemplateId(e.target.value)}
+                              className="w-full text-xs border-indigo-200 rounded-lg bg-white py-1.5"
+                            >
+                              {activeMaterialTemplates.map(t => (
+                                <option key={t.id} value={t.id}>{t.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-indigo-900 mb-1">État Physique</label>
+                            <select
+                              value={sampleMaterialState}
+                              onChange={e => setSampleMaterialState(e.target.value as any)}
+                              className="w-full text-xs border-indigo-200 rounded-lg bg-white py-1.5"
+                            >
+                              <option value="Massif">Massif</option>
+                              <option value="Fritté">Fritté</option>
+                              <option value="Poudre">Poudre</option>
+                              <option value="Liquide">Liquide</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-indigo-900 mb-1">Priorité</label>
+                            <select
+                              value={samplePriority}
+                              onChange={e => setSamplePriority(e.target.value as 'basse' | 'normale' | 'haute')}
+                              className="w-full text-xs border-indigo-200 rounded-lg bg-white py-1.5"
+                            >
+                              <option value="basse">Basse</option>
+                              <option value="normale">Normale</option>
+                              <option value="haute">Urgente (Haute)</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-indigo-900 mb-1">Quantité</label>
+                            <input
+                              type="number"
+                              min="1"
+                              max="50"
+                              value={sampleQuantity}
+                              onChange={e => setSampleQuantity(Number(e.target.value))}
+                              className="w-full text-xs border-indigo-200 rounded-lg bg-white py-1.5 px-2.5"
+                            />
+                          </div>
                         </div>
 
-                        {reqSamples.length === 0 ? (
-                          <div className="text-sm text-slate-500 italic bg-slate-50 p-4 rounded-lg border border-slate-100">
-                            Aucun échantillon LIMS généré pour cette demande.
+                        {(() => {
+                          const selectedMatTpl = materialTemplates.find(t => t.id === sampleMaterialTemplateId);
+                          if (!selectedMatTpl || selectedMatTpl.fields.length === 0) return null;
+                          return (
+                            <div className="pt-2.5 border-t border-indigo-200/70">
+                              <span className="block text-[10px] font-bold text-indigo-900 uppercase tracking-wider mb-2">
+                                Propriétés — {selectedMatTpl.name}
+                              </span>
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                                {selectedMatTpl.fields.map(field => (
+                                  <div key={field.id}>
+                                    <label className="block text-[11px] font-medium text-indigo-900 mb-1">
+                                      {field.name} {field.unit ? `(${field.unit})` : ''}
+                                    </label>
+                                    {field.type === 'select' ? (
+                                      <select
+                                        value={sampleCustomData[field.name] ?? ''}
+                                        onChange={e => setSampleCustomData({ ...sampleCustomData, [field.name]: e.target.value })}
+                                        className="w-full text-xs border-indigo-200 rounded-md bg-white px-2 py-1.5"
+                                      >
+                                        <option value="">-- Sélectionner --</option>
+                                        {field.options?.map(opt => (
+                                          <option key={opt} value={opt}>{opt}</option>
+                                        ))}
+                                      </select>
+                                    ) : field.type === 'multiselect' ? (
+                                      <div className="flex flex-wrap gap-1">
+                                        {field.options?.map(opt => {
+                                          const currentVals = Array.isArray(sampleCustomData[field.name]) ? sampleCustomData[field.name] : [];
+                                          const isChecked = currentVals.includes(opt);
+                                          return (
+                                            <button
+                                              key={opt}
+                                              type="button"
+                                              onClick={() => {
+                                                const nextVals = isChecked
+                                                  ? currentVals.filter((v: string) => v !== opt)
+                                                  : [...currentVals, opt];
+                                                setSampleCustomData({ ...sampleCustomData, [field.name]: nextVals });
+                                              }}
+                                              className={`px-2 py-0.5 rounded text-[11px] font-medium border ${
+                                                isChecked ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-700 border-indigo-200'
+                                              }`}
+                                            >
+                                              {opt}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    ) : field.type === 'boolean' ? (
+                                      <label className="inline-flex items-center gap-2 text-xs text-indigo-900 mt-1">
+                                        <input
+                                          type="checkbox"
+                                          checked={Boolean(sampleCustomData[field.name])}
+                                          onChange={e => setSampleCustomData({ ...sampleCustomData, [field.name]: e.target.checked })}
+                                          className="rounded border-indigo-300 text-indigo-600"
+                                        />
+                                        Oui
+                                      </label>
+                                    ) : (
+                                      <input
+                                        type={field.type === 'number' ? 'number' : field.type === 'date' ? 'date' : 'text'}
+                                        value={sampleCustomData[field.name] ?? ''}
+                                        placeholder={field.unit ? `En ${field.unit}...` : 'Saisir...'}
+                                        onChange={e => setSampleCustomData({
+                                          ...sampleCustomData,
+                                          [field.name]: field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value
+                                        })}
+                                        className="w-full text-xs border-indigo-200 rounded-md bg-white px-2 py-1.5"
+                                      />
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={handleGenerateSamples}
+                            className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-semibold hover:bg-indigo-700 flex items-center gap-1.5"
+                          >
+                            <Plus className="w-4 h-4" /> Générer {sampleQuantity} échantillon(s)
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Liste des Échantillons & Analyses rattachés */}
+                    {(() => {
+                      const activeAnalysisTpls = analysisTemplates.filter(t => t.isActive !== false);
+                      const buildLabelPayload = (targetSamples: Sample[]) =>
+                        targetSamples.map(s => {
+                          const lab = laboratories.find(l => l.id === s.labId);
+                          return {
+                            sample: s,
+                            materialName: materialTemplates.find(m => m.id === s.templateId)?.name || s.templateId,
+                            labCode: lab?.code || s.labId?.toUpperCase() || 'LIMS'
+                          };
+                        });
+
+                      return (
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+                              <Database className="w-4 h-4 text-slate-400" />
+                              Échantillons & Analyses ({selectedReqSamples.length})
+                            </h4>
+                            {selectedReqSamples.length > 0 && (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => printZebraLabelsWindow(buildLabelPayload(selectedReqSamples))}
+                                  className="text-xs px-3 py-1.5 bg-slate-900 text-white hover:bg-slate-800 rounded-lg font-semibold flex items-center gap-1.5"
+                                >
+                                  <Printer className="w-3.5 h-3.5" /> Étiquettes Zebra ({selectedReqSamples.length})
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const zpl = generateZplForSamples(buildLabelPayload(selectedReqSamples));
+                                    navigator.clipboard?.writeText(zpl);
+                                    alert('Code ZPL copié dans le presse-papiers !');
+                                  }}
+                                  className="text-xs px-2.5 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-300 rounded-lg font-mono font-semibold flex items-center gap-1"
+                                >
+                                  <QrCode className="w-3.5 h-3.5" /> ZPL
+                                </button>
+                              </div>
+                            )}
                           </div>
-                        ) : (
-                          <div className="space-y-4">
-                            {reqSamples.map(sample => {
+
+                          {selectedReqSamples.length === 0 ? (
+                            <div className="text-xs text-slate-400 italic bg-slate-50 p-6 rounded-xl border border-slate-200 text-center">
+                              Aucun échantillon LIMS généré pour cette demande.
+                            </div>
+                          ) : (
+                            selectedReqSamples.map(sample => {
                               const sampleAnalyses = analyses.filter(a => a.sampleId === sample.id);
                               return (
-                                <div key={sample.id} className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
-                                  <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
-                                    <div className="font-semibold text-slate-800 flex items-center gap-2 flex-wrap">
+                                <div key={sample.id} className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+                                    <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-800">
                                       <Layers className="w-4 h-4 text-indigo-500" />
-                                      <span>Échantillon : {sample.id}</span>
-                                      <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full font-mono">
+                                      <span className="font-mono font-bold">{sample.id}</span>
+                                      <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full font-mono text-[11px]">
                                         {sample.barcode}
                                       </span>
                                       <button
                                         type="button"
                                         onClick={() => printZebraLabelsWindow(buildLabelPayload([sample]))}
-                                        className="text-xs px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded border border-slate-300 flex items-center gap-1 font-medium transition-colors cursor-pointer"
-                                        title="Imprimer l'étiquette Zebra de cet échantillon"
+                                        className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded border border-slate-300 flex items-center gap-1 text-[11px]"
                                       >
                                         <Printer className="w-3 h-3" /> Étiquette
                                       </button>
                                     </div>
                                     {isManager && (
-                                      <div className="flex items-center gap-2">
+                                      <div className="flex items-center gap-1.5">
                                         <button
                                           type="button"
                                           onClick={() => {
                                             setAddingAnalysisForSample(addingAnalysisForSample === sample.id ? null : sample.id);
                                             setSelectedNewAnalysisTplId(activeAnalysisTpls[0]?.id || '');
                                           }}
-                                          className="text-xs px-2.5 py-1 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-md font-medium flex items-center transition-colors"
+                                          className="text-xs px-2.5 py-1 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-md font-semibold flex items-center gap-1"
                                         >
-                                          <Plus className="w-3.5 h-3.5 mr-1" /> Ajouter une analyse
+                                          <Plus className="w-3.5 h-3.5" /> Analyse
                                         </button>
                                         <button
                                           type="button"
@@ -1575,7 +1440,7 @@ export function RequestsInternal() {
                                               deleteSample(sample.id);
                                             }
                                           }}
-                                          className="text-xs p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                                          className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md"
                                           title="Supprimer cet échantillon"
                                         >
                                           <Trash2 className="w-4 h-4" />
@@ -1584,13 +1449,12 @@ export function RequestsInternal() {
                                     )}
                                   </div>
 
-                                  {/* Petit formulaire d'ajout d'analyse à la volée pour cet échantillon */}
                                   {isManager && addingAnalysisForSample === sample.id && (
-                                    <div className="mb-3 p-3 bg-indigo-50/70 border border-indigo-100 rounded-lg flex flex-wrap items-center gap-2">
+                                    <div className="p-2.5 bg-indigo-50/70 border border-indigo-200 rounded-lg flex flex-wrap items-center gap-2">
                                       <select
                                         value={selectedNewAnalysisTplId}
                                         onChange={e => setSelectedNewAnalysisTplId(e.target.value)}
-                                        className="text-xs border-indigo-200 rounded-md py-1.5 px-2 bg-white flex-1 min-w-[200px]"
+                                        className="text-xs border-indigo-200 rounded-md py-1.5 px-2 bg-white flex-1 min-w-[180px]"
                                       >
                                         {activeAnalysisTpls.map(tpl => (
                                           <option key={tpl.id} value={tpl.id}>{tpl.name} ({tpl.standardRef || 'Interne'})</option>
@@ -1621,23 +1485,21 @@ export function RequestsInternal() {
                                             sampleId: sample.id,
                                             templateId: selectedNewAnalysisTplId,
                                             status: 'planifie',
-                                            technician: isAssignedQualified && assignedUser
-                                              ? assignedUser.name
-                                              : 'Non assigné',
+                                            technician: isAssignedQualified && assignedUser ? assignedUser.name : 'Non assigné',
                                             updatedAt: new Date().toISOString(),
                                             results: {},
                                             images: []
                                           });
                                           setAddingAnalysisForSample(null);
                                         }}
-                                        className="text-xs px-3 py-1.5 bg-indigo-600 text-white rounded-md font-medium hover:bg-indigo-700"
+                                        className="text-xs px-3 py-1.5 bg-indigo-600 text-white rounded-md font-semibold hover:bg-indigo-700"
                                       >
-                                        Confirmer l'ajout
+                                        Ajouter
                                       </button>
                                       <button
                                         type="button"
                                         onClick={() => setAddingAnalysisForSample(null)}
-                                        className="text-xs px-2.5 py-1.5 text-slate-600 hover:bg-slate-200 rounded-md"
+                                        className="text-xs px-2 py-1.5 text-slate-600 hover:bg-slate-200 rounded-md"
                                       >
                                         Annuler
                                       </button>
@@ -1651,27 +1513,28 @@ export function RequestsInternal() {
                                       {sampleAnalyses.map(analysis => {
                                         const tpl = analysisTemplates.find(t => t.id === analysis.templateId);
                                         return (
-                                          <div key={analysis.id} className="flex items-center text-sm border border-slate-100 rounded bg-slate-50 px-3 py-2 gap-2">
+                                          <div key={analysis.id} className="flex items-center text-xs border border-slate-200/80 rounded-lg bg-slate-50 px-3 py-2 gap-2 min-w-0">
                                             <TestTube2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                                            <div className="truncate flex-1">
-                                              <span className="font-medium text-slate-700">{tpl?.name || analysis.id}</span>
+                                            <div className="truncate flex-1 min-w-0">
+                                              <span className="font-semibold text-slate-800">{tpl?.name || analysis.id}</span>
                                               <span className="ml-1.5 text-[10px] font-mono text-slate-400">({analysis.id})</span>
                                             </div>
-                                            <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border ${analysis.status === 'rejete'
-                                              ? 'bg-red-50 border-red-200 text-red-700'
-                                              : 'bg-white border-slate-200 text-slate-500'
-                                              }`}>
+                                            <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border shrink-0 ${
+                                              analysis.status === 'rejete'
+                                                ? 'bg-red-50 border-red-200 text-red-700'
+                                                : 'bg-white border-slate-200 text-slate-500'
+                                            }`}>
                                               {analysis.status}
                                             </span>
                                             {isManager && (
                                               <button
                                                 type="button"
                                                 onClick={() => {
-                                                  if (window.confirm(`Supprimer l'analyse ${analysis.id} (${tpl?.name || ''}) ?`)) {
+                                                  if (window.confirm(`Supprimer l'analyse ${analysis.id} ?`)) {
                                                     deleteAnalysis(analysis.id);
                                                   }
                                                 }}
-                                                className="text-slate-400 hover:text-red-600 p-1 rounded hover:bg-red-50 transition-colors"
+                                                className="text-slate-400 hover:text-red-600 p-1 rounded hover:bg-red-50 shrink-0"
                                                 title="Supprimer cette analyse"
                                               >
                                                 <Trash2 className="w-3.5 h-3.5" />
@@ -1684,20 +1547,255 @@ export function RequestsInternal() {
                                   )}
                                 </div>
                               );
-                            })}
+                            })
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </>
+                )}
+
+                {/* ====================================================== */}
+                {/* ONGLET 3 : REVUE DE CONTRAT ISO 17025 & DEVIS PDF      */}
+                {/* ====================================================== */}
+                {activeDetailTab === 'contract' && (
+                  <div className="space-y-4">
+                    {/* Synthèse estimation / valorisation */}
+                    {(() => {
+                      const reqAnas = analyses.filter(a => selectedReqSamples.some(s => s.id === a.sampleId));
+                      const totalCost = reqAnas.reduce((sum, a) => sum + (analysisTemplates.find(t => t.id === a.templateId)?.unitPrice || 0), 0) || selectedRequest.estimatedCost || 0;
+                      const estHours = selectedRequest.estimatedHours || reqAnas.reduce((sum, a) => sum + (analysisTemplates.find(t => t.id === a.templateId)?.estimatedHours || 2), 0);
+                      return (
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+                            <div className="text-[10px] font-bold uppercase text-slate-500">Échantillons déclarés</div>
+                            <div className="text-lg font-bold text-slate-900 mt-0.5">{selectedRequest.sampleCount || selectedReqSamples.length || 1}</div>
                           </div>
+                          <div className="p-3.5 rounded-xl bg-blue-50/60 border border-blue-200">
+                            <div className="text-[10px] font-bold uppercase text-blue-700">Durée estimée</div>
+                            <div className="text-lg font-bold text-blue-900 mt-0.5">~{estHours} h</div>
+                          </div>
+                          <div className="p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-200">
+                            <div className="text-[10px] font-bold uppercase text-emerald-700">Valorisation estimée</div>
+                            <div className="text-lg font-bold text-emerald-900 mt-0.5">{totalCost.toLocaleString('fr-FR')} € HT</div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Revue de contrat ISO 17025 §7.1 */}
+                    <div className="bg-indigo-50/50 border border-indigo-200 rounded-xl p-4 space-y-3">
+                      <div>
+                        <h4 className="text-xs font-bold text-indigo-950 uppercase tracking-wider">
+                          Revue de Demande / Contrat (ISO/IEC 17025 §7.1)
+                        </h4>
+                        {selectedRequest.contractReview && (
+                          <p className="text-xs text-indigo-700 mt-0.5">
+                            Validée par <strong>{selectedRequest.contractReview.reviewedBy}</strong> le {new Date(selectedRequest.contractReview.reviewedAt).toLocaleDateString('fr-FR')}
+                            {selectedRequest.committedDueDate ? ` • Échéance engagée : ${new Date(selectedRequest.committedDueDate).toLocaleDateString('fr-FR')}` : ''}
+                          </p>
                         )}
-                      </>
-                    );
-                  })()}
-                </div>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                        <label className="flex items-center gap-2 text-xs text-slate-700 bg-white p-2.5 rounded-lg border border-indigo-100">
+                          <input type="checkbox" disabled={!isManager} checked={reviewMethodsOk} onChange={e => setReviewMethodsOk(e.target.checked)} className="rounded text-indigo-600" />
+                          Méthodes d'essais adaptées
+                        </label>
+                        <label className="flex items-center gap-2 text-xs text-slate-700 bg-white p-2.5 rounded-lg border border-indigo-100">
+                          <input type="checkbox" disabled={!isManager} checked={reviewResourcesOk} onChange={e => setReviewResourcesOk(e.target.checked)} className="rounded text-indigo-600" />
+                          Moyens & équipements disponibles
+                        </label>
+                        <label className="flex items-center gap-2 text-xs text-slate-700 bg-white p-2.5 rounded-lg border border-indigo-100">
+                          <input type="checkbox" disabled={!isManager} checked={reviewStaffOk} onChange={e => setReviewStaffOk(e.target.checked)} className="rounded text-indigo-600" />
+                          Personnel habilité disponible
+                        </label>
+                        <div className="bg-white p-2.5 rounded-lg border border-indigo-100">
+                          <label className="block text-[10px] font-bold uppercase text-indigo-900 mb-1">Date d'échéance engagée</label>
+                          <input
+                            type="date"
+                            disabled={!isManager}
+                            value={committedDateDraft || selectedRequest.committedDueDate || ''}
+                            onChange={e => setCommittedDateDraft(e.target.value)}
+                            className="w-full px-2 py-1 text-xs border border-indigo-300 rounded bg-white"
+                          />
+                        </div>
+                      </div>
+                      {isManager && (
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              saveContractReview(
+                                selectedRequest.id,
+                                { methodsAdequate: reviewMethodsOk, resourcesAvailable: reviewResourcesOk, staffQualified: reviewStaffOk },
+                                committedDateDraft || selectedRequest.committedDueDate || undefined
+                              );
+                            }}
+                            className="px-4 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700"
+                          >
+                            Enregistrer la revue de contrat
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Option Devis PDF Commercial (uniquement si activé dans Paramètres → Laboratoire) */}
+                    {isManager && labSettings?.enableQuotes && (
+                      <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-4 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <h4 className="text-xs font-bold uppercase tracking-wider text-emerald-900">
+                              Devis Commercial (Optionnel){selectedRequest.quoteNumber ? ` — ${selectedRequest.quoteNumber}` : ''}
+                            </h4>
+                            <p className="text-xs text-emerald-800 mt-0.5">
+                              {selectedRequest.quoteGeneratedAt
+                                ? `Dernier devis généré le ${new Date(selectedRequest.quoteGeneratedAt).toLocaleDateString('fr-FR')}`
+                                : 'Aucun devis PDF généré pour ce dossier.'}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleGenerateQuotePdf(selectedRequest)}
+                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow-xs"
+                          >
+                            Générer Devis PDF
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-emerald-900 mb-1">Statut du devis</label>
+                            <select
+                              value={selectedRequest.quoteStatus || 'aucun'}
+                              onChange={e => {
+                                const nextSt = e.target.value as NonNullable<AnalysisRequest['quoteStatus']>;
+                                updateRequestData(selectedRequest.id, { quoteStatus: nextSt }, `Statut devis passé à : ${nextSt}`);
+                              }}
+                              className="w-full text-xs border border-emerald-300 rounded-lg px-2.5 py-1.5 bg-white text-slate-700"
+                            >
+                              <option value="aucun">Non émis</option>
+                              <option value="genere">Devis généré</option>
+                              <option value="envoye">Envoyé au client</option>
+                              <option value="approuve">Accord / BC reçu ✓</option>
+                              <option value="refuse">Devis refusé</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-emerald-900 mb-1">N° Bon de commande client</label>
+                            <input
+                              type="text"
+                              placeholder="Ex: BC-2026-0412"
+                              defaultValue={selectedRequest.purchaseOrderRef || ''}
+                              onBlur={e => {
+                                if (e.target.value !== (selectedRequest.purchaseOrderRef || '')) {
+                                  updateRequestData(selectedRequest.id, { purchaseOrderRef: e.target.value }, `Bon de commande renseigné : ${e.target.value}`);
+                                }
+                              }}
+                              className="w-full text-xs border border-emerald-300 rounded-lg px-2.5 py-1.5 bg-white"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ====================================================== */}
+                {/* ONGLET 4 : FIL DE DISCUSSION & AUDIT TRAIL             */}
+                {/* ====================================================== */}
+                {activeDetailTab === 'activity' && (
+                  <div className="space-y-5">
+                    {/* Fil de discussion */}
+                    <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+                      <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                        Fil de discussion ({(selectedRequest.comments || []).length})
+                      </h4>
+                      <div className="space-y-2 max-h-60 overflow-y-auto">
+                        {(selectedRequest.comments || []).length === 0 ? (
+                          <p className="text-xs text-slate-400 italic">Aucun échange pour le moment.</p>
+                        ) : (
+                          (selectedRequest.comments || []).map(c => (
+                            <div key={c.id} className={`p-3 rounded-lg text-xs border ${c.isInternal ? 'bg-amber-50/70 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
+                              <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] text-slate-500 mb-1">
+                                <span className="font-semibold text-slate-800">
+                                  {c.authorName} <span className="uppercase text-[10px] text-slate-400">({c.authorRole})</span>
+                                  {c.isInternal && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-200 text-amber-900 rounded text-[9px] font-bold">NOTE INTERNE</span>}
+                                </span>
+                                <span>{new Date(c.createdAt).toLocaleString('fr-FR')}</span>
+                              </div>
+                              <p className="text-slate-700 whitespace-pre-wrap break-words">{c.message}</p>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                      <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-slate-100">
+                        <input
+                          type="text"
+                          value={newCommentText}
+                          onChange={e => setNewCommentText(e.target.value)}
+                          placeholder="Écrire un message au client ou une note interne..."
+                          className="flex-1 min-w-0 px-3 py-2 text-xs border border-slate-300 rounded-lg"
+                        />
+                        <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 px-2 shrink-0">
+                          <input type="checkbox" checked={isInternalComment} onChange={e => setIsInternalComment(e.target.checked)} className="rounded text-amber-600" />
+                          Interne
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!newCommentText.trim()) return;
+                            addRequestComment(selectedRequest.id, newCommentText, isInternalComment);
+                            setNewCommentText('');
+                          }}
+                          className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 shrink-0"
+                        >
+                          Envoyer
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Piste d'Audit ISO 17025 / 21 CFR Part 11 */}
+                    <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                          <History className="w-4 h-4 text-slate-400" />
+                          Piste d'Audit ({(selectedRequest.auditTrail || []).length})
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => setShowAudit(!showAudit)}
+                          className="text-xs font-semibold text-blue-600 hover:underline"
+                        >
+                          {showAudit ? 'Réduire' : 'Tout afficher'}
+                        </button>
+                      </div>
+                      <div className="relative border-l-2 border-slate-200 ml-2.5 space-y-4 pt-1">
+                        {selectedRequest.auditTrail && selectedRequest.auditTrail.length > 0 ? (
+                          (showAudit ? selectedRequest.auditTrail : selectedRequest.auditTrail.slice(0, 5)).map((audit, i) => {
+                            const user = users.find(u => u.id === audit.userId);
+                            return (
+                              <div key={audit.id || i} className="relative pl-4">
+                                <div className="absolute w-2.5 h-2.5 bg-blue-500 rounded-full -left-[6px] top-1 ring-4 ring-white" />
+                                <div className="text-[11px] text-slate-400">{formatDate(audit.timestamp)} • {user?.name || audit.userId}</div>
+                                <div className="text-xs font-semibold text-slate-800">{audit.action}</div>
+                                <div className="text-xs text-slate-600 mt-0.5 break-words">{audit.details}</div>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div className="text-xs text-slate-400 italic pl-4">Aucun événement d'audit enregistré.</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
               </div>
             </>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
+            <div className="flex-1 flex flex-col items-center justify-center p-10 text-center text-slate-400">
               <FileText className="w-12 h-12 mb-3 text-slate-300" />
-              <p>Sélectionnez un dossier pour consulter le détail et l'audit trail.</p>
+              <p className="text-sm font-medium text-slate-500">Sélectionnez une demande dans la liste de gauche</p>
+              <p className="text-xs text-slate-400 mt-1">Consultez ses données, échantillons, revue de contrat et historique.</p>
             </div>
           )}
         </div>

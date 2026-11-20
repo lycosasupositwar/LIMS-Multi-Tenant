@@ -40,7 +40,8 @@ import {
   Bug,
   Server,
   Send,
-  Edit2
+  Edit2,
+  Database
 } from 'lucide-react';
 import {
   LogEntry,
@@ -123,7 +124,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   };
 
   useEffect(() => {
-    if (activeTab === 'system' && (currentUser?.role === 'admin' || currentUser?.role === 'manager')) {
+    if ((activeTab === 'lab' || activeTab === 'system') && (currentUser?.role === 'admin' || currentUser?.role === 'manager')) {
       loadBackups();
     }
   }, [activeTab, currentUser]);

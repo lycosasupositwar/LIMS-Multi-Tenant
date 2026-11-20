@@ -363,6 +363,39 @@ export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => voi
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           {getStatusBadge(isReportAvailable ? 'terminee' : req.status)}
+                          {req.status !== 'rejetee' && req.status !== 'brouillon' && (() => {
+                            const steps = ['Soumise', 'Revue', 'Essais', 'Validation', 'Rapport'];
+                            const effectiveStatus = isReportAvailable ? 'terminee' : req.status;
+                            const stepIdx =
+                              effectiveStatus === 'terminee' ? 4
+                              : effectiveStatus === 'En Validation' ? 3
+                              : effectiveStatus === 'En Cours' ? 2
+                              : (effectiveStatus === 'En Revue' || effectiveStatus === 'validee' || effectiveStatus === 'assignee') ? 1
+                              : 0;
+                            return (
+                              <div className="mt-1.5 w-36" title={`Avancement : ${steps[stepIdx]} (${stepIdx + 1}/5)`}>
+                                <div className="flex items-center gap-0.5">
+                                  {steps.map((lbl, idx) => (
+                                    <div
+                                      key={lbl}
+                                      className={`h-1.5 flex-1 rounded-full ${
+                                        idx <= stepIdx ? 'bg-blue-600' : 'bg-slate-200'
+                                      }`}
+                                    />
+                                  ))}
+                                </div>
+                                <div className="flex justify-between text-[9px] text-slate-400 mt-0.5">
+                                  <span>{steps[stepIdx]}</span>
+                                  <span>{stepIdx + 1}/5</span>
+                                </div>
+                              </div>
+                            );
+                          })()}
+                          {req.quoteNumber && (
+                            <div className="mt-1 text-[10px] font-mono text-emerald-700">
+                              Devis {req.quoteNumber} ({req.quoteStatus || 'genere'})
+                            </div>
+                          )}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           <div className="flex items-center justify-end gap-3">

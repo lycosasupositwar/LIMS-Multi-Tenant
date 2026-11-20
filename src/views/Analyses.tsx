@@ -170,6 +170,8 @@ const parseAndMergeVerticalTableText = (
 export function Analyses() {
   const {
     currentUser,
+    users,
+    activeLabId,
     analyses,
     analysisTemplates,
     updateAnalysisStatus,
@@ -577,15 +579,43 @@ export function Analyses() {
               </div>
             ))}
             {!disabled && (
-              <button
-                type="button"
-                onClick={() => {
-                  updateAnalysisResult(analysisId, resultTemplate.id, [...currentValues, '']);
-                }}
-                className="text-xs flex items-center text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-1 rounded"
-              >
-                <Plus className="w-3 h-3 mr-1" /> Ajouter valeur
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    updateAnalysisResult(analysisId, resultTemplate.id, [...currentValues, '']);
+                  }}
+                  className="text-xs flex items-center text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-1 rounded"
+                >
+                  <Plus className="w-3 h-3 mr-1" /> Ajouter valeur
+                </button>
+                <label
+                  className="text-xs flex items-center text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2 py-1 rounded cursor-pointer"
+                  title="Importer les valeurs numériques depuis un export machine (.csv / .txt)"
+                >
+                  <Upload className="w-3 h-3 mr-1" /> Importer CSV
+                  <input
+                    type="file"
+                    accept=".csv,.txt"
+                    className="hidden"
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        const raw = String(reader.result || '');
+                        const tokens = raw.split(/[\r\n;,\t]+/).map(s => s.trim().replace(',', '.'));
+                        const parsed = tokens.filter(t => t !== '' && !isNaN(Number(t)));
+                        if (parsed.length > 0) {
+                          updateAnalysisResult(analysisId, resultTemplate.id, parsed);
+                        }
+                      };
+                      reader.readAsText(file);
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+              </>
             )}
           </div>
           {numValues.length > 0 && (
@@ -907,7 +937,55 @@ export function Analyses() {
                   <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 text-xs">
                     {template.standardRef || 'Méthode interne'}
                   </span>
-                  <span>Tech: <strong className="text-slate-700">{analysis.technician}</strong></span>
+                  {template.sopDocumentData && (
+                    <a
+                      href={template.sopDocumentData}
+                      download={template.sopDocumentName || `${template.id}_mode_operatoire.pdf`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded"
+                      title={`Consulter le mode opératoire${template.sopVersion ? ` (${template.sopVersion})` : ''}`}
+                    >
+                      📄 Mode Opératoire{template.sopVersion ? ` (${template.sopVersion})` : ''}
+                    </a>
+                  )}
+                  {(currentUser?.role === 'manager' || currentUser?.role === 'admin') ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <span>Tech:</span>
+                      <select
+                        value={analysis.technician || 'Non assigné'}
+                        onChange={e => updateAnalysisMeta(analysis.id, { technician: e.target.value })}
+                        className="text-xs border border-slate-300 rounded px-1.5 py-0.5 bg-white text-slate-800 font-medium"
+                        title="Assigner cet essai à un opérateur habilité (ISO 17025 §6.2)"
+                      >
+                        <option value="Non assigné">Non assigné</option>
+                        {users
+                          .filter(u =>
+                            (u.role === 'analyste' || u.role === 'manager') &&
+                            (!u.labId || u.labId === 'all' || u.labId === (analysis.labId || activeLabId))
+                          )
+                          .map(u => {
+                            const hasQual = (u.qualifiedTemplateIds || []).includes(analysis.templateId);
+                            const expStr = u.qualificationExpiries?.[analysis.templateId];
+                            const isQualExpired = expStr
+                              ? new Date(expStr).getTime() < new Date().setHours(0, 0, 0, 0)
+                              : false;
+                            const validQual = hasQual && !isQualExpired;
+                            return (
+                              <option
+                                key={u.id}
+                                value={u.name}
+                                disabled={!validQual && analysis.technician !== u.name}
+                              >
+                                {u.name} {validQual ? '✓' : isQualExpired ? '(Habilit. expirée)' : '(Non habilité)'}
+                              </option>
+                            );
+                          })}
+                      </select>
+                    </span>
+                  ) : (
+                    <span>Tech: <strong className="text-slate-700">{analysis.technician}</strong></span>
+                  )}
                 </div>
                 <p className="text-xs text-slate-500">{template.description}</p>
                 {analysis.status === 'rejete' && (
@@ -960,7 +1038,22 @@ export function Analyses() {
                         if (!eq) return null;
                         const days = getCalibrationDaysRemaining(eq.nextCalibrationDate);
                         if (days < 0 || eq.status !== 'operationnel') {
-                          return <p className="text-[11px] text-red-600 font-semibold mt-1">⚠ Équipement hors validité métrologique ({days < 0 ? `expiré depuis ${Math.abs(days)}j` : eq.status}).</p>;
+                          return (
+                            <div className="mt-1 space-y-1">
+                              <p className="text-[11px] text-red-600 font-semibold">
+                                ⚠ Équipement hors validité métrologique ({days < 0 ? `expiré depuis ${Math.abs(days)}j` : eq.status}).
+                              </p>
+                              {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && !isAnalysisLocked && (
+                                <input
+                                  type="text"
+                                  value={analysis.calibrationOverrideReason || ''}
+                                  onChange={e => updateAnalysisMeta(analysis.id, { calibrationOverrideReason: e.target.value })}
+                                  placeholder="Justification de dérogation manager (ISO 17025)..."
+                                  className="w-full text-[11px] border border-red-300 bg-red-50/50 rounded px-2 py-1 text-red-900"
+                                />
+                              )}
+                            </div>
+                          );
                         }
                         return null;
                       })()}

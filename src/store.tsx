@@ -32,6 +32,8 @@ import {
   Equipment,
   NonConformity,
   AnalysisPack,
+  ControlChart,
+  ControlChartPoint,
   ContractReview,
   RequestComment
 } from './types';
@@ -128,6 +130,7 @@ interface LimsContextType {
   allEquipments: Equipment[];
   allNonConformities: NonConformity[];
   allAnalysisPacks: AnalysisPack[];
+  allControlCharts: ControlChart[];
 
   // --- Collections Filtrées (selon `activeLabId` ou `currentUser.id` pour un demandeur) ---
   samples: Sample[];
@@ -138,6 +141,7 @@ interface LimsContextType {
   equipments: Equipment[];
   nonConformities: NonConformity[];
   analysisPacks: AnalysisPack[];
+  controlCharts: ControlChart[];
   /** Raccourci vers `activeLab.settings` */
   labSettings: LabSettings;
 
@@ -204,14 +208,19 @@ interface LimsContextType {
   updateAnalysisPack: (id: string, updates: Partial<AnalysisPack>) => void;
   deleteAnalysisPack: (id: string) => void;
 
+  // --- Actions Cartes de Contrôle Qualité Interne (CQ / Westgard) ---
+  addControlChart: (chart: ControlChart) => void;
+  addControlChartPoint: (chartId: string, point: Omit<ControlChartPoint, 'id' | 'operator'>) => void;
+  deleteControlChart: (id: string) => void;
+
   // --- Actions Enrichies (Revue de contrat, Commentaires, Chaîne de garde, Métadonnées Essais, Révisions Rapports, Habilitations) ---
   addRequestComment: (requestId: string, message: string, isInternal?: boolean) => void;
   saveContractReview: (requestId: string, review: Omit<ContractReview, 'reviewedBy' | 'reviewedAt'>, committedDueDate?: string) => void;
   updateSampleCustody: (id: string, updates: Partial<Pick<Sample, 'storageLocation' | 'retentionUntil' | 'disposalDate' | 'disposalMethod' | 'disposalBy' | 'disposalNotes' | 'consumableLotsUsed' | 'status'>>) => void;
-  updateAnalysisMeta: (id: string, updates: Partial<Pick<Analysis, 'equipmentId' | 'consumableLotsUsed' | 'conformityStatus' | 'plannedDate' | 'notes' | 'isScheduleLocked' | 'scheduledBatchId'>>) => void;
+  updateAnalysisMeta: (id: string, updates: Partial<Pick<Analysis, 'equipmentId' | 'consumableLotsUsed' | 'conformityStatus' | 'plannedDate' | 'notes' | 'isScheduleLocked' | 'scheduledBatchId' | 'technician' | 'calibrationOverrideReason'>>) => void;
   applyScheduleProposal: (updates: { id: string; plannedDate: string; scheduledBatchId?: string }[]) => void;
   createReportRevision: (parentReportId: string, amendmentReason: string) => Report | null;
-  updateUserQualifications: (userId: string, qualifiedTemplateIds: string[]) => Promise<boolean>;
+  updateUserQualifications: (userId: string, qualifiedTemplateIds: string[], qualificationExpiries?: Record<string, string>) => Promise<boolean>;
 
   // --- Administration & Maintenance ---
   updateLabSettings: (settings: Partial<LabSettings>) => void;
@@ -347,6 +356,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const [rawEquipments, setEquipments] = useSyncedState<Equipment[]>('equipments', initialEquipments, isAuthenticated);
   const [rawNonConformities, setNonConformities] = useSyncedState<NonConformity[]>('nonConformities', initialNonConformities, isAuthenticated);
   const [rawAnalysisPacks, setAnalysisPacks] = useSyncedState<AnalysisPack[]>('analysisPacks', initialAnalysisPacks, isAuthenticated);
+  const [rawControlCharts, setControlCharts] = useSyncedState<ControlChart[]>('controlCharts', [], isAuthenticated);
 
   const [activeLabId, setActiveLabIdState] = useState<string>(initialLaboratories[0]?.id || '');
 
@@ -468,6 +478,11 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     if (isRequester) return rawAnalysisPacks;
     return rawAnalysisPacks.filter(p => p.labId === activeLabId);
   }, [rawAnalysisPacks, isRequester, activeLabId]);
+
+  const controlCharts = useMemo(() => {
+    if (isRequester) return [];
+    return rawControlCharts.filter(c => c.labId === activeLabId);
+  }, [rawControlCharts, isRequester, activeLabId]);
 
   /** Modèles CMS : un demandeur voit les modèles de tous les laboratoires pour soumettre ses commandes */
   const materialTemplates = useMemo(() => {
@@ -827,10 +842,24 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       return r;
     }));
 
-    const analystName = users.find(u => u.id === analystId)?.name || 'Non assigné';
+    const assignedAnalyst = users.find(u => u.id === analystId);
+    const analystName = assignedAnalyst?.name || 'Non assigné';
+    const analystQuals = assignedAnalyst?.qualifiedTemplateIds || [];
     setAnalyses(prev => prev.map(a => {
       const isRelated = rawSamples.some(s => s.requestId === requestId && s.id === a.sampleId);
       if (isRelated) {
+        if (!analystId) {
+          const audit = createAuditLog('Désassignation', `Analyste retiré (Hérité de la demande)`);
+          return { ...a, technician: 'Non assigné', auditTrail: [audit, ...(a.auditTrail || [])] };
+        }
+        // Contrôle strict d'habilitation ISO 17025 §6.2 : n'affecte l'essai que si l'opérateur est habilité
+        if (!analystQuals.includes(a.templateId)) {
+          const audit = createAuditLog(
+            'Assignation bloquée (Habilitation)',
+            `${analystName} non affecté à ${a.id} : habilitation manquante pour ${a.templateId}`
+          );
+          return { ...a, technician: 'Non assigné', auditTrail: [audit, ...(a.auditTrail || [])] };
+        }
         const audit = createAuditLog('Assignation', `Analyste assigné : ${analystName} (Hérité de la demande)`);
         return { ...a, technician: analystName, auditTrail: [audit, ...(a.auditTrail || [])] };
       }
@@ -1162,6 +1191,20 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       ...prev.map(r => (r.id === parentReportId ? { ...r, isLocked: true } : r))
     ]);
 
+    // Notification email au demandeur lors de l'émission d'une révision de rapport
+    if (parent.requestId) {
+      const parentReq = rawRequests.find(r => r.id === parent.requestId);
+      if (parentReq) {
+        addNotification(
+          parentReq.requesterId,
+          `Nouvelle révision de rapport (${revId})`,
+          `Une révision (${revId}) du rapport "${parent.title}" a été créée pour votre demande ${parentReq.id}. Motif : ${amendmentReason.trim()}.`,
+          'email',
+          { targetTab: 'reports', targetId: revId, labId: parent.labId }
+        );
+      }
+    }
+
     return revision;
   };
 
@@ -1212,6 +1255,25 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
   const deleteAnalysisPack = (id: string) => {
     setAnalysisPacks(prev => prev.filter(p => p.id !== id));
+  };
+
+  // --- Gestion des Cartes de Contrôle Qualité Interne (CQ / Westgard) ---
+  const addControlChart = (chart: ControlChart) => {
+    const item = { ...chart, labId: chart.labId || activeLabId };
+    setControlCharts(prev => [item, ...prev]);
+  };
+  const addControlChartPoint = (chartId: string, point: Omit<ControlChartPoint, 'id' | 'operator'>) => {
+    const newPt: ControlChartPoint = {
+      ...point,
+      id: `pt-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      operator: currentUser?.name || 'Opérateur'
+    };
+    setControlCharts(prev =>
+      prev.map(c => (c.id === chartId ? { ...c, points: [...(c.points || []), newPt] } : c))
+    );
+  };
+  const deleteControlChart = (id: string) => {
+    setControlCharts(prev => prev.filter(c => c.id !== id));
   };
 
   // --- Fil de discussion, Revue de contrat, Chaîne de garde & Métadonnées Essais ---
@@ -1282,7 +1344,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
 
   const updateAnalysisMeta = (
     id: string,
-    updates: Partial<Pick<Analysis, 'equipmentId' | 'consumableLotsUsed' | 'conformityStatus' | 'plannedDate' | 'notes' | 'isScheduleLocked' | 'scheduledBatchId'>>
+    updates: Partial<Pick<Analysis, 'equipmentId' | 'consumableLotsUsed' | 'conformityStatus' | 'plannedDate' | 'notes' | 'isScheduleLocked' | 'scheduledBatchId' | 'technician' | 'calibrationOverrideReason'>>
   ) => {
     setAnalyses(prev =>
       prev.map(a => {
@@ -1326,19 +1388,33 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
     );
   };
 
-  const updateUserQualifications = async (userId: string, qualifiedTemplateIds: string[]): Promise<boolean> => {
+  const updateUserQualifications = async (
+    userId: string,
+    qualifiedTemplateIds: string[],
+    qualificationExpiries?: Record<string, string>
+  ): Promise<boolean> => {
     try {
       const res = await fetch(`/api/users/${userId}/qualifications`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ qualifiedTemplateIds })
+        body: JSON.stringify({ qualifiedTemplateIds, qualificationExpiries })
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         console.error('Échec mise à jour habilitations (HTTP ' + res.status + ') :', err.error || res.statusText);
         return false;
       }
-      setUsers(prev => prev.map(u => (u.id === userId ? { ...u, qualifiedTemplateIds } : u)));
+      setUsers(prev =>
+        prev.map(u =>
+          u.id === userId
+            ? {
+                ...u,
+                qualifiedTemplateIds,
+                ...(qualificationExpiries !== undefined ? { qualificationExpiries } : {})
+              }
+            : u
+        )
+      );
       return true;
     } catch (e) {
       console.error('Erreur mise à jour habilitations :', e);
@@ -1477,7 +1553,8 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       allEquipments: rawEquipments,
       allNonConformities: rawNonConformities,
       allAnalysisPacks: rawAnalysisPacks,
-      samples, analyses, reports, requests, consumables, equipments, nonConformities, analysisPacks, labSettings,
+      allControlCharts: rawControlCharts,
+      samples, analyses, reports, requests, consumables, equipments, nonConformities, analysisPacks, controlCharts, labSettings,
       addMaterialTemplate, updateMaterialTemplate, deleteMaterialTemplate,
       addAnalysisTemplate, updateAnalysisTemplate, deleteAnalysisTemplate,
       addRequestTemplate, updateRequestTemplate, deleteRequestTemplate,
@@ -1492,6 +1569,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       addEquipment, updateEquipment, deleteEquipment,
       addNonConformity, updateNonConformity, deleteNonConformity,
       addAnalysisPack, updateAnalysisPack, deleteAnalysisPack,
+      addControlChart, addControlChartPoint, deleteControlChart,
       addRequestComment, saveContractReview, updateSampleCustody, updateAnalysisMeta, applyScheduleProposal, createReportRevision, updateUserQualifications,
       updateLabSettings, purgeData, applyPatch
     }}>

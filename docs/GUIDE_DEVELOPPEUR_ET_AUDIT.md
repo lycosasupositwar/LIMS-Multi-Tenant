@@ -49,20 +49,20 @@ flowchart TB
         App --> Store["src/store.tsx\n(LimsProvider + useSyncedState)"]
         App --> Portal["RequesterPortal.tsx\n(Espace Client Externe)"]
         App --> Layout["Layout.tsx\n(Console Interne Multi-Labo)"]
-        Layout --> Views["Vues Métier (src/views/*)\nDashboard | RequestsInternal | Samples\nAnalyses | Reports | Inventory | BuilderCMS | Settings"]
+        Layout --> Views["Vues Métier (src/views/*)\nDashboard | RequestsInternal | Samples | Analyses\nPlanning | Equipments (CQ) | NonConformities\nReports | Inventory | BuilderCMS | Settings"]
     end
 
     subgraph Server["Serveur Node.js 22+ / Express 5 (server.ts)"]
         AuthMW["Middleware JWT (cookie HttpOnly)\n+ Rate Limiting Anti-Bruteforce"]
-        ColAPI["API Collections (/api/db/:collection)\nFiltrage Multi-Tenant & Confidentialité"]
-        AuthAPI["API Auth & Users (/api/auth/*, /api/users/*)"]
-        DocAPI["API Rapports & PDF\n(/api/convert-pdf, /api/reports/*)"]
-        AdminAPI["API Admin (/api/admin/logs, /api/admin/smtp)"]
+        ColAPI["API Collections (/api/db/:collection)\nRoutes Atomiques & Filtrage Multi-Tenant"]
+        AuthAPI["API Auth, Users & Habilitations\n(/api/auth/*, /api/users/*)"]
+        DocAPI["API Rapports, SHA-256 & PDF\n(/api/convert-pdf, /api/reports/*)"]
+        AdminAPI["API Admin & Backups SQLite\n(/api/admin/*, /api/system/backups)"]
     end
 
     subgraph Storage["Persistance Locale"]
         SQLite[("database.sqlite\n(node:sqlite DatabaseSync)\nTables: users, reset_tokens,\naccount_requests, collections")]
-        Disk[/"Dossier storage/reports/\nFichiers .pdf et .docx finaux"/]
+        Disk[/"storage/reports/ (PDF/DOCX)\nstorage/backups/ (SQLite 30j)"/]
         LibreOffice[["LibreOffice Headless\n(Conversion DOCX -> PDF)"]]
         SMTP[["Serveur SMTP\n(Nodemailer HTML)"]]
     end
@@ -88,10 +88,10 @@ Le système repose sur deux dimensions de cloisonnement : **le rôle utilisateur
 
 | Rôle | Interface affichée (`App.tsx`) | Périmètre `labId` | Droits principaux |
 |---|---|---|---|
-| **`demandeur`** | `RequesterPortal.tsx` (et `Settings.tsx` onglet Sécurité) | Transversal (peut adresser ses demandes à n'importe quel laboratoire) | Créer/dupliquer des demandes, corriger/resoumettre une demande rejetée, suivre l'avancement, télécharger ses rapports via lien à usage unique. |
-| **`analyste`** | `Layout.tsx` + Vues opérationnelles (`Dashboard` vue opérateur, `RequestsInternal`, `Samples`, `Analyses`, `Reports`, `Inventory`, `Settings` profil) | Fixé à un laboratoire (ex: `lab-metallurgie`) ou `'all'` | Voir les demandes qui lui sont assignées, réceptionner/découper les échantillons, saisir les résultats d'analyses, soumettre pour validation (`a_valider`), gérer les stocks. |
-| **`manager`** | `Layout.tsx` + Toutes les vues internes + **`BuilderCMS.tsx`** | Fixé à son laboratoire ou `'all'` | Tout ce que fait l'analyste + valider/rejeter les demandes et les analyses, assigner un analyste, configurer les modèles CMS (Matériaux, Analyses, Formulaires, Rapports), gérer les utilisateurs de son labo. |
-| **`admin`** | `Layout.tsx` + Toutes les vues + Administration système complète | `'all'` (accès multi-laboratoires complet) | Tout ce que fait le manager + créer/modifier/supprimer des laboratoires, supprimer des comptes utilisateurs, configurer et tester le serveur SMTP, consulter/purger les logs Frontend & Backend. |
+| **`demandeur`** | `RequesterPortal.tsx` (et `Settings.tsx` onglet Sécurité) | Transversal (peut adresser ses demandes à n'importe quel laboratoire) | Créer/dupliquer des demandes (avec Packs d'essais et estimation durée/coût), suivre l'avancement visuel en 5 étapes, corriger/resoumettre une demande rejetée, échanger via le fil de discussion, télécharger ses rapports via lien à usage unique. |
+| **`analyste`** | `Layout.tsx` + Vues opérationnelles (`Dashboard` opérateur, `RequestsInternal`, `Samples`, `Analyses`, `Planning` **lecture seule « Mon Planning »**, `Reports`, `NonConformities`, `Inventory`, `Settings` profil) | Fixé à un laboratoire (ex: `lab-metallurgie`) ou `'all'` | Voir les demandes/essais qui lui sont assignés, consulter son planning personnel en lecture seule (Mois/Semaine/Jour), réceptionner/découper les échantillons, saisir les résultats (avec import CSV et consultation Mode Opératoire PDF), soumettre à validation, gérer les stocks et NC. *Aucun accès à `Equipments`, Kanban, Charge, Planification Auto ou `BuilderCMS`.* |
+| **`manager`** | `Layout.tsx` + Toutes les vues internes + **`Planning` complet**, **`Equipments` (+ Cartes CQ)**, **`BuilderCMS.tsx`** | Fixé à son laboratoire ou `'all'` | Tout ce que fait l'analyste + revue de contrat ISO 17025, devis PDF optionnel, assignation par demande et par essai (avec contrôle bloquant des habilitations), planification intelligente & gestion des absences/maintenances, suivi métrologie & cartes CQ (±2σ/±3σ), habilitations du personnel **de son laboratoire uniquement**, sauvegardes SQLite manuelles. |
+| **`admin`** | `Layout.tsx` + Toutes les vues + Administration système complète | `'all'` (accès multi-laboratoires complet) | Tout ce que fait le manager en transversal sur tous les laboratoires + créer/modifier/supprimer des laboratoires, supprimer des comptes, configurer SMTP, consulter/purger les logs, télécharger les archives SQLite (`storage/backups/`). |
 
 ### 2.2 Cloisonnement Multi-Tenant (Client + Serveur)
 1. **Côté Frontend ([`src/store.tsx`](/src/store.tsx))** :
@@ -109,12 +109,14 @@ Le système repose sur deux dimensions de cloisonnement : **le rôle utilisateur
 La base de données SQLite (`database.sqlite` à la racine du projet) est gérée de manière synchrone via `DatabaseSync` (`node:sqlite`) et combine :
 
 1. **Trois tables relationnelles classiques pour la sécurité ([`src/db/auth.ts`](/src/db/auth.ts))** :
-   - `users (id PRIMARY KEY, email UNIQUE, passwordHash, name, role, company, labId)`
+   - `users (id PRIMARY KEY, email UNIQUE, passwordHash, name, role, company, labId, qualifiedTemplateIds, qualificationExpiries)`
    - `reset_tokens (email PRIMARY KEY, token, expiry)`
    - `account_requests (id PRIMARY KEY, name, email, company, message, created_at)`
 2. **Une table clé-valeur documentaire JSON pour les entités métier ([`src/db/lims.ts`](/src/db/lims.ts))** :
    - `collections (id TEXT PRIMARY KEY, data TEXT NOT NULL)`
-   - Les clés (`id`) autorisées dans `collections` sont : `laboratories`, `notifications`, `materialTemplates`, `analysisTemplates`, `requestTemplates`, `reportTemplates`, `samples`, `analyses`, `materials`, `reports`, `requests`, `consumables`, ainsi que `smtpSettings` (gérée exclusivement par les routes `/api/admin/smtp`).
+   - Les clés (`id`) autorisées dans `collections` sont : `laboratories`, `notifications`, `materialTemplates`, `analysisTemplates`, `requestTemplates`, `reportTemplates`, `samples`, `analyses`, `materials`, `reports`, `requests`, `consumables`, `equipments`, `nonConformities`, `analysisPacks`, `controlCharts`, ainsi que `smtpSettings` (gérée exclusivement par les routes `/api/admin/smtp`).
+3. **Sauvegardes automatiques planifiées (`server.ts`)** :
+   - Copie quotidienne automatique de `database.sqlite` dans `storage/backups/backup-YYYY-MM-DD_HH-mm-ss-auto/` avec rétention configurable (`BACKUP_RETENTION_DAYS=30`) et API REST `/api/system/backups` (`GET`, `POST`, téléchargement admin).
 
 ### Fonctionnement du hook `useSyncedState` ([`src/store.tsx`](/src/store.tsx#L194-L231))
 - Tant que l'utilisateur n'est pas authentifié (`isAuthenticated === false`), l'état en mémoire contient les données initiales de [`src/data.ts`](/src/data.ts).
@@ -406,3 +408,21 @@ Voici la liste exhaustive des points d'attention, cas limites et pistes de corre
 3. **Configuration d'un Reverse Proxy (Nginx / Caddy)** :
    - Si l'application est déployée derrière un reverse proxy HTTPS, ajouter `app.set('trust proxy', 1);` dans `server.ts` afin que `req.ip` (utilisé par le *Rate Limiter*) reflète l'adresse IP réelle du client et non `127.0.0.1` (l'IP du proxy).
 
+
+
+---
+
+## 8. Évolutions Majeures v2 (ISO/IEC 17025, Planification Intelligente, CQ Interne & Exploitation)
+
+Les modules suivants ont été ajoutés post-audit pour couvrir intégralement le périmètre opérationnel et qualité d'un laboratoire d'essais matériaux :
+
+| Module / Fonctionnalité | Fichiers clés | Description technique |
+|---|---|---|
+| **Moteur de Planification Intelligente & Lots de Préparation** | `src/utils/smartScheduler.ts`, `src/views/Planning.tsx`, `src/views/Settings.tsx` | Préemption des urgences (`haute`) respectant les essais démarrés/verrouillés (`isScheduleLocked`), regroupement dynamique en lots de préparation (`none`, `same_material`, `same_template`, `any`), calcul homogène `calculateAnalysesWorkload` (Essais + Prépa), et gestion des absences opérateurs / maintenances équipements (`LabUnavailability`). |
+| **Calendrier Multi-Vues & Accès Analyste Lecture Seule** | `src/views/Planning.tsx`, `src/components/Layout.tsx`, `src/App.tsx` | Vues **Mois / Semaine / Jour** avec drag & drop manager/admin. Les analystes accèdent uniquement à **« Mon Planning »** en lecture seule, filtré strictement sur leurs propres essais. |
+| **Parc Équipements, Métrologie & Cartes de Contrôle CQ** | `src/views/Equipments.tsx`, `src/views/Analyses.tsx`, `src/store.tsx` | Suivi des étalonnages (alertes ≤ 30j / expiré), verrouillage métrologique strict lors de la saisie d'analyse (dérogation manager traçable `calibrationOverrideReason`), et sous-onglet **Cartes CQ (Recharts ±2σ / ±3σ)** pour détecter les dérives machines. |
+| **Habilitations Opérateurs & Dates d'Expiration (§6.2)** | `src/db/auth.ts`, `server.ts`, `src/views/Settings.tsx`, `src/views/RequestsInternal.tsx`, `src/views/Analyses.tsx` | Matrice d'habilitations cloisonnée par laboratoire (un manager ne voit et n'habilite que son personnel sur ses méthodes), dates d'expiration par méthode, blocage strict à l'assignation (demande et essai individuel). |
+| **GED Légère (Modes Opératoires PDF) & Import CSV Machine** | `src/views/BuilderCMS.tsx`, `src/views/Analyses.tsx` | Upload de PDF normatif/mode opératoire (`sopDocumentData`, `sopVersion`) sur chaque `AnalysisTemplate` consultable en 1 clic pendant la saisie, et import CSV/TXT direct dans les séries numériques (`number_series`) et tableaux verticaux (`vertical_table`). |
+| **Traçabilité Équipements dans les Rapports & Révisions** | `src/components/ReportPreviewModal.tsx`, `src/views/Reports.tsx`, `src/views/BuilderCMS.tsx` | Tableau métrologique des moyens d'essais dans le rapport HTML A4 et balises Word (`{{@table_equipements}}`, `{{#equipements}}`, `{{equipement}}`), modale personnalisée de révision (`Rev2`, `Rev3`...), empreinte SHA-256 et notification e-mail client. |
+| **Option Devis PDF Commercial & Portail Client 5 étapes** | `src/views/Settings.tsx`, `src/views/RequestsInternal.tsx`, `src/views/RequesterPortal.tsx` | Activation par laboratoire (`labSettings.enableQuotes`), génération Devis PDF A4 (`jsPDF`), suivi statut/bon de commande, et barre de progression visuelle 5 étapes sur le portail client. |
+| **KPI Catégorisés & Sauvegardes Automatiques SQLite** | `src/views/Dashboard.tsx`, `server.ts`, `src/views/Settings.tsx` | 12 KPI organisés en 4 sections claires (Pilotage/Délais, Production/Charge Prépa, Qualité ISO 17025, Métrologie/Stocks) et sauvegarde quotidienne SQLite dans `storage/backups/` (rétention 30j + API `/api/system/backups`). |

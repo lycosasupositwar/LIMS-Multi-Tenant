@@ -15,7 +15,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useLims } from '../store';
-import { Analysis, AnalysisStatus } from '../types';
+import { Analysis, AnalysisStatus, LabUnavailability } from '../types';
 import {
   CalendarDays,
   Columns3,
@@ -64,6 +64,7 @@ export function Planning() {
     users,
     equipments,
     labSettings,
+    updateLabSettings,
     updateAnalysisMeta,
     applyScheduleProposal,
     updateAnalysisStatus,
@@ -96,6 +97,56 @@ export function Planning() {
   const [selectedAnalysisId, setSelectedAnalysisId] = useState<string | null>(null);
   /** Proposition de planification intelligente en cours de prévisualisation (Dry-Run) */
   const [proposal, setProposal] = useState<SchedulingProposal | null>(null);
+  /** Modale de gestion des absences opérateurs et maintenances équipements */
+  const [showUnavailModal, setShowUnavailModal] = useState(false);
+  const [newUnavail, setNewUnavail] = useState<{
+    targetType: 'staff' | 'equipment';
+    targetId: string;
+    startDate: string;
+    endDate: string;
+    reason: string;
+    capacityReductionHours: number;
+  }>({
+    targetType: 'staff',
+    targetId: '',
+    startDate: toIsoDate(new Date()),
+    endDate: toIsoDate(new Date()),
+    reason: 'Congé / Absence',
+    capacityReductionHours: 3.5
+  });
+
+  const unavailabilities = schedulingConfig.unavailabilities || [];
+  const handleAddUnavailability = () => {
+    if (!newUnavail.targetId || !newUnavail.startDate || !newUnavail.endDate) return;
+    const targetName = newUnavail.targetType === 'staff'
+      ? (labStaff.find(u => u.id === newUnavail.targetId)?.name || newUnavail.targetId)
+      : (equipments.find(e => e.id === newUnavail.targetId)?.code || newUnavail.targetId);
+    const entry: LabUnavailability = {
+      id: `UNAV-${Date.now()}`,
+      targetType: newUnavail.targetType,
+      targetId: newUnavail.targetId,
+      targetName,
+      startDate: newUnavail.startDate,
+      endDate: newUnavail.endDate < newUnavail.startDate ? newUnavail.startDate : newUnavail.endDate,
+      reason: newUnavail.reason.trim() || (newUnavail.targetType === 'staff' ? 'Absence' : 'Maintenance'),
+      capacityReductionHours: newUnavail.targetType === 'staff' ? Number(newUnavail.capacityReductionHours) || 3.5 : undefined
+    };
+    updateLabSettings({
+      schedulingConfig: {
+        ...schedulingConfig,
+        unavailabilities: [...unavailabilities, entry]
+      }
+    });
+    setNewUnavail({ ...newUnavail, targetId: '', reason: '' });
+  };
+  const handleRemoveUnavailability = (id: string) => {
+    updateLabSettings({
+      schedulingConfig: {
+        ...schedulingConfig,
+        unavailabilities: unavailabilities.filter(u => u.id !== id)
+      }
+    });
+  };
 
   /** Lance la simulation du moteur de planification intelligente sans rien modifier en base */
   const handleRunSmartSchedule = () => {
@@ -328,6 +379,14 @@ export function Planning() {
         </div>
         {!isReadOnlyAnalyst && (
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowUnavailModal(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-xs font-semibold shadow-xs transition-colors"
+              title="Déclarer des absences opérateurs ou maintenances équipements"
+            >
+              <AlertTriangle className="w-4 h-4 text-amber-500" /> Absences / Maint. ({unavailabilities.length})
+            </button>
             <button
               type="button"
               onClick={handleRunSmartSchedule}
@@ -1276,6 +1335,128 @@ export function Planning() {
           </div>
         </div>
       )}
+      {/* Modale de Gestion des Absences Opérateurs & Maintenances Équipements */}
+      {showUnavailModal && !isReadOnlyAnalyst && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full overflow-hidden border border-slate-200">
+            <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-bold text-slate-900">Absences Opérateurs & Maintenances Machines</h4>
+                <p className="text-xs text-slate-500">Pris en compte automatiquement par la Planification Intelligente.</p>
+              </div>
+              <button onClick={() => setShowUnavailModal(false)} className="text-slate-400 hover:text-slate-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-2 gap-2.5 text-xs">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Type</label>
+                  <select
+                    value={newUnavail.targetType}
+                    onChange={e => setNewUnavail({ ...newUnavail, targetType: e.target.value as 'staff' | 'equipment', targetId: '' })}
+                    className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white"
+                  >
+                    <option value="staff">Opérateur / Analyste</option>
+                    <option value="equipment">Équipement / Machine</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Cible</label>
+                  <select
+                    value={newUnavail.targetId}
+                    onChange={e => setNewUnavail({ ...newUnavail, targetId: e.target.value })}
+                    className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white"
+                  >
+                    <option value="">-- Choisir --</option>
+                    {newUnavail.targetType === 'staff'
+                      ? labStaff.map(m => <option key={m.id} value={m.id}>{m.name}</option>)
+                      : equipments.map(eq => <option key={eq.id} value={eq.id}>{eq.code} — {eq.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Du</label>
+                  <input
+                    type="date"
+                    value={newUnavail.startDate}
+                    onChange={e => setNewUnavail({ ...newUnavail, startDate: e.target.value })}
+                    className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Au</label>
+                  <input
+                    type="date"
+                    value={newUnavail.endDate}
+                    onChange={e => setNewUnavail({ ...newUnavail, endDate: e.target.value })}
+                    className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5"
+                  />
+                </div>
+                <div className={newUnavail.targetType === 'staff' ? '' : 'col-span-2'}>
+                  <label className="block font-semibold text-slate-700 mb-1">Motif</label>
+                  <input
+                    type="text"
+                    value={newUnavail.reason}
+                    onChange={e => setNewUnavail({ ...newUnavail, reason: e.target.value })}
+                    placeholder="Congés, formation, maintenance préventive..."
+                    className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5"
+                  />
+                </div>
+                {newUnavail.targetType === 'staff' && (
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Réduction capacité (h/j)</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0.5"
+                      max={dailyCap}
+                      value={newUnavail.capacityReductionHours}
+                      onChange={e => setNewUnavail({ ...newUnavail, capacityReductionHours: Number(e.target.value) })}
+                      className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5"
+                    />
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={handleAddUnavailability}
+                disabled={!newUnavail.targetId}
+                className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg disabled:opacity-40"
+              >
+                + Ajouter cette indisponibilité
+              </button>
+
+              <div className="space-y-1.5 max-h-52 overflow-y-auto pt-2 border-t border-slate-200">
+                {unavailabilities.map(u => (
+                  <div key={u.id} className="flex items-center justify-between text-xs p-2 rounded-lg bg-slate-50 border border-slate-200">
+                    <div>
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold mr-1.5 ${u.targetType === 'staff' ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800'}`}>
+                        {u.targetType === 'staff' ? 'Opérateur' : 'Machine'}
+                      </span>
+                      <strong>{u.targetName}</strong> — {u.reason}
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        Du {new Date(u.startDate).toLocaleDateString('fr-FR')} au {new Date(u.endDate).toLocaleDateString('fr-FR')}
+                        {u.capacityReductionHours ? ` (-${u.capacityReductionHours}h/j)` : ''}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveUnavailability(u.id)}
+                      className="text-red-500 hover:text-red-700 text-xs font-semibold px-2 py-1"
+                    >
+                      Suppr.
+                    </button>
+                  </div>
+                ))}
+                {unavailabilities.length === 0 && (
+                  <p className="text-center text-xs text-slate-400 italic py-4">Aucune absence ou maintenance déclarée.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modale de Simulation & Validation de la Planification Intelligente */}
       {proposal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">

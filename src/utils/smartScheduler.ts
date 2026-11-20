@@ -472,17 +472,35 @@ export function computeSmartSchedule(params: {
 
   // Stocke la date choisie pour un lot afin que les essais d'un même lot tombent autant que possible le même jour
   const batchDateMap = new Map<string, string>();
+  const unavailabilities = config.unavailabilities || [];
 
-  const findSlotDate = (hoursNeeded: number, preferredIso?: string): string => {
+  /** Calcule la capacité journalière effective en tenant compte des absences opérateurs */
+  const getEffectiveDayCapacity = (iso: string): number => {
+    const staffReduction = unavailabilities
+      .filter(u => u.targetType === 'staff' && u.startDate <= iso && iso <= u.endDate)
+      .reduce((sum, u) => sum + (u.capacityReductionHours ?? Math.round((dailyCap / 2) * 10) / 10), 0);
+    return Math.max(0, Math.round((dailyCap - staffReduction) * 100) / 100);
+  };
+
+  /** Vérifie si un équipement affecté est en maintenance/indisponible sur la journée `iso` */
+  const isEquipmentUnavailableOn = (equipmentId: string | undefined, iso: string): boolean => {
+    if (!equipmentId) return false;
+    return unavailabilities.some(
+      u => u.targetType === 'equipment' && u.targetId === equipmentId && u.startDate <= iso && iso <= u.endDate
+    );
+  };
+
+  const findSlotDate = (hoursNeeded: number, preferredIso?: string, equipmentId?: string): string => {
     let cursor = preferredIso ? nextWorkingDate(new Date(preferredIso), workingDays) : new Date(baseStart);
     if (cursor < baseStart) cursor = new Date(baseStart);
 
     for (let safety = 0; safety < 180; safety++) {
       cursor = nextWorkingDate(cursor, workingDays);
       const iso = toIsoDate(cursor);
+      const effectiveCap = getEffectiveDayCapacity(iso);
+      const eqBlocked = isEquipmentUnavailableOn(equipmentId, iso);
       const currentLoad = dayLoad.get(iso) || 0;
-      // Autorise un léger dépassement si l'essai seul est plus long que dailyCap et que la journée est vide
-      if (currentLoad + hoursNeeded <= dailyCap || (currentLoad === 0 && hoursNeeded > dailyCap)) {
+      if (!eqBlocked && effectiveCap > 0 && (currentLoad + hoursNeeded <= effectiveCap || (currentLoad === 0 && hoursNeeded > effectiveCap))) {
         return iso;
       }
       cursor.setDate(cursor.getDate() + 1);
@@ -496,7 +514,7 @@ export function computeSmartSchedule(params: {
     const batchId = batchIdByAnalysis.get(item.analysis.id);
     const preferredBatchDate = batchId ? batchDateMap.get(batchId) : undefined;
 
-    const newDate = findSlotDate(effectiveHours, preferredBatchDate);
+    const newDate = findSlotDate(effectiveHours, preferredBatchDate, item.analysis.equipmentId);
     addLoad(newDate, effectiveHours);
 
     if (batchId && !batchDateMap.has(batchId)) {

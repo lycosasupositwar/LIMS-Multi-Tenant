@@ -521,7 +521,8 @@ const ALLOWED_COLLECTIONS = new Set([
   'consumables',
   'equipments',
   'nonConformities',
-  'analysisPacks'
+  'analysisPacks',
+  'controlCharts'
 ]);
 
 /** Collections de configuration CMS réservées en écriture aux profils `manager` et `admin` */
@@ -1015,20 +1016,38 @@ async function startServer() {
 
   /**
    * Mise à jour des habilitations opérateurs (`qualifiedTemplateIds`) réservée aux managers et admins.
+   * Un manager ne peut modifier que les habilitations du personnel (analyste/manager) de son propre laboratoire.
    * Supporte PATCH et POST pour compatibilité maximale avec tous les proxies HTTP.
    */
   const handleUpdateQualifications = async (req: AuthRequest, res: Response) => {
     try {
-      if (req.user!.role !== 'manager' && req.user!.role !== 'admin') {
+      const caller = req.user!;
+      if (caller.role !== 'manager' && caller.role !== 'admin') {
         return res.status(403).json({ error: 'Accès refusé.' });
       }
-      const { qualifiedTemplateIds } = req.body;
+      const { qualifiedTemplateIds, qualificationExpiries } = req.body;
       if (!Array.isArray(qualifiedTemplateIds)) {
         return res.status(400).json({ error: 'Liste d\'habilitations invalide.' });
       }
-      await updateUserQualifications(req.params.id, qualifiedTemplateIds);
-      console.info(`Habilitations mises à jour pour ${req.params.id} par ${req.user!.email}`);
-      res.json({ success: true, qualifiedTemplateIds });
+      const targetUser = await getUserById(req.params.id);
+      if (!targetUser) {
+        return res.status(404).json({ error: 'Utilisateur introuvable.' });
+      }
+      // Contrôle strict multi-laboratoires pour les managers
+      if (caller.role === 'manager') {
+        const callerLabId = caller.labId;
+        if (
+          (targetUser.role !== 'analyste' && targetUser.role !== 'manager') ||
+          (callerLabId && callerLabId !== 'all' && targetUser.labId !== callerLabId)
+        ) {
+          return res.status(403).json({
+            error: 'Un manager ne peut gérer que les habilitations du personnel de son propre laboratoire.'
+          });
+        }
+      }
+      await updateUserQualifications(req.params.id, qualifiedTemplateIds, qualificationExpiries);
+      console.info(`Habilitations mises à jour pour ${req.params.id} par ${caller.email}`);
+      res.json({ success: true, qualifiedTemplateIds, qualificationExpiries });
     } catch (error) {
       console.error('Erreur mise à jour habilitations :', error);
       res.status(500).json({ error: 'Erreur serveur lors de la mise à jour des habilitations' });
@@ -1684,6 +1703,161 @@ async function startServer() {
 
     const stream = fs.createReadStream(tokenData.filePath);
     stream.pipe(res);
+  });
+
+  // ==========================================
+  // 6b. Sauvegarde Automatique Planifiée SQLite
+  // ==========================================
+  const BACKUPS_DIR = path.resolve('./storage/backups');
+  const BACKUP_RETENTION_DAYS = Number(process.env.BACKUP_RETENTION_DAYS) || 30;
+  if (!fs.existsSync(BACKUPS_DIR)) {
+    fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+  }
+
+  /**
+   * Copie les bases SQLite (`database.sqlite`) ET exporte un fichier JSON de sauvegarde de configuration
+   * par laboratoire (`config-lab-<code_ou_id>.json` : paramètres, règles de planification, modèles CMS, packs, équipements, CQ)
+   * dans un dossier horodaté, puis purge les archives dépassant la rétention configurée.
+   */
+  const runSqliteBackup = async (reason: 'auto' | 'manual' = 'auto') => {
+    try {
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+      const folderName = `backup-${stamp}-${reason}`;
+      const targetDir = path.join(BACKUPS_DIR, folderName);
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      const dbCandidates = ['database.sqlite', 'lims.sqlite', 'lims_data.sqlite'];
+      const copiedFiles: string[] = [];
+      for (const fileName of dbCandidates) {
+        const src = path.resolve('.', fileName);
+        if (fs.existsSync(src)) {
+          fs.copyFileSync(src, path.join(targetDir, fileName));
+          copiedFiles.push(fileName);
+        }
+      }
+
+      // Export d'un fichier JSON de configuration complet pour chaque laboratoire
+      try {
+        const labs: any[] = (await getCollection('laboratories')) || [];
+        const matTpls: any[] = (await getCollection('materialTemplates')) || [];
+        const anaTpls: any[] = (await getCollection('analysisTemplates')) || [];
+        const reqTpls: any[] = (await getCollection('requestTemplates')) || [];
+        const repTpls: any[] = (await getCollection('reportTemplates')) || [];
+        const packs: any[] = (await getCollection('analysisPacks')) || [];
+        const eqs: any[] = (await getCollection('equipments')) || [];
+        const charts: any[] = (await getCollection('controlCharts')) || [];
+
+        for (const lab of labs) {
+          const safeLabKey = String(lab.code || lab.id || 'lab').replace(/[^a-zA-Z0-9_-]/g, '_');
+          const cfgFileName = `config-lab-${safeLabKey}.json`;
+          const payload = {
+            exportedAt: now.toISOString(),
+            backupVersion: 2,
+            labId: lab.id,
+            laboratory: lab,
+            materialTemplates: matTpls.filter(x => x.labId === lab.id),
+            analysisTemplates: anaTpls.filter(x => x.labId === lab.id),
+            requestTemplates: reqTpls.filter(x => x.labId === lab.id),
+            reportTemplates: repTpls.filter(x => x.labId === lab.id),
+            analysisPacks: packs.filter(x => x.labId === lab.id),
+            equipments: eqs.filter(x => x.labId === lab.id),
+            controlCharts: charts.filter(x => x.labId === lab.id)
+          };
+          fs.writeFileSync(path.join(targetDir, cfgFileName), JSON.stringify(payload, null, 2), 'utf-8');
+          copiedFiles.push(cfgFileName);
+        }
+      } catch (cfgErr) {
+        console.warn('[BACKUP CONFIG LABS] Erreur lors de l\'export JSON des configurations laboratoires :', cfgErr);
+      }
+
+      // Purge automatique selon la rétention configurée (défaut 30 jours)
+      const cutoff = Date.now() - BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+      for (const entry of fs.readdirSync(BACKUPS_DIR)) {
+        const full = path.join(BACKUPS_DIR, entry);
+        try {
+          const st = fs.statSync(full);
+          if (st.isDirectory() && st.mtimeMs < cutoff) {
+            fs.rmSync(full, { recursive: true, force: true });
+          }
+        } catch {
+          // Ignore erreur de stat individuelle
+        }
+      }
+      console.info(`[BACKUP SQLITE] Sauvegarde (${reason}) créée : ${folderName} (${copiedFiles.join(', ')})`);
+      return { name: folderName, files: copiedFiles, createdAt: now.toISOString() };
+    } catch (e) {
+      console.error('[BACKUP SQLITE] Échec de sauvegarde :', e);
+      return null;
+    }
+  };
+
+  // Sauvegarde automatique quotidienne (vérification au démarrage si aucune sauvegarde dans les dernières 24h)
+  try {
+    const existing = fs.readdirSync(BACKUPS_DIR).filter(e => e.startsWith('backup-'));
+    const hasRecent = existing.some(e => {
+      try {
+        return Date.now() - fs.statSync(path.join(BACKUPS_DIR, e)).mtimeMs < 24 * 60 * 60 * 1000;
+      } catch {
+        return false;
+      }
+    });
+    if (!hasRecent) void runSqliteBackup('auto');
+  } catch {
+    // Ignore
+  }
+  setInterval(() => { void runSqliteBackup('auto'); }, 24 * 60 * 60 * 1000);
+
+  /** Liste les sauvegardes SQLite & configurations laboratoires disponibles (admin & manager) */
+  app.get('/api/system/backups', authenticate, (req: AuthRequest, res) => {
+    if (req.user!.role !== 'admin' && req.user!.role !== 'manager') {
+      return res.status(403).json({ error: 'Accès refusé.' });
+    }
+    try {
+      const dirs = fs.readdirSync(BACKUPS_DIR)
+        .filter(name => name.startsWith('backup-'))
+        .map(name => {
+          const full = path.join(BACKUPS_DIR, name);
+          const stat = fs.statSync(full);
+          const files = fs.readdirSync(full).map(f => ({
+            name: f,
+            sizeBytes: fs.statSync(path.join(full, f)).size
+          }));
+          return { name, createdAt: stat.mtime.toISOString(), files };
+        })
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      res.json({ retentionDays: BACKUP_RETENTION_DAYS, backups: dirs });
+    } catch (e) {
+      res.status(500).json({ error: 'Impossible de lister les sauvegardes.' });
+    }
+  });
+
+  /** Déclenche une sauvegarde SQLite + configurations laboratoires immédiate (admin & manager) */
+  app.post('/api/system/backups', authenticate, async (req: AuthRequest, res) => {
+    if (req.user!.role !== 'admin' && req.user!.role !== 'manager') {
+      return res.status(403).json({ error: 'Accès refusé.' });
+    }
+    const created = await runSqliteBackup('manual');
+    if (!created) {
+      return res.status(500).json({ error: 'Échec de création de la sauvegarde.' });
+    }
+    res.json({ success: true, backup: created });
+  });
+
+  /** Télécharge un fichier de sauvegarde (SQLite réservé admin ; config-lab-*.json autorisé admin & manager) */
+  app.get('/api/system/backups/:backupName/:fileName', authenticate, (req: AuthRequest, res) => {
+    const safeBackup = path.basename(req.params.backupName);
+    const safeFile = path.basename(req.params.fileName);
+    const isLabConfigJson = safeFile.startsWith('config-lab-') && safeFile.endsWith('.json');
+    if (req.user!.role !== 'admin' && !(req.user!.role === 'manager' && isLabConfigJson)) {
+      return res.status(403).json({ error: 'Réservé aux administrateurs (ou managers pour les configurations JSON).' });
+    }
+    const targetPath = path.join(BACKUPS_DIR, safeBackup, safeFile);
+    if (!fs.existsSync(targetPath)) {
+      return res.status(404).json({ error: 'Fichier de sauvegarde introuvable.' });
+    }
+    res.download(targetPath, `${safeBackup}-${safeFile}`);
   });
 
   // ==========================================

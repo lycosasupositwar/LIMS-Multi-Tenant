@@ -2131,110 +2131,166 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
         )}
       </div>
 
-      {/* Ligne 1 : Indicateurs de suivi exigés (Retards, Attente validation, Taux de clôture, Alertes stock) */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <StatCard
-          title="Demandes en retard"
-          value={overdueRequestsCount}
-          subtitle={`Sur ${inProgressRequests + pendingRequests} demandes ouvertes`}
-          icon={Clock}
-          colorClass="bg-red-100 text-red-600"
-          highlight={overdueRequestsCount > 0}
-        />
-        <StatCard
-          title="Analyses à valider"
-          value={pendingValidationAnalyses}
-          subtitle={`${inProgressAnalyses} analyse(s) active(s)`}
-          icon={ShieldAlert}
-          colorClass="bg-amber-100 text-amber-600"
-          highlight={pendingValidationAnalyses > 0}
-        />
-        <StatCard
-          title="Taux de clôture"
-          value={`${closureRate} %`}
-          subtitle={`${completedRequests} / ${filteredRequests.length} demandes terminées`}
-          icon={TrendingUp}
-          colorClass="bg-emerald-100 text-emerald-600"
-        />
-        <StatCard
-          title="Alertes de stock"
-          value={lowStockConsumables.length}
-          subtitle={`${expiredOrSoonConsumables.length} lot(s) à péremption proche`}
-          icon={AlertCircle}
-          colorClass="bg-rose-100 text-rose-600"
-          highlight={lowStockConsumables.length > 0}
-        />
-      </div>
+      {/* ===================================================================== */}
+      {/* CATÉGORIE 1 : PILOTAGE DEMANDES, DÉLAIS & VALORISATION                */}
+      {/* ===================================================================== */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-blue-600" />
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+              1. Pilotage Demandes, Délais & Valorisation
+            </h3>
+          </div>
+          <span className="text-[11px] text-slate-400">Suivi client & engagements (OTD)</span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard
+            title="Demandes en retard"
+            value={overdueRequestsCount}
+            subtitle={`Sur ${inProgressRequests + pendingRequests} demandes ouvertes`}
+            icon={Clock}
+            colorClass="bg-red-100 text-red-600"
+            highlight={overdueRequestsCount > 0}
+          />
+          <StatCard
+            title="Demandes à revoir"
+            value={pendingRequests}
+            subtitle="Nouvelles soumissions & revues"
+            icon={ClipboardClock}
+            colorClass="bg-purple-100 text-purple-600"
+          />
+          <StatCard
+            title="Taux de clôture"
+            value={`${closureRate} %`}
+            subtitle={`${completedRequests} / ${filteredRequests.length} demandes terminées`}
+            icon={TrendingUp}
+            colorClass="bg-emerald-100 text-emerald-600"
+          />
+          <StatCard
+            title="Valorisation & OTD"
+            value={`${Math.round(totalEstimatedRevenue).toLocaleString('fr-FR')} €`}
+            subtitle={`Respect délais (OTD) : ${onTimeRate} %`}
+            icon={Euro}
+            colorClass="bg-emerald-100 text-emerald-700"
+          />
+        </div>
+      </section>
 
-      {/* Ligne 2 : Volumétrie & Indicateurs Qualité */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <StatCard
-          title="Demandes à revoir"
-          value={pendingRequests}
-          subtitle="Nouvelles soumissions & revues"
-          icon={ClipboardClock}
-          colorClass="bg-purple-100 text-purple-600"
-        />
-        <StatCard
-          title="Échantillons suivis"
-          value={totalSamples}
-          subtitle={`${nonConformSamples} non conforme(s)`}
-          icon={Box}
-          colorClass="bg-blue-100 text-blue-600"
-        />
-        <StatCard
-          title="Validation Qualité"
-          value={`${qualityValidationRate} %`}
-          subtitle={`${validatedAnalyses} essai(s) validé(s) ou terminé(s)`}
-          icon={CheckCircle}
-          colorClass="bg-teal-100 text-teal-600"
-        />
-        <StatCard
-          title="Essais repris / rejetés"
-          value={rejectedAnalyses}
-          subtitle={`${rejectedRequests} demande(s) rejetée(s)`}
-          icon={Activity}
-          colorClass="bg-slate-100 text-slate-700"
-        />
-      </div>
+      {/* ===================================================================== */}
+      {/* CATÉGORIE 2 : PRODUCTION & CHARGE LABORATOIRE                         */}
+      {/* ===================================================================== */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-indigo-600" />
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+              2. Production & Charge Laboratoire
+            </h3>
+          </div>
+          <span className="text-[11px] text-slate-400">Essais, préparations optimisées & flux échantillons</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <StatCard
+            title="Charge Active (Essais + Prépa)"
+            value={`${activeLabWorkload.totalHours} h`}
+            subtitle={`Ess. ${activeLabWorkload.testHours}h + Prép. ${activeLabWorkload.prepHours}h (~${activeWorkloadDays}j${activeLabWorkload.savedHours > 0 ? `, -${activeLabWorkload.savedHours}h lots` : ''})`}
+            icon={Layers}
+            colorClass="bg-indigo-100 text-indigo-600"
+          />
+          <StatCard
+            title="Échantillons suivis"
+            value={totalSamples}
+            subtitle={`${nonConformSamples} non conforme(s)`}
+            icon={Box}
+            colorClass="bg-blue-100 text-blue-600"
+          />
+          <StatCard
+            title="Analyses à valider"
+            value={pendingValidationAnalyses}
+            subtitle={`${inProgressAnalyses} analyse(s) active(s)`}
+            icon={ShieldAlert}
+            colorClass="bg-amber-100 text-amber-600"
+            highlight={pendingValidationAnalyses > 0}
+          />
+        </div>
+      </section>
 
-      {/* Ligne 3 : Charge Essais + Préparation, Métrologie, CAPA & Valorisation ISO 17025 */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <StatCard
-          title="Charge Active (Essais + Prépa)"
-          value={`${activeLabWorkload.totalHours} h`}
-          subtitle={`Ess. ${activeLabWorkload.testHours}h + Prép. ${activeLabWorkload.prepHours}h (~${activeWorkloadDays}j${activeLabWorkload.savedHours > 0 ? `, -${activeLabWorkload.savedHours}h lots` : ''})`}
-          icon={Layers}
-          colorClass="bg-indigo-100 text-indigo-600"
-        />
-        <StatCard
-          title="Métrologie Équipements"
-          value={expiredEquipmentsCount + soonCalibrationCount}
-          subtitle={
-            expiredEquipmentsCount > 0
-              ? `${expiredEquipmentsCount} expiré(s), ${soonCalibrationCount} sous 30j`
-              : `${soonCalibrationCount} étalonnage(s) sous 30j / ${filteredEquipments.length} parc`
-          }
-          icon={Wrench}
-          colorClass={expiredEquipmentsCount > 0 ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'}
-          highlight={expiredEquipmentsCount > 0}
-        />
-        <StatCard
-          title="Non-Conformités (CAPA)"
-          value={openNonConformities.length}
-          subtitle={`${criticalNonConformities} majeure(s) / critique(s) ouverte(s)`}
-          icon={AlertOctagon}
-          colorClass="bg-orange-100 text-orange-600"
-          highlight={criticalNonConformities > 0}
-        />
-        <StatCard
-          title="Valorisation & OTD"
-          value={`${Math.round(totalEstimatedRevenue).toLocaleString('fr-FR')} €`}
-          subtitle={`Respect délais (OTD) : ${onTimeRate} %`}
-          icon={Euro}
-          colorClass="bg-emerald-100 text-emerald-700"
-        />
-      </div>
+      {/* ===================================================================== */}
+      {/* CATÉGORIE 3 : QUALITÉ & CONFORMITÉ (ISO 17025)                        */}
+      {/* ===================================================================== */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-teal-600" />
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+              3. Qualité & Conformité (ISO 17025)
+            </h3>
+          </div>
+          <span className="text-[11px] text-slate-400">Validations, reprises & actions CAPA</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <StatCard
+            title="Validation Qualité"
+            value={`${qualityValidationRate} %`}
+            subtitle={`${validatedAnalyses} essai(s) validé(s) ou terminé(s)`}
+            icon={CheckCircle}
+            colorClass="bg-teal-100 text-teal-600"
+          />
+          <StatCard
+            title="Essais repris / rejetés"
+            value={rejectedAnalyses}
+            subtitle={`${rejectedRequests} demande(s) rejetée(s)`}
+            icon={Activity}
+            colorClass="bg-slate-100 text-slate-700"
+          />
+          <StatCard
+            title="Non-Conformités (CAPA)"
+            value={openNonConformities.length}
+            subtitle={`${criticalNonConformities} majeure(s) / critique(s) ouverte(s)`}
+            icon={AlertOctagon}
+            colorClass="bg-orange-100 text-orange-600"
+            highlight={criticalNonConformities > 0}
+          />
+        </div>
+      </section>
+
+      {/* ===================================================================== */}
+      {/* CATÉGORIE 4 : MÉTROLOGIE ÉQUIPEMENTS & STOCKS CONSOMMABLES            */}
+      {/* ===================================================================== */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+              4. Ressources, Métrologie & Stocks
+            </h3>
+          </div>
+          <span className="text-[11px] text-slate-400">Étalonnages parc machines & seuils réactifs</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <StatCard
+            title="Métrologie Équipements"
+            value={expiredEquipmentsCount + soonCalibrationCount}
+            subtitle={
+              expiredEquipmentsCount > 0
+                ? `${expiredEquipmentsCount} expiré(s), ${soonCalibrationCount} sous 30j`
+                : `${soonCalibrationCount} étalonnage(s) sous 30j / ${filteredEquipments.length} parc`
+            }
+            icon={Wrench}
+            colorClass={expiredEquipmentsCount > 0 ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'}
+            highlight={expiredEquipmentsCount > 0}
+          />
+          <StatCard
+            title="Alertes de stock"
+            value={lowStockConsumables.length}
+            subtitle={`${expiredOrSoonConsumables.length} lot(s) à péremption proche`}
+            icon={AlertCircle}
+            colorClass="bg-rose-100 text-rose-600"
+            highlight={lowStockConsumables.length > 0}
+          />
+        </div>
+      </section>
 
       {/* Graphiques interactifs Recharts (Demandes, Analyses, Stocks) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

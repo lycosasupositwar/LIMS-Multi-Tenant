@@ -6,183 +6,75 @@
  * 2. Chargement dynamique des formulaires configurés dans le CMS pour ce laboratoire
  * 3. Affichage et validation des champs personnalisés (textes, listes, sélecteurs d'analyses)
  * 4. Génération de l'identifiant selon le préfixe propre au laboratoire (ex: REQ-MET-26-XXX ou REQ-MEC-26-XXX)
- * 5. Support de la duplication d'une demande existante via la propriété optionnelle `initialRequest`
  */
 
 import React, { useState, useEffect } from 'react';
 import { X, Building2, Layers, CheckCircle2 } from 'lucide-react';
 import { useLims } from '../store';
 import { AnalysisRequest } from '../types';
-import { getLabColor } from '../utils/colors';
-import { generateUniqueLimsId } from '../utils/idGenerator';
-import { estimateRequestDurationWithPrep } from '../utils/smartScheduler';
 
-/**
- * Propriétés de la modale de création de demande d'analyse
- */
 interface Props {
   /** État d'ouverture de la modale */
   isOpen: boolean;
   /** Fonction de fermeture */
   onClose: () => void;
-  /** Demande initiale (pour duplication) */
-  initialRequest?: Partial<AnalysisRequest>;
 }
 
-/**
- * Composant modal de création ou de duplication d'une demande d'essai multi-laboratoires.
- * Gère le basculement entre laboratoires, la sélection du gabarit de formulaire CMS
- * et la saisie des paramètres dynamiques (dont les essais et propriétés matériaux imbriquées).
- *
- * @param {Props} props - Les propriétés du composant (`isOpen`, `onClose`, `initialRequest`).
- * @returns {JSX.Element | null} Le rendu de la modale ou `null` lorsqu'elle est fermée.
- */
-export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
-  // Récupération des référentiels globaux (tous laboratoires confondus) depuis le store LIMS
+export function NewRequestModal({ isOpen, onClose }: Props) {
   const { 
     currentUser, 
     laboratories, 
     activeLabId, 
     allRequestTemplates, 
     allAnalysisTemplates, 
-    allMaterialTemplates,
-    allAnalysisPacks,
-    allRequests,
     addRequest 
   } = useLims();
   
   // Laboratoire sélectionné pour la demande (par défaut le lab actif ou le premier disponible)
-  const [selectedLabId, setSelectedLabId] = useState<string>(activeLabId || laboratories[0]?.id || '');
+  const [selectedLabId, setSelectedLabId] = useState<string>(activeLabId || 'lab-metallurgie');
   
-  
-  // Modèles de formulaires disponibles pour le laboratoire choisi (exclut les modèles désactivés)
+  // Modèles de formulaires disponibles pour le laboratoire choisi
   const labTemplates = allRequestTemplates.filter(t => t.labId === selectedLabId && t.isActive !== false);
-  // Identifiant du gabarit de formulaire CMS actuellement sélectionné
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   
-  // Intitulé principal du projet ou référence pièce renseigné par le demandeur
   const [title, setTitle] = useState('');
-  // Nombre d'échantillons annoncé par le demandeur (sert au calcul estimatif de durée et de coût)
-  const [sampleCount, setSampleCount] = useState<number>(1);
-  // Dictionnaire clé/valeur stockant les réponses aux champs dynamiques du formulaire CMS
   const [customData, setCustomData] = useState<Record<string, any>>({});
 
-  // Synchronisation des données initiales lors de l'ouverture ou du changement d'initialRequest
+  // Synchronisation du modèle par défaut lors du changement de laboratoire
   useEffect(() => {
-    if (isOpen) {
-      if (initialRequest) {
-        // Mode duplication : pré-remplissage à partir de la demande source
-        if (initialRequest.labId) setSelectedLabId(initialRequest.labId);
-        if (initialRequest.templateId) setSelectedTemplateId(initialRequest.templateId);
-        if (initialRequest.title) setTitle("Copie de " + initialRequest.title);
-        setSampleCount(initialRequest.sampleCount || 1);
-        if (initialRequest.customData) setCustomData(JSON.parse(JSON.stringify(initialRequest.customData)));
-      } else {
-        // Mode création vierge : initialisation sur le laboratoire actif et son premier gabarit disponible
-        const defaultLabId = activeLabId || laboratories[0]?.id || '';
-        setSelectedLabId(defaultLabId);
-        const available = allRequestTemplates.filter(t => t.labId === defaultLabId && t.isActive !== false);
-        if (available.length > 0) {
-          setSelectedTemplateId(available[0].id);
-        } else {
-          setSelectedTemplateId('');
-        }
-        setTitle('');
-        setSampleCount(1);
-        setCustomData({});
-      }
+    const available = allRequestTemplates.filter(t => t.labId === selectedLabId && t.isActive !== false);
+    if (available.length > 0) {
+      setSelectedTemplateId(available[0].id);
+    } else {
+      setSelectedTemplateId('');
     }
-  }, [isOpen, initialRequest, activeLabId, laboratories, allRequestTemplates]);
-
-  /**
-   * Gestionnaire de sélection manuelle d'un laboratoire destinataire :
-   * met à jour le laboratoire, réinitialise le gabarit sur le premier modèle actif du nouveau labo
-   * et efface les données personnalisées (y compris lorsqu'on est parti d'une duplication).
-   */
-  const handleSelectLab = (labId: string) => {
-    if (labId === selectedLabId) return;
-    setSelectedLabId(labId);
-    const available = allRequestTemplates.filter(t => t.labId === labId && t.isActive !== false);
-    setSelectedTemplateId(available.length > 0 ? available[0].id : '');
     setCustomData({});
-  };
+  }, [selectedLabId, allRequestTemplates]);
 
-  // Ne rien afficher si la modale est fermée
   if (!isOpen) return null;
 
-  // Résolution de l'objet laboratoire cible et du gabarit de formulaire actif
   const targetLab = laboratories.find(l => l.id === selectedLabId) || laboratories[0];
   const activeTemplate = labTemplates.find(t => t.id === selectedTemplateId) || labTemplates[0];
   
-// Analyses disponibles configurées dans le CMS pour ce laboratoire spécifique
+  // Analyses disponibles configurées dans le CMS pour ce laboratoire spécifique
   const availableAnalyses = allAnalysisTemplates.filter(a => a.labId === selectedLabId && a.isActive !== false);
-  // Modèles de matériaux actifs et packs d'essais préconfigurés pour ce laboratoire
-  const availableMaterials = allMaterialTemplates.filter(m => m.labId === selectedLabId && m.isActive !== false);
-  const availablePacks = allAnalysisPacks.filter(p => p.labId === selectedLabId && p.isActive !== false);
-
-  // Calcul estimatif en temps réel de la durée totale (en heures / jours ouvrés) et du coût indicatif
-  // à partir du nombre d'échantillons déclaré et des essais sélectionnés dans le formulaire.
-  const selectedAnalysisIds: string[] = [];
-  if (activeTemplate) {
-    activeTemplate.fields.forEach(f => {
-      if (f.type === 'analyses' && Array.isArray(customData[f.id])) {
-        customData[f.id].forEach((id: string) => {
-          if (!selectedAnalysisIds.includes(id)) selectedAnalysisIds.push(id);
-        });
-      }
-    });
-  }
-  const safeSampleCount = Math.max(1, Math.min(100, Math.floor(Number(sampleCount) || 1)));
-  const selectedAnalysisTemplates = availableAnalyses.filter(t => selectedAnalysisIds.includes(t.id));
-  const durationBreakdown = estimateRequestDurationWithPrep(
-    safeSampleCount,
-    selectedAnalysisTemplates,
-    targetLab?.settings?.schedulingConfig
-  );
-  const estimatedHours = durationBreakdown.totalHours;
-  const dailyCap = targetLab?.settings?.schedulingConfig?.dailyCapacityHours || 7;
-  const estimatedDays = estimatedHours > 0 ? Math.max(0.5, Math.round((estimatedHours / dailyCap) * 2) / 2) : 0;
-  const estimatedCost = selectedAnalysisTemplates.reduce((sum, t) => sum + (t.unitPrice || 0), 0) * safeSampleCount;
 
   /**
-   * Enregistrement de la nouvelle demande avec assignation du laboratoire.
-   * Génère un identifiant unique préfixé selon les paramètres du laboratoire destinataire
-   * et initialise la demande au statut `'soumise'`.
-   *
-   * @param {React.FormEvent} e - Événement de soumission du formulaire.
+   * Enregistrement de la nouvelle demande avec assignation du laboratoire
    */
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !activeTemplate) return;
 
-    // Validation des champs obligatoires de type sélecteur boutons ('analyses', 'materials', 'multiselect')
-    const missingButtonFields = activeTemplate.fields
-      .filter(f => f.required && (f.type === 'analyses' || f.type === 'materials' || f.type === 'multiselect'))
-      .filter(f => !Array.isArray(customData[f.id]) || customData[f.id].length === 0)
-      .map(f => f.name);
-    if (missingButtonFields.length > 0) {
-      alert(`Veuillez sélectionner au moins une option pour :\n- ${missingButtonFields.join('\n- ')}`);
-      return;
-    }
-
-    // Détermination du préfixe d'ID (ex: REQ-MET) et génération sans collision
-    const prefix = targetLab?.settings?.idPrefixes?.request || `REQ-${targetLab?.code || 'LAB'}`;
-    const uniqueRequestId = generateUniqueLimsId(
-      prefix,
-      allRequests.map(r => r.id)
-    );
-
+    const prefix = targetLab.settings?.idPrefixes?.request || (selectedLabId === 'lab-metallurgie' ? 'REQ-MET' : 'REQ-MEC');
     const newRequest: AnalysisRequest = {
-      id: uniqueRequestId,
+      id: `${prefix}-${new Date().getFullYear().toString().slice(2)}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`,
       labId: selectedLabId,
       requesterId: currentUser.id,
       templateId: activeTemplate.id,
       title,
       status: 'soumise',
       createdAt: new Date().toISOString(),
-      sampleCount: safeSampleCount,
-      estimatedHours: estimatedHours > 0 ? estimatedHours : undefined,
-      estimatedCost: estimatedCost > 0 ? estimatedCost : undefined,
       customData,
       auditTrail: []
     };
@@ -190,14 +82,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
     addRequest(newRequest);
     onClose();
   };
-  
 
-  /**
-   * Met à jour la valeur d'un champ dynamique dans l'état `customData`.
-   *
-   * @param {string} fieldId - Identifiant du champ dynamique ou clé de propriétés matériaux.
-   * @param {any} value - Nouvelle valeur saisie par l'opérateur ou le demandeur.
-   */
   const handleCustomDataChange = (fieldId: string, value: any) => {
     setCustomData(prev => ({ ...prev, [fieldId]: value }));
   };
@@ -231,25 +116,29 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                 1. Laboratoire Destinataire *
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {laboratories.map((lab, index) => {
+                {laboratories.map(lab => {
                   const isSelected = lab.id === selectedLabId;
-                  const color = getLabColor(index);
+                  const isMet = lab.id === 'lab-metallurgie';
                   return (
                     <div
                       key={lab.id}
-                      onClick={() => handleSelectLab(lab.id)}
+                      onClick={() => setSelectedLabId(lab.id)}
                       className={`p-3.5 rounded-xl border-2 transition-all cursor-pointer flex flex-col justify-between ${
                         isSelected 
-                          ? `${color.borderDark} ${color.bgFade} ${color.ring}`
+                          ? isMet 
+                            ? 'border-blue-600 bg-blue-50/50 ring-2 ring-blue-100' 
+                            : 'border-emerald-600 bg-emerald-50/50 ring-2 ring-emerald-100'
                           : 'border-slate-200 bg-white hover:border-slate-300'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-1.5">
                         <div className="flex items-center gap-2">
-                          <Building2 className={`w-4 h-4 ${color.main}`} />
+                          <Building2 className={`w-4 h-4 ${isMet ? 'text-blue-600' : 'text-emerald-600'}`} />
                           <span className="font-bold text-sm text-slate-900">{lab.shortName}</span>
                         </div>
-                        <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${color.light} ${color.text}`}>
+                        <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
+                          isMet ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'
+                        }`}>
                           {lab.code}
                         </span>
                       </div>
@@ -268,34 +157,18 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                 2. Spécifications du Dossier
               </label>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Intitulé du projet / Réf. Pièce *
-                  </label>
-                  <input 
-                    type="text" 
-                    required 
-                    value={title} 
-                    onChange={e => setTitle(e.target.value)} 
-                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
-                    placeholder="Ex: Expertise métallurgique lot aube Inconel 718" 
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Nb d'échantillons *
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={100}
-                    required
-                    value={sampleCount}
-                    onChange={e => setSampleCount(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-semibold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  />
-                </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Intitulé du projet / Réf. Pièce *
+                </label>
+                <input 
+                  type="text" 
+                  required 
+                  value={title} 
+                  onChange={e => setTitle(e.target.value)} 
+                  className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                  placeholder="Ex: Expertise métallurgique lot aube Inconel 718" 
+                />
               </div>
               
               <div>
@@ -306,7 +179,6 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                   value={selectedTemplateId} 
                   onChange={e => {
                     setSelectedTemplateId(e.target.value);
-                    // Réinitialise les données personnalisées lors du changement manuel de modèle de formulaire
                     setCustomData({});
                   }} 
                   className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-medium text-slate-900 bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -336,7 +208,6 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                         {field.name} {field.required && <span className="text-red-500">*</span>}
                       </label>
                       
-                      {/* Champ de type liste déroulante ('select') */}
                       {field.type === 'select' ? (
                         <select 
                           required={field.required}
@@ -350,60 +221,9 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                           ))}
                         </select>
                       ) : field.type === 'analyses' ? (
-                        /* Catalogue des packs d'essais (1 clic) et des essais unitaires du laboratoire actif */
-                        <div className="space-y-2.5 mt-2">
-                          {availablePacks.length > 0 && (
-                            <div className="bg-indigo-50/70 border border-indigo-200 rounded-lg p-2.5">
-                              <span className="block text-[10px] font-bold uppercase tracking-wider text-indigo-700 mb-1.5">Packs d'essais rapides (1 clic)</span>
-                              <div className="flex flex-wrap gap-1.5">
-                                {availablePacks.map(pack => (
-                                  <button
-                                    key={pack.id}
-                                    type="button"
-                                    onClick={() => {
-                                      const currentValues: string[] = customData[field.id] || [];
-                                      const merged = Array.from(new Set([...currentValues, ...pack.analysisTemplateIds]));
-                                      handleCustomDataChange(field.id, merged);
-                                    }}
-                                    className="px-2.5 py-1 text-xs font-semibold rounded-md bg-white text-indigo-700 border border-indigo-300 hover:bg-indigo-600 hover:text-white transition-colors"
-                                    title={pack.description}
-                                  >
-                                    + {pack.name}{pack.discountPercent ? ` (-${pack.discountPercent}%)` : ''}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                          <div className="flex flex-wrap gap-2">
-                            {availableAnalyses.map(tpl => {
-                              const currentValues = customData[field.id] || [];
-                              const isSelected = currentValues.includes(tpl.id);
-                              return (
-                                <button
-                                  key={tpl.id}
-                                  type="button"
-                                  onClick={() => {
-                                    const newValues = isSelected
-                                      ? currentValues.filter((v: string) => v !== tpl.id)
-                                      : [...currentValues, tpl.id];
-                                    handleCustomDataChange(field.id, newValues);
-                                  }}
-                                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
-                                    isSelected
-                                       ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
-                                       : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                                  }`}
-                                >
-                                  {tpl.name}{tpl.unitPrice ? ` (${tpl.unitPrice} €)` : ''}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ) : field.type === 'materials' ? (
-                        /* Catalogue des modèles de matériaux du laboratoire sélectionné */
+                        /* Catalogue des essais du laboratoire actif */
                         <div className="flex flex-wrap gap-2 mt-2">
-                          {availableMaterials.map(tpl => {
+                          {availableAnalyses.map(tpl => {
                             const currentValues = customData[field.id] || [];
                             const isSelected = currentValues.includes(tpl.id);
                             return (
@@ -418,46 +238,16 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                                 }}
                                 className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
                                   isSelected
-                                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                                     ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                                     : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                                 }`}
                               >
                                 {tpl.name}
                               </button>
                             );
                           })}
-                          {availableMaterials.length === 0 && <p className="text-xs text-slate-500">Aucun modèle de matériau actif pour ce laboratoire.</p>}
-                          {/* Sous-formulaire dynamique de propriétés techniques pour chaque matériau sélectionné */}
-                          {availableMaterials.filter(tpl => (customData[field.id] || []).includes(tpl.id)).map(tpl => {
-                            const propertiesKey = `${field.id}__material_properties`;
-                            const allProperties = customData[propertiesKey] || {};
-                            const materialProperties = allProperties[tpl.id] || {};
-                            const updateProperty = (propertyId: string, value: any) => {
-                              handleCustomDataChange(propertiesKey, {
-                                ...allProperties,
-                                [tpl.id]: { ...materialProperties, [propertyId]: value }
-                              });
-                            };
-                            return (
-                              <div key={`properties-${tpl.id}`} className="w-full mt-3 rounded-lg border border-emerald-200 bg-white p-3">
-                                <h4 className="text-sm font-semibold text-emerald-800 mb-3">Propriétés — {tpl.name}</h4>
-                                {tpl.fields.length === 0 ? <p className="text-xs text-slate-500">Ce modèle ne contient aucune propriété.</p> : (
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                    {tpl.fields.map(property => <div key={property.id}>
-                                      <label className="block text-xs font-medium text-slate-600 mb-1">{property.name}{property.unit ? ` (${property.unit})` : ''}{property.required && <span className="text-red-500"> *</span>}</label>
-                                      {property.type === 'select' ? <select required={property.required} value={materialProperties[property.id] ?? ''} onChange={e => updateProperty(property.id, e.target.value)} className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm"><option value="">Sélectionner...</option>{property.options?.map(opt => <option key={opt} value={opt}>{opt}</option>)}</select>
-                                      : property.type === 'multiselect' ? <div className="flex flex-wrap gap-2">{property.options?.map(opt => { const values = materialProperties[property.id] || []; const checked = values.includes(opt); return <button key={opt} type="button" onClick={() => updateProperty(property.id, checked ? values.filter((v: string) => v !== opt) : [...values, opt])} className={`px-2 py-1 rounded border text-xs ${checked ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white border-slate-200'}`}>{opt}</button>; })}</div>
-                                      : property.type === 'boolean' ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!materialProperties[property.id]} onChange={e => updateProperty(property.id, e.target.checked)} />Oui</label>
-                                      : <input type={property.type === 'number' ? 'number' : property.type === 'date' ? 'date' : 'text'} required={property.required} value={materialProperties[property.id] ?? ''} onChange={e => updateProperty(property.id, property.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)} className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm" />}
-                                    </div>)}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
                         </div>
                       ) : field.type === 'multiselect' ? (
-                        /* Champ à choix multiples ('multiselect') */
                         <div className="flex flex-wrap gap-2 mt-2">
                           {field.options?.map(opt => {
                             const currentValues = customData[field.id] || [];
@@ -484,7 +274,6 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                           })}
                         </div>
                       ) : field.type === 'boolean' ? (
-                         /* Case à cocher booléenne ('boolean') */
                          <div className="flex items-center mt-1">
                            <input 
                             type="checkbox"
@@ -498,7 +287,6 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                            </label>
                          </div>
                       ) : field.type === 'date' ? (
-                        /* Champ de saisie de date ('date') */
                         <input 
                           type="date"
                           required={field.required}
@@ -507,46 +295,17 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                           className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:ring-blue-500 focus:border-blue-500"
                         />
                       ) : (
-                        /* Champ texte ou numérique standard ('text' | 'number') */
                         <input 
                           type={field.type === 'number' ? 'number' : 'text'} 
                           required={field.required}
-                          value={customData[field.id] ?? ''} 
-                          onChange={e => handleCustomDataChange(field.id, field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)}
+                          value={customData[field.id] || ''} 
+                          onChange={e => handleCustomDataChange(field.id, field.type === 'number' ? Number(e.target.value) : e.target.value)}
                           className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:ring-blue-500 focus:border-blue-500"
                         />
                       )}
                     </div>
                   ))}
                 </div>
-
-                {/* Bandeau de premier calcul estimatif du temps et du coût */}
-                {selectedAnalysisTemplates.length > 0 && (
-                  <div className="mt-4 p-3.5 rounded-xl bg-blue-50 border border-blue-200 flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-bold uppercase tracking-wider text-blue-900">
-                        Estimation préliminaire de charge laboratoire
-                      </p>
-                      <p className="text-xs text-blue-700 mt-0.5">
-                        {safeSampleCount} échantillon(s) × {selectedAnalysisTemplates.length} essai(s)
-                        {durationBreakdown.prepHours > 0 ? ` — Essais : ${durationBreakdown.testHours}h + Préparation : ${durationBreakdown.prepHours}h` : ''}
-                        {durationBreakdown.savedHours > 0 ? ` (${durationBreakdown.savedHours}h gagnées par lots)` : ''}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className="text-right">
-                        <div className="text-sm font-bold text-blue-950">~{estimatedHours} h</div>
-                        <div className="text-[11px] text-blue-700">≈ {estimatedDays} jour(s) ouvré(s)</div>
-                      </div>
-                      {estimatedCost > 0 && (
-                        <div className="pl-3 border-l border-blue-200 text-right">
-                          <div className="text-sm font-bold text-emerald-800">{estimatedCost} € HT</div>
-                          <div className="text-[11px] text-emerald-700">Estimatif</div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
               </div>
             )}
           </form>

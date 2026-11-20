@@ -1,35 +1,29 @@
 /**
  * Vue Rapports d'Expertise & Certification (Reports)
- *
- * Ce module orchestre la génération documentaire, la certification matière et l'archivage :
- * 1. Génération de Rapports d'Expertise Consolidés par dossier/demande :
- *    - Via un modèle Word personnalisé (`.docx`) motorisé par `Docxtemplater` + `PizZip` + module d'images personnalisées,
- *      suivi d'une conversion serveur en PDF (`/api/convert-pdf`) et d'un archivage physique (`/api/reports/upload`).
- *    - Ou via le moteur de rendu A4 natif (`ReportPreviewModal`) produisant un PDF standardisé fidèle à l'aperçu écran.
- * 2. Génération de Certificats de Conformité par échantillon à partir de modèles Word de type `certificate`.
- * 3. Export CSV brut (`;`) de l'ensemble des analyses pour exploitation statistique externe (Excel, Minitab, R).
- * 4. Construction dynamique de tableaux OpenXML (`<w:tbl>`) injectables dans les modèles Word pour :
- *    - Les séries de mesures numériques (`tables_series`),
- *    - Les compositions chimiques verticales (`tables_verticales`),
- *    - Les matrices synthétiques d'essais (`tables_analyses`).
+ * 
+ * Cette vue centralise la génération documentaire et l'archivage réglementaire du laboratoire :
+ * 1. Moteur de fusion documentaire Docxtemplater :
+ *    - Ingestion dynamique de modèles Word (.docx) paramétrables via le CMS
+ *    - Remplacement des balises de fusion (demande, demandeur, échantillons, manager, etc.)
+ *    - Boucles itératives pour matrices de résultats et micrographies rattachées
+ *    - Génération de tableaux XML natifs OpenXML pour les séries statistiques (moyenne, écart-type)
+ * 2. Pipeline de conversion en PDF vectoriel haute fidélité via l'API backend (/api/convert-pdf)
+ * 3. Générateur de certificats de conformité unitaire par éprouvette ou lot de poudre
+ * 4. Export brut au format tabulaire CSV pour exploitation statistique externe
+ * 5. Visualiseur et modal d'aperçu avant impression et distribution
  */
 
 import React, { useState } from "react";
 import { useLims } from "../store";
 import { FileDown, FileText, Settings2, Download, Image as ImageIcon, X, Eye, Trash2, Search } from "lucide-react";
-import { Report } from "../types";
+import { Report, ReportTemplate } from "../types";
 import { ReportPreviewModal } from "../components/ReportPreviewModal";
 // @ts-ignore
 import Docxtemplater from "docxtemplater";
 // @ts-ignore
 import PizZip from "pizzip";
 import { saveAs } from "file-saver";
-import { createDocxImageModule } from "../utils/docxImageModule";
-import { generateUniqueLimsId } from "../utils/idGenerator";
 
-/**
- * Composant principal de la vue de génération, prévisualisation et téléchargement des rapports et certificats.
- */
 export function Reports() {
   const { 
     reports, 
@@ -37,149 +31,42 @@ export function Reports() {
     samples, 
     analyses, 
     analysisTemplates, 
+    currentUser, 
     users, 
     reportTemplates, 
     labSettings,
-    activeLabId,
     addReport, 
-    deleteReport,
-    createReportRevision
+    deleteReport 
   } = useLims() as any;
 
-  /**
-   * Sélectionne le Manager signataire rattaché au laboratoire actif
-   * (repli sur un manager/admin transversal si aucun manager dédié n'existe).
-   */
-  const findLabManager = () =>
-    users.find((u: any) => u.role === 'manager' && u.labId === activeLabId) ||
-    users.find((u: any) => (u.role === 'manager' || u.role === 'admin') && (!u.labId || u.labId === 'all')) ||
-    users.find((u: any) => u.role === 'manager' || u.role === 'admin');
-
-  /** Nettoie une couleur hexadécimale pour OpenXML (Word exige 6 caractères hex sans '#') */
-  const cleanHex = (value: string | undefined, fallback: string) => {
-    const hex = String(value || '').replace(/[^0-9A-Fa-f]/g, '');
-    return hex.length === 6 ? hex.toUpperCase() : fallback;
-  };
-
-  /** ID du modèle Word (.docx) sélectionné pour le rapport consolidé (vide = PDF Générique) */
+  // États de sélection de modèle et de demande
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
-  /** Contrôle l'ouverture de la modale de création d'un nouveau rapport consolidé */
   const [isModalOpen, setIsModalOpen] = useState(false);
-  /** ID de la demande d'analyse sélectionnée pour le rapport consolidé */
   const [selectedRequestId, setSelectedRequestId] = useState('');
-  /** Rapport actuellement ouvert dans la modale d'aperçu A4 (`ReportPreviewModal`) */
   const [previewReport, setPreviewReport] = useState<Report | null>(null);
-  /** Déclenche automatiquement l'export et le téléchargement PDF dès l'ouverture de `ReportPreviewModal` */
-  const [autoDownloadPdf, setAutoDownloadPdf] = useState(false);
-  /** Terme de recherche pour filtrer la table d'archives des rapports */
   const [searchQuery, setSearchQuery] = useState("");
-  /** ID du rapport dont la conversion/téléchargement PDF est en cours (affiche l'animation sur l'icône) */
   const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
 
-  /** Contrôle l'ouverture de la modale de génération d'un Certificat de Conformité */
+  // États pour les certificats unitaires
   const [isCertModalOpen, setIsCertModalOpen] = useState(false);
-  /** ID de l'échantillon sélectionné pour le certificat de conformité */
   const [certSelectedSample, setCertSelectedSample] = useState("");
-  /** ID du modèle Word de certificat (`type === 'certificate'`) sélectionné */
   const [certSelectedTemplate, setCertSelectedTemplate] = useState("");
-  /** Indique si la génération/conversion PDF du certificat est en cours */
   const [isGeneratingCert, setIsGeneratingCert] = useState(false);
 
-  /** Rapport sélectionné pour la création d'une révision tracée (modale ISO 17025 §7.8.8) */
-  const [revisionTargetReport, setRevisionTargetReport] = useState<Report | null>(null);
-  /** Motif d'amendement saisi dans la modale de révision */
-  const [revisionReason, setRevisionReason] = useState("");
-  /** Message d'erreur de validation de la modale de révision */
-  const [revisionError, setRevisionError] = useState("");
-
   /**
-   * Envoie et stocke physiquement un rapport Word/PDF dans le dossier sécurisé du serveur (storage/reports/)
-   * @param reportId Identifiant du rapport généré
-   * @param requestId Identifiant de la demande associée
-   * @param fileBase64 Contenu du fichier encodé en Base64
-   * @param format Format du fichier ('PDF' ou 'Word')
-   * @returns Nom du fichier stocké sur le serveur ou `undefined` en cas d'échec
-   */
-  const uploadReportToStorage = async (
-    reportId: string,
-    requestId: string,
-    fileBase64: string,
-    format: 'PDF' | 'Word'
-  ): Promise<string | undefined> => {
-    try {
-      const res = await fetch('/api/reports/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reportId, requestId, fileBase64, format })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return data.storedFileName;
-      }
-    } catch (e) {
-      console.error('Erreur lors du dépôt du rapport dans le dossier serveur :', e);
-    }
-    return undefined;
-  };
-
-  /**
-   * Construit le dictionnaire complet de données (`docData`) injecté dans `Docxtemplater` lors du rendu d'un modèle Word.
-   * Prépare à la fois :
-   * - Les variables plates et imbriquées (`demande`, `demandeur`, `echantillon`, `manager`, `analyses`),
-   * - Les statistiques de séries numériques (moyenne, écart-type, valeurs individuelles `v1..v10`),
-   * - Les listes de micrographies pour le module d'images,
-   * - Les fragments XML natifs Word (`<w:tbl>`) pour l'insertion de tableaux dynamiques (`tables_series`, `tables_verticales`, `tables_analyses`).
+   * Construction du dictionnaire complet de variables de substitution pour Docxtemplater
+   * Prépare les données scalaires, les boucles {#analyses} et les tableaux OpenXML natifs.
    */
   const buildDocData = (req: any, cl: any, samps: any[], anals: any[], mgr: any) => {
     const formattedDate = new Intl.DateTimeFormat("fr-FR").format(new Date());
-
-    /** Normalise un libellé en clé alphanumérique snake_case sans accents pour les balises Word */
-    const sanitizeKey = (str: string) =>
-      str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
-
-    /** Filtre les entrées vides d'un tableau de mesures */
-    const filterNonEmptySeries = (arr: any[]): any[] =>
-      arr.filter(val => val !== '' && val !== null && val !== undefined && String(val).trim() !== '');
-
-    /** Extrait uniquement les nombres valides d'une série pour les calculs statistiques */
-    const parseValidNumbers = (arr: any[]): number[] =>
-      filterNonEmptySeries(arr).map(Number).filter((n: number) => !isNaN(n));
-
-    /** Formate une valeur de résultat (scalaire, tableau vertical, série ou micrographie) en chaîne lisible */
-    const formatResultValueAsText = (v: any, expected?: any): string => {
-      if (v && typeof v === 'object' && Array.isArray(v.images)) {
-        return `${v.images.length} image(s) de micrographie`;
-      }
-      if (expected?.type === 'vertical_table' && Array.isArray(v)) {
-        const filled = v.filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''));
-        return filled.map((r: any) => `${r.element || '-'}: ${r.value !== '' && r.value !== undefined ? r.value : '-'}${r.unit || expected?.unit ? ' ' + (r.unit || expected.unit) : ''}`).join(', ');
-      }
-      if (Array.isArray(v)) {
-        return filterNonEmptySeries(v).join(', ');
-      }
-      return v !== undefined && v !== null ? String(v) : '';
-    };
     
-    // Construction des objets de résultats par analyse
+    // Structure détaillée pour les boucles itératives {#analyses} ... {/analyses}
     const analysesData = anals.map((a: any) => {
       const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
+      
+      const sanitizeKey = (str: string) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '_');
       const safeAnalysisName = sanitizeKey(t?.name || "inconnu");
       
-      // Extraction à plat de toutes les micrographies rattachées aux résultats de cette analyse
-      const analysisMicrographies = Object.entries(a.results || {}).flatMap(([k, v]) => {
-        const expected = t?.expectedResults?.find((er: any) => er.id === k);
-        const images = v && typeof v === 'object' && Array.isArray((v as any).images) ? (v as any).images : [];
-        return images.map((img: any, index: number) => ({
-          analyse: t?.name || 'Micrographie',
-          champ: expected?.name || k,
-          echantillon: a.sampleId || '',
-          numero: index + 1,
-          nom: img.name || `Image ${index + 1}`,
-          commentaire: img.comment || '',
-          image: img.dataUrl || ''
-        }));
-      });
-
       const baseObj: any = {
         nom: t?.name || "Non défini",
         norme: t?.standardRef || "Non défini",
@@ -187,265 +74,179 @@ export function Reports() {
         remarques: a.notes || "Aucune",
         echantillon: a.sampleId,
         date: a.date ? new Intl.DateTimeFormat("fr-FR").format(new Date(a.date)) : formattedDate,
-        valeurs: Object.entries(a.results || {}).map(([k, v]) => {
-          const expected = t?.expectedResults?.find((er: any) => er.id === k);
-          return {
-            cle: expected?.name || k,
-            valeur: formatResultValueAsText(v, expected)
-          };
-        }),
-        [`is_${safeAnalysisName}`]: true,
-        micrographies: analysisMicrographies
+        valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, valeur: Array.isArray(v) ? v.join(', ') : v })),
+        [`is_${safeAnalysisName}`]: true
       };
       
+      // Extraction dynamique des séries de mesures et indicateurs statistiques
       const series_resultats: any[] = [];
-      const tableaux_verticaux: any[] = [];
       
       Object.entries(a.results || {}).forEach(([k, v]) => {
-        const expected = t?.expectedResults?.find((er: any) => er.id === k);
-        const fieldName = expected?.name || k;
-        const safeName = sanitizeKey(fieldName);
-        
-        baseObj[`res_${safeName}`] = formatResultValueAsText(v, expected);
-        
-        if (expected?.type === 'vertical_table' && Array.isArray(v)) {
-          const filledRows = v
-            .filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''))
-            .map((r: any) => ({
-              element: r.element || '-',
-              valeur: r.value !== undefined && r.value !== '' ? String(r.value) : '-',
-              unite: r.unit || expected.unit || ''
-            }));
-          baseObj[`lignes_${safeName}`] = filledRows;
-          tableaux_verticaux.push({
-            nom_parametre: fieldName,
-            echantillon: a.sampleId,
-            lignes: filledRows
-          });
-        } else if (Array.isArray(v)) {
-          const cleanVals = filterNonEmptySeries(v);
-          cleanVals.forEach((val, i) => {
-            baseObj[`res_${safeName}_v${i + 1}`] = val;
-          });
-          const numVals = parseValidNumbers(v);
-          let mean: number | null = null;
-          let stdDev: number | null = null;
-          if (numVals.length > 0) {
-            mean = numVals.reduce((sum: number, n: number) => sum + n, 0) / numVals.length;
-            baseObj[`res_${safeName}_moyenne`] = mean.toFixed(2);
-            const variance = numVals.length > 1 ? numVals.reduce((sum: number, n: number) => sum + Math.pow(n - mean!, 2), 0) / (numVals.length - 1) : 0;
-            stdDev = numVals.length > 1 ? Math.sqrt(variance) : 0;
-            baseObj[`res_${safeName}_ecart`] = stdDev.toFixed(2);
-            baseObj[`res_${safeName}_stats`] = `${mean.toFixed(2)} ± ${stdDev.toFixed(2)}`;
-          }
-          
-          if (expected?.type === 'number_series') {
-            series_resultats.push({
-              nom_parametre: fieldName,
-              echantillon: a.sampleId,
-              v1: cleanVals[0] !== undefined ? cleanVals[0] : "-",
-              v2: cleanVals[1] !== undefined ? cleanVals[1] : "-",
-              v3: cleanVals[2] !== undefined ? cleanVals[2] : "-",
-              v4: cleanVals[3] !== undefined ? cleanVals[3] : "-",
-              v5: cleanVals[4] !== undefined ? cleanVals[4] : "-",
-              v6: cleanVals[5] !== undefined ? cleanVals[5] : "-",
-              v7: cleanVals[6] !== undefined ? cleanVals[6] : "-",
-              v8: cleanVals[7] !== undefined ? cleanVals[7] : "-",
-              v9: cleanVals[8] !== undefined ? cleanVals[8] : "-",
-              v10: cleanVals[9] !== undefined ? cleanVals[9] : "-",
-              stats: mean !== null && stdDev !== null ? `${mean.toFixed(2)} ± ${stdDev!.toFixed(2)}` : "-",
-              moyenne: mean !== null ? mean.toFixed(2) : "-",
-              ecart_type: stdDev !== null ? stdDev.toFixed(2) : "-"
+         const expected = t?.expectedResults?.find((er: any) => er.id === k);
+         const fieldName = expected?.name || k;
+         const safeName = sanitizeKey(fieldName);
+         
+         baseObj[`res_${safeName}`] = Array.isArray(v) ? v.join(', ') : v;
+         
+         if (Array.isArray(v)) {
+            v.forEach((val, i) => {
+               baseObj[`res_${safeName}_v${i+1}`] = val;
             });
-          }
-        }
+            const numVals = v.map(Number).filter((n: number) => !isNaN(n));
+            let mean: number | null = null;
+            let stdDev: number | null = null;
+            if (numVals.length > 0) {
+               mean = numVals.reduce((sum: number, n: number) => sum + n, 0) / numVals.length;
+               baseObj[`res_${safeName}_moyenne`] = mean.toFixed(2);
+               const variance = numVals.length > 1 ? numVals.reduce((sum: number, n: number) => sum + Math.pow(n - mean!, 2), 0) / (numVals.length - 1) : 0;
+               stdDev = numVals.length > 1 ? Math.sqrt(variance) : 0;
+               baseObj[`res_${safeName}_ecart`] = stdDev.toFixed(2);
+               baseObj[`res_${safeName}_stats`] = `${mean.toFixed(2)} ± ${stdDev.toFixed(2)}`;
+            }
+            
+            if (expected?.type === 'number_series') {
+               series_resultats.push({
+                  nom_parametre: fieldName,
+                  echantillon: a.sampleId,
+                  v1: v[0] !== undefined ? v[0] : "-",
+                  v2: v[1] !== undefined ? v[1] : "-",
+                  v3: v[2] !== undefined ? v[2] : "-",
+                  v4: v[3] !== undefined ? v[3] : "-",
+                  v5: v[4] !== undefined ? v[4] : "-",
+                  v6: v[5] !== undefined ? v[5] : "-",
+                  v7: v[6] !== undefined ? v[6] : "-",
+                  v8: v[7] !== undefined ? v[7] : "-",
+                  v9: v[8] !== undefined ? v[8] : "-",
+                  v10: v[9] !== undefined ? v[9] : "-",
+                  stats: mean !== null && stdDev !== null ? `${mean.toFixed(2)} ± ${stdDev!.toFixed(2)}` : "-",
+                  moyenne: mean !== null ? mean.toFixed(2) : "-",
+                  ecart_type: stdDev !== null ? stdDev.toFixed(2) : "-"
+               });
+            }
+         }
       });
       
       baseObj.series_resultats = series_resultats;
       baseObj.has_series = series_resultats.length > 0;
-      baseObj.tableaux_verticaux = tableaux_verticaux;
-      baseObj.has_vertical_table = tableaux_verticaux.length > 0;
       
       return baseObj;
     });
 
-    // Génération des tableaux OpenXML natifs (<w:tbl>) pour les séries numériques
+    // Génération des tableaux XML OpenXML pour l'intégration fidèle dans Word
     const tables_series: any[] = [];
     const seriesGroups: Record<string, { paramName: string, rows: any[] }> = {};
-    /** Échappe les caractères spéciaux XML (&, <, >, ", ') avant injection dans le flux OpenXML Word */
     const escapeXML = (str: string) => {
-      if (str === null || str === undefined) return "";
+      if(str === null || str === undefined) return "";
       return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
     };
 
     anals.forEach((a: any) => {
-      const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
-      if (!t) return;
-      Object.entries(a.results || {}).forEach(([k, v]) => {
-        const expected = t.expectedResults?.find((er: any) => er.id === k);
-        if (expected?.type === 'number_series' && Array.isArray(v) && v.length > 0) {
-          const cleanVals = filterNonEmptySeries(v);
-          if (cleanVals.length === 0) return;
-          if (!seriesGroups[k]) seriesGroups[k] = { paramName: expected?.name || k, rows: [] };
-          const numVals = parseValidNumbers(v);
-          let stats = "-";
-          if (numVals.length > 0) {
-            const mean = numVals.reduce((sum: number, n: number) => sum + n, 0) / numVals.length;
-            const variance = numVals.length > 1 ? numVals.reduce((sum: number, n: number) => sum + Math.pow(n - mean, 2), 0) / (numVals.length - 1) : 0;
-            const stdDev = numVals.length > 1 ? Math.sqrt(variance) : 0;
-            stats = `${mean.toFixed(2)} ± ${stdDev.toFixed(2)}`;
-          }
-          seriesGroups[k].rows.push({ echantillon: a.sampleId, valeurs: cleanVals, stats: stats });
-        }
-      });
+        const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
+        if (!t) return;
+        Object.entries(a.results || {}).forEach(([k, v]) => {
+            const expected = t.expectedResults?.find((er: any) => er.id === k);
+            if (Array.isArray(v) && v.length > 0) {
+                if (!seriesGroups[k]) seriesGroups[k] = { paramName: expected?.name || k, rows: [] };
+                const numVals = v.map(Number).filter((n: number) => !isNaN(n));
+                let stats = "-";
+                if (numVals.length > 0) {
+                   const mean = numVals.reduce((sum: number, n: number) => sum + n, 0) / numVals.length;
+                   const variance = numVals.length > 1 ? numVals.reduce((sum: number, n: number) => sum + Math.pow(n - mean, 2), 0) / (numVals.length - 1) : 0;
+                   const stdDev = numVals.length > 1 ? Math.sqrt(variance) : 0;
+                   stats = `${mean.toFixed(2)} ± ${stdDev.toFixed(2)}`;
+                }
+                seriesGroups[k].rows.push({ echantillon: a.sampleId, valeurs: v, stats: stats });
+            }
+        });
     });
 
     Object.values(seriesGroups).forEach(group => {
-      let maxVals = 0;
-      group.rows.forEach(r => { if (r.valeurs.length > maxVals) maxVals = r.valeurs.length; });
-      if (maxVals > 0) {
-        const tColor = cleanHex(labSettings?.tableStyles?.borderColor, "000000");
-        const tSize = labSettings?.tableStyles?.borderSize ?? 4;
-        let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
-        xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-        const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${cleanHex(labSettings?.tableStyles?.headerBgColor, "E2E8F0")}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
-        addHeaderCell("Echantillon");
-        for (let i = 1; i <= maxVals; i++) addHeaderCell(`Mesure ${i}`);
-        addHeaderCell("Moyenne");
-        xml += `</w:tr>`;
-        group.rows.forEach(r => {
-          xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-          const addDataCell = (text: string) => { xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
-          addDataCell(r.echantillon);
-          for (let i = 0; i < maxVals; i++) addDataCell(r.valeurs[i] !== undefined ? String(r.valeurs[i]) : "-");
-          addDataCell(r.stats);
-          xml += `</w:tr>`;
-        });
-        xml += `</w:tbl>`;
-        tables_series.push({ titre: group.paramName, xml: xml });
-      }
-    });
-
-    // Génération des tableaux verticaux Word natifs (ex: ICP 30 éléments)
-    const tables_verticales: any[] = [];
-    anals.forEach((a: any) => {
-      const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
-      if (!t) return;
-      Object.entries(a.results || {}).forEach(([k, v]) => {
-        const expected = t.expectedResults?.find((er: any) => er.id === k);
-        if (expected?.type === 'vertical_table' && Array.isArray(v) && v.length > 0) {
-          const filledRows = v.filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''));
-          if (filledRows.length === 0) return;
-
-          const tColor = cleanHex(labSettings?.tableStyles?.borderColor, "000000");
-          const tSize = labSettings?.tableStyles?.borderSize ?? 4;
-          const headerBg = cleanHex(labSettings?.tableStyles?.headerBgColor, "E2E8F0");
-
-          let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="120" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="120" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
-
-          const addHeaderCell = (text: string) => {
-            xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${headerBg}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`;
-          };
-          const addDataCell = (text: string, align: 'left' | 'center' = 'center', bold = false) => {
-            xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="${align}"/></w:pPr><w:r>${bold ? '<w:rPr><w:b/></w:rPr>' : ''}<w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`;
-          };
-
-          xml += `<w:tr><w:trPr><w:trHeight w:val="360"/></w:trPr>`;
-          addHeaderCell("Élément / Paramètre");
-          addHeaderCell("Résultat");
-          addHeaderCell("Unité");
-          xml += `</w:tr>`;
-
-          filledRows.forEach((row: any) => {
-            xml += `<w:tr><w:trPr><w:trHeight w:val="320"/></w:trPr>`;
-            addDataCell(row.element || "-", 'left', true);
-            addDataCell(row.value !== undefined && row.value !== "" ? String(row.value) : "-", 'center', false);
-            addDataCell(row.unit || expected.unit || "-", 'center', false);
+        let maxVals = 0;
+        group.rows.forEach(r => { if (r.valeurs.length > maxVals) maxVals = r.valeurs.length; });
+        if (maxVals > 0) {
+            const tColor = labSettings?.tableStyles?.borderColor || "000000";
+            const tSize = labSettings?.tableStyles?.borderSize ?? 4;
+            let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
+            xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
+            const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${labSettings?.tableStyles?.headerBgColor || "E2E8F0"}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+            addHeaderCell("Echantillon");
+            for (let i = 1; i <= maxVals; i++) addHeaderCell(`Mesure ${i}`);
+            addHeaderCell("Moyenne");
             xml += `</w:tr>`;
-          });
-
-          xml += `</w:tbl>`;
-          tables_verticales.push({
-            titre: expected.name,
-            echantillon: a.sampleId,
-            lignes: filledRows.map((r: any) => ({
-              element: r.element || '-',
-              valeur: r.value !== undefined && r.value !== '' ? String(r.value) : '-',
-              unite: r.unit || expected.unit || '-'
-            })),
-            xml
-          });
+            group.rows.forEach(r => {
+                xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
+                const addDataCell = (text: string) => { xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+                addDataCell(r.echantillon);
+                for (let i = 0; i < maxVals; i++) addDataCell(r.valeurs[i] !== undefined ? String(r.valeurs[i]) : "-");
+                addDataCell(r.stats);
+                xml += `</w:tr>`;
+            });
+            xml += `</w:tbl>`;
+            tables_series.push({ titre: group.paramName, xml: xml });
         }
-      });
     });
 
-    // Génération des tableaux récapitulatifs d'analyses standards (hors séries et tableaux verticaux)
     const tables_analyses: any[] = [];
     const analysesGroups: Record<string, { templateName: string, columns: any[], rows: any[] }> = {};
     
     anals.forEach((a: any) => {
-      const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
-      if (!t) return;
-      
-      if (!analysesGroups[a.templateId]) {
-        const hasSeriesOrVertical = (t.expectedResults || []).some(
-          (er: any) => er.type === 'number_series' || er.type === 'vertical_table'
-        );
-        if (hasSeriesOrVertical) return; 
+        const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
+        if (!t) return;
         
-        const columns = (t.expectedResults || []).filter(
-          (er: any) => er.type !== 'image' && er.type !== 'micrography' && er.type !== 'vertical_table'
-        );
-        if (columns.length === 0) return;
-        analysesGroups[a.templateId] = { templateName: t.name, columns: columns, rows: [] };
-      }
-      
-      analysesGroups[a.templateId].rows.push(a);
+        if (!analysesGroups[a.templateId]) {
+            const hasSeries = (t.expectedResults || []).some((er: any) => er.type === 'number_series');
+            if (hasSeries) return; 
+            
+            const columns = (t.expectedResults || []).filter((er: any) => er.type !== 'image');
+            if (columns.length === 0) return;
+            analysesGroups[a.templateId] = { templateName: t.name, columns: columns, rows: [] };
+        }
+        
+        analysesGroups[a.templateId].rows.push(a);
     });
 
     Object.values(analysesGroups).forEach(group => {
-      if (group.rows.length > 0 && group.columns.length > 0) {
-        const tColor = cleanHex(labSettings?.tableStyles?.borderColor, "000000");
-        const tSize = labSettings?.tableStyles?.borderSize ?? 4;
-        let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
-        xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-        const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${cleanHex(labSettings?.tableStyles?.headerBgColor, "E2E8F0")}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
-        const addDataCell = (text: string) => { xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
-        
-        addHeaderCell("Echantillon");
-        group.columns.forEach(col => addHeaderCell(col.name));
-        xml += `</w:tr>`;
-        
-        group.rows.forEach(r => {
-          xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
-          let sampleStr = r.sampleId;
-          const sObj = samps.find((s: any) => s.id === r.sampleId);
-          if (sObj) {
-            sampleStr = sObj.barcode || sObj.id;
-          }
-          
-          addDataCell(sampleStr);
-          
-          group.columns.forEach(col => {
-            const v = (r.results || {})[col.id];
-            let textVal = "-";
-            if (v !== undefined && v !== null && v !== "") {
-              textVal = formatResultValueAsText(v, col) || "-";
-            }
-            addDataCell(textVal);
-          });
-          
-          xml += `</w:tr>`;
-        });
-        xml += `</w:tbl>`;
-        tables_analyses.push({ titre: group.templateName, xml: xml });
-      }
+        if (group.rows.length > 0 && group.columns.length > 0) {
+            const tColor = labSettings?.tableStyles?.borderColor || "000000";
+            const tSize = labSettings?.tableStyles?.borderSize ?? 4;
+            let xml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="100" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
+            xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
+            const addHeaderCell = (text: string) => { xml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${labSettings?.tableStyles?.headerBgColor || "E2E8F0"}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+            const addDataCell = (text: string) => { xml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`; };
+            
+            addHeaderCell("Echantillon");
+            group.columns.forEach(col => addHeaderCell(col.name));
+            xml += `</w:tr>`;
+            
+            group.rows.forEach(r => {
+                xml += `<w:tr><w:trPr><w:trHeight w:val="400"/></w:trPr>`;
+                let sampleStr = r.sampleId;
+                const sObj = samps.find((s: any) => s.id === r.sampleId);
+                if (sObj) {
+                    sampleStr = sObj.barcode || sObj.id;
+                }
+                
+                addDataCell(sampleStr);
+                
+                group.columns.forEach(col => {
+                    const v = (r.results || {})[col.id];
+                    let textVal = "-";
+                    if (v !== undefined && v !== null && v !== "") {
+                        textVal = Array.isArray(v) ? v.join(", ") : String(v);
+                    }
+                    addDataCell(textVal);
+                });
+                
+                xml += `</w:tr>`;
+            });
+            xml += `</w:tbl>`;
+            tables_analyses.push({ titre: group.templateName, xml: xml });
+        }
     });
 
     return {
       "echantillons": samps.map((s: any) => ({ ...s, materiau: s.materialState })),
       "tables_series": tables_series,
-      "tables_verticales": tables_verticales,
       "tables_analyses": tables_analyses,
       "demande.id": req?.id || "N/A",
       "date.jour": formattedDate,
@@ -458,25 +259,21 @@ export function Reports() {
       "echantillon.projet": samps[0]?.project || "N/A",
       "manager.nom": mgr?.name || "Responsable non défini",
       
+      // Variables rétrocompatibles
       "analyse.nom": analysesData[0]?.nom || "Aucune analyse",
       "analyse.norme": analysesData[0]?.norme || "N/A",
       "analyse.technicien": analysesData.find((a: any) => a.technicien && a.technicien !== 'Non assigné')?.technicien || users.find((u: any) => u.id === req?.assignedTo)?.name || analysesData[0]?.technicien || "Non défini",
       "resultats.tableau": anals.length > 0 ? anals.map((a: any) => {
         const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
         return Object.entries(a.results || {}).map(([k, v]) => {
-          const expected = t?.expectedResults?.find((er: any) => er.id === k);
-          const fieldName = expected?.name || k;
-          return `${fieldName}: ${formatResultValueAsText(v, expected)}`;
+          const fieldName = t?.expectedResults?.find((er: any) => er.id === k)?.name || k;
+          return `${fieldName}: ${v}`;
         }).join("\n");
       }).join("\n---\n") : "Aucun résultat",
-      "images.galerie": `${analysesData.flatMap((a: any) => a.micrographies || []).length} image(s) de micrographie — utiliser la boucle micrographies pour les insérer`,
-      micrographies: analysesData.flatMap((a: any) => a.micrographies || []),
+      "images.galerie": "Images attachées au rapport",
 
-      demande: { 
-        id: req?.id || "N/A",
-        titre: req?.title || "",
-        conclusion: req?.conclusion || "Aucune conclusion renseignée."
-      },
+      // Objets hiérarchiques
+      demande: { id: req?.id || "N/A" },
       date: { jour: formattedDate },
       demandeur: {
         nom: cl?.name || samps[0]?.client || "Non renseigné",
@@ -493,14 +290,14 @@ export function Reports() {
         nom: mgr?.name || "Responsable non défini"
       },
       
+      // Boucles
       analyses: analysesData,
       resultats: analysesData
     };
   };
 
   /**
-   * Formate une date ISO en format long français (ex: 15 avril 2026).
-   * @param dateString Date au format ISO
+   * Formatage standard de date
    */
   const formatDate = (dateString: string) => {
     const d = new Date(dateString);
@@ -508,21 +305,59 @@ export function Reports() {
   };
 
   /**
-   * Génération d'un rapport consolidé :
-   * - Si modèle Word (.docx) : fusionne, convertit en PDF et stocke dans storage/reports/
-   * - Si PDF standard : ouvre automatiquement ReportPreviewModal qui capture la mise en page A4
-   *   identique à l'aperçu et la stocke automatiquement dans storage/reports/
+   * Téléchargement direct du fichier source Word (.docx)
    */
-  const handleGenerate = async () => {
+  const handleDownload = (report: any) => {
+    if (report.templateId) {
+      const template = reportTemplates.find((t: any) => t.id === report.templateId);
+      if (template && template.fileData) {
+        try {
+          const base64Data = template.fileData.split(",")[1];
+          const binaryString = atob(base64Data);
+          const len = binaryString.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          const zip = new PizZip(bytes);
+          const doc = new Docxtemplater(zip, {
+            paragraphLoop: true,
+            linebreaks: true,
+            delimiters: { start: "{{", end: "}}" }, 
+            nullGetter: () => ""
+          });
+          const linkedSamples = samples.filter((s: any) => report.sampleIds.includes(s.id));
+          const req = linkedSamples.length > 0 ? requests.find((r: any) => r.id === linkedSamples[0].requestId) : undefined;
+          const client = users.find((u: any) => u.id === req?.requesterId);
+          const reqAnalyses = analyses.filter((a: any) => linkedSamples.map((s: any) => s.id).includes(a.sampleId));
+          const manager = users.find((u: any) => u.role === "manager" || u.role === "admin");
+          const docData = buildDocData(req, client, linkedSamples, reqAnalyses, manager);
+          doc.render(docData);
+          const out = doc.getZip().generate({ type: "blob", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(out);
+          a.download = `Rapport_${report.id}.docx`;
+          a.click();
+        } catch (e) {
+          console.warn(e);
+          alert("Erreur lors de la génération du document Word.");
+        }
+      }
+    } else {
+      setPreviewReport(report);
+    }
+  };
+
+  /**
+   * Génération et enregistrement d'un rapport consolidé pour une demande d'analyse
+   */
+  const handleGenerate = () => {
     if (!selectedRequestId) return;
     const req = requests.find((r: any) => r.id === selectedRequestId);
     if (!req) return;
     
-    // Génération d'un identifiant de rapport garanti unique (évite toute collision sur Math.random() * 1000)
-    const reportId = generateUniqueLimsId('RAP', reports.map((r: any) => r.id));
     const linkedSamples = samples.filter((s: any) => s.requestId === selectedRequestId);
-    let storedFileName: string | undefined;
-
+    
     if (selectedTemplateId) {
       const template = reportTemplates.find((t: any) => t.id === selectedTemplateId);
       if (template && template.fileData) {
@@ -537,7 +372,6 @@ export function Reports() {
           const zip = new PizZip(bytes);
 
           const doc = new Docxtemplater(zip, {
-            modules: [createDocxImageModule()],
             paragraphLoop: true,
             linebreaks: true,
             delimiters: { start: "{{", end: "}}" }, 
@@ -545,32 +379,14 @@ export function Reports() {
           });
           const client = users.find((u: any) => u.id === req.requesterId);
           const reqAnalyses = analyses.filter((a: any) => linkedSamples.map((s: any) => s.id).includes(a.sampleId));
-          const manager = findLabManager();
+          const manager = users.find((u: any) => u.role === "manager" || u.role === "admin");
           const docData = buildDocData(req, client, linkedSamples, reqAnalyses, manager);
           doc.render(docData);
-
-          const docxBase64 = doc.getZip().generate({ type: "base64" });
           const out = doc.getZip().generate({
             type: "blob",
             mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
           });
           saveAs(out, `Rapport_${req.id}.docx`);
-
-          try {
-            const convRes = await fetch('/api/convert-pdf', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ docxBase64 })
-            });
-            const convData = await convRes.json();
-            if (convRes.ok && convData.pdfBase64) {
-              storedFileName = await uploadReportToStorage(reportId, req.id, convData.pdfBase64, 'PDF');
-            } else {
-              storedFileName = await uploadReportToStorage(reportId, req.id, docxBase64, 'Word');
-            }
-          } catch {
-            storedFileName = await uploadReportToStorage(reportId, req.id, docxBase64, 'Word');
-          }
         } catch(e: any) {
           console.warn(e);
           if (e.properties && e.properties.errors instanceof Array) {
@@ -584,33 +400,26 @@ export function Reports() {
     }
     
     const newReport: Report = {
-      id: reportId,
-      labId: req.labId,
+      id: `RAP-${new Date().getFullYear()}-${Math.floor(Math.random() * 1000).toString().padStart(3, "0")}`,
       title: `Rapport d'Expertise - ${req.title}`,
       requestId: req.id,
       sampleIds: linkedSamples.map((s: any) => s.id),
       createdAt: new Date().toISOString(),
       status: "genere",
       format: selectedTemplateId ? "Word" : "PDF",
-      templateId: selectedTemplateId || undefined,
-      storedFileName
+      templateId: selectedTemplateId || undefined
     } as Report;
 
     if (addReport) {
       addReport(newReport);
     }
-
     setIsModalOpen(false);
     setSelectedRequestId("");
     setSelectedTemplateId("");
-
-    // Ouvre automatiquement l'aperçu A4 pour afficher le rapport et sauvegarder ce rendu exact sur le serveur
-    setAutoDownloadPdf(false);
-    setPreviewReport(newReport);
   };
 
   /**
-   * Pipeline de conversion DOCX -> PDF ou déclenchement direct de l'export PDF depuis l'aperçu
+   * Pipeline de conversion serveur DOCX -> PDF
    */
   const handleDownloadPDF = async (report: Report) => {
     const isDocx = !!report.templateId;
@@ -629,7 +438,6 @@ export function Reports() {
         }
         const zip = new PizZip(bytes);
         const doc = new Docxtemplater(zip, {
-          modules: [createDocxImageModule()],
           paragraphLoop: true,
           linebreaks: true,
           delimiters: { start: "{{", end: "}}" }, 
@@ -652,7 +460,7 @@ export function Reports() {
               : null);
               
         const client = request ? users.find((u: any) => u.id === request.requesterId) : null;
-        const manager = findLabManager();
+        const manager = users.find((u: any) => u.role === 'manager');
 
         const docData = buildDocData(request, client, linkedSamples, reqAnalyses, manager);
         doc.render(docData);
@@ -666,8 +474,6 @@ export function Reports() {
         const data = await res.json();
         
         if (data.pdfBase64) {
-          await uploadReportToStorage(report.id, request?.id || '', data.pdfBase64, 'PDF');
-
           const byteCharacters = atob(data.pdfBase64);
           const byteNumbers = new Array(byteCharacters.length);
           for (let i = 0; i < byteCharacters.length; i++) {
@@ -693,15 +499,13 @@ export function Reports() {
         setDownloadingReportId(null);
       }
     } else {
-      // Ouvre l'aperçu A4, sauvegarde sur le serveur et déclenche le téléchargement PDF exact
-      setAutoDownloadPdf(true);
       setPreviewReport(report);
+      alert("Veuillez cliquer sur 'Télécharger PDF' depuis l'aperçu pour les rapports HTML génériques.");
     }
   };
 
   /**
-   * Génère et déclenche le téléchargement côté client d'un fichier CSV (`;`) contenant
-   * l'intégralité des résultats d'analyses bruts (y compris les séries et tableaux verticaux aplatis).
+   * Export CSV des données brutes d'essais
    */
   const handleGenerateCSV = () => {
     const headers = ["ID Analyse", "Date", "Echantillon ID", "Type", "Technicien", "Resultats Bruts"];
@@ -709,42 +513,19 @@ export function Reports() {
     
     analyses.forEach((a: any) => {
       const template = analysisTemplates.find((t: any) => t.id === a.templateId);
-      const resultsString = Object.entries(a.results || {}).map(([k, v]) => {
-        const expected = template?.expectedResults?.find((er: any) => er.id === k);
-        const label = expected?.name || k;
-        if (expected?.type === 'vertical_table' && Array.isArray(v)) {
-          const filled = v.filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''));
-          return `${label}: [${filled.map((r: any) => `${r.element}=${r.value}${r.unit || expected.unit || ''}`).join(', ')}]`;
-        }
-        if (Array.isArray(v)) {
-          const clean = v.filter((val: any) => val !== '' && val !== null && val !== undefined && String(val).trim() !== '');
-          return `${label}: [${clean.join(', ')}]`;
-        }
-        // Galerie de micrographies : on exporte le nombre et les noms des clichés
-        if (v && typeof v === 'object' && Array.isArray((v as any).images)) {
-          const imgs = (v as any).images;
-          return `${label}: ${imgs.length} micrographie(s) (${imgs.map((i: any) => i?.name || 'image').join(', ')})`;
-        }
-        if (v && typeof v === 'object') {
-          return `${label}: ${JSON.stringify(v)}`;
-        }
-        return `${label}: ${v}`;
-      }).join(' | ');
-      // Échappement CSV : toute cellule est entourée de guillemets (gère ; et retours à la ligne)
-      const csvCell = (val: any) => `"${String(val ?? '').replace(/"/g, '""')}"`;
+      const resultsString = Object.entries(a.results || {}).map(([k, v]) => `${k}: ${v}`).join(' | ');
       const row = [
         a.id,
-        new Date(a.date || a.updatedAt || Date.now()).toLocaleDateString('fr-FR'),
+        new Date(a.date).toLocaleDateString('fr-FR'),
         a.sampleId,
         template?.name || "N/A",
         a.technician,
-        resultsString
-      ].map(csvCell);
+        `"${resultsString}"`
+      ];
       csvContent += row.join(";") + "\n";
     });
 
-    // BOM UTF-8 (\uFEFF) : indispensable pour qu'Excel (Windows FR) affiche correctement les accents
-    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -756,8 +537,7 @@ export function Reports() {
   };
 
   /**
-   * Génère un Certificat de Conformité PDF pour un échantillon spécifique en fusionnant
-   * ses résultats d'analyses dans un modèle Word de type `certificate`, puis en le convertissant via `/api/convert-pdf`.
+   * Génération d'un Certificat de Conformité unitaire au format PDF
    */
   const handleGenerateCertificate = async () => {
     if (!certSelectedSample || !certSelectedTemplate) {
@@ -777,42 +557,22 @@ export function Reports() {
       }
       
       const sampleAnalyses = analyses.filter((a: any) => a.sampleId === certSelectedSample);
-      const req = sample?.requestId ? requests.find((r: any) => r.id === sample.requestId) : null;
-      const client = req ? users.find((u: any) => u.id === req.requesterId) : null;
-      const manager = findLabManager();
-
-      const baseDocData = buildDocData(req, client, sample ? [sample] : [], sampleAnalyses, manager);
       
       const docData: any = {
-        ...baseDocData,
-        // Conserve la structure objet pour rester compatible avec la balise Word {{date.jour}}
-        date: { ...(baseDocData as any).date, jour: new Date().toLocaleDateString('fr-FR') },
+        date: new Date().toLocaleDateString('fr-FR'),
         echantillon: {
           id: sample?.id,
           barcode: sample?.barcode,
           projet: sample?.project,
           client: sample?.client,
           etat: sample?.materialState,
-          materiau: sample?.materialState,
         },
         resultats: sampleAnalyses.map((a: any) => {
           const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
           return {
             analyse: t?.name,
             norme: t?.standardRef,
-            valeurs: Object.entries(a.results || {}).map(([k, v]) => {
-              const expected = t?.expectedResults?.find((er: any) => er.id === k);
-              let formattedVal: any = v;
-              if (v && typeof v === 'object' && Array.isArray((v as any).images)) {
-                formattedVal = `${(v as any).images.length} image(s) de micrographie`;
-              } else if (expected?.type === 'vertical_table' && Array.isArray(v)) {
-                const filled = v.filter((r: any) => r && (String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''));
-                formattedVal = filled.map((r: any) => `${r.element || '-'}: ${r.value || '-'}${r.unit || expected?.unit ? ' ' + (r.unit || expected.unit) : ''}`).join(', ');
-              } else if (Array.isArray(v)) {
-                formattedVal = v.filter((val: any) => val !== '' && val !== null && val !== undefined && String(val).trim() !== '').join(', ');
-              }
-              return { cle: expected?.name || k, valeur: formattedVal };
-            })
+            valeurs: Object.entries(a.results || {}).map(([k, v]) => ({ cle: t?.expectedResults?.find((er: any) => er.id === k)?.name || k, valeur: v }))
           };
         }),
       };
@@ -826,7 +586,6 @@ export function Reports() {
       }
       const zip = new PizZip(bytes);
       const doc = new Docxtemplater(zip, {
-        modules: [createDocxImageModule()],
         paragraphLoop: true,
         linebreaks: true,
         delimiters: { start: "{{", end: "}}" }, 
@@ -871,15 +630,13 @@ export function Reports() {
     }
   };
 
-  /** Liste des rapports archivés filtrés par identifiant, titre ou format */
   const filteredReports = reports.filter((r: any) => 
     (r.id?.toLowerCase().includes(searchQuery.toLowerCase())) || 
     (r.title?.toLowerCase().includes(searchQuery.toLowerCase())) ||
     (r.format?.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
-  /** Liste des demandes éligibles à la génération d'un rapport consolidé */
-  const completedRequests = requests.filter((r: any) => r.status === 'terminee' || r.status === 'En Validation' || r.status === 'validee' || r.status === 'En Cours' || r.status === 'assignee');
+  const completedRequests = requests.filter((r: any) => r.status === 'terminee' || r.status === 'en_validation' || r.status === 'validee' || r.status === 'en_cours');
 
   return (
     <div className="space-y-6">
@@ -909,6 +666,7 @@ export function Reports() {
         </div>
       </div>
 
+      {/* Raccourcis de génération rapide */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-xl p-6 text-white shadow-md relative overflow-hidden">
           <FileText className="absolute right-[-20px] bottom-[-20px] w-32 h-32 text-white/10" />
@@ -920,17 +678,18 @@ export function Reports() {
           </button>
         </div>
         <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
-          <h3 className="text-lg font-semibold text-slate-900 mb-1">Certificat Conformité</h3>
-          <p className="text-slate-500 text-sm mb-4">Export rapide des résultats ex : granulométriques (D10, D50, D90) avec courbe laser intégrée.</p>
+          <h3 className="text-lg font-semibold text-slate-900 mb-1">Certificat Conformité Poudres</h3>
+          <p className="text-slate-500 text-sm mb-4">Export rapide des résultats granulométriques (D10, D50, D90) avec courbe laser intégrée.</p>
           <button onClick={() => setIsCertModalOpen(true)} className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-200">Configurer</button>
         </div>
         <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
           <h3 className="text-lg font-semibold text-slate-900 mb-1">Export Brut (Data)</h3>
-          <p className="text-slate-500 text-sm mb-4">Export Excel des valeurs brutes ex : porosité et dureté Vickers pour analyse statistique externe.</p>
+          <p className="text-slate-500 text-sm mb-4">Export Excel des valeurs brutes de porosité et dureté Vickers pour analyse statistique externe.</p>
           <button onClick={handleGenerateCSV} className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-200">Générer CSV</button>
         </div>
       </div>
 
+      {/* Tableau d'archivage des rapports */}
       <h3 className="text-lg font-display font-bold text-slate-900 mb-4">Archives des Rapports</h3>
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
         <table className="min-w-full divide-y divide-slate-200">
@@ -963,48 +722,14 @@ export function Reports() {
                   {formatDate(report.createdAt)}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="flex flex-col gap-0.5">
-                    <div className="flex items-center gap-1.5">
-                      <span className="inline-flex items-center px-2.5 py-0.5 rounded border border-slate-200 text-xs font-medium bg-slate-100 text-slate-800">
-                        {report.format}
-                      </span>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                        v{report.version || 1}
-                      </span>
-                    </div>
-                    {report.sha256Hash && (
-                      <span className="text-[10px] font-mono text-emerald-700" title={`SHA-256 : ${report.sha256Hash}`}>
-                        SHA-256: {report.sha256Hash.slice(0, 10)}…
-                      </span>
-                    )}
-                    {report.amendmentReason && (
-                      <span className="text-[10px] text-amber-700 truncate max-w-[180px]" title={report.amendmentReason}>
-                        Motif : {report.amendmentReason}
-                      </span>
-                    )}
-                  </div>
+                  <span className="inline-flex items-center px-2.5 py-0.5 rounded border border-slate-200 text-xs font-medium bg-slate-100 text-slate-800">
+                    {report.format}
+                  </span>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                   <div className="flex items-center justify-end space-x-3">
-                    {report.status === 'genere' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRevisionTargetReport(report);
-                          setRevisionReason("");
-                          setRevisionError("");
-                        }}
-                        className="text-xs font-semibold text-amber-700 hover:text-amber-900 bg-amber-50 border border-amber-200 px-2 py-1 rounded cursor-pointer"
-                        title="Créer une nouvelle révision tracée (amendement ISO 17025)"
-                      >
-                        Réviser
-                      </button>
-                    )}
                     <button 
-                      onClick={() => {
-                        setAutoDownloadPdf(false);
-                        setPreviewReport(report);
-                      }}
+                      onClick={() => setPreviewReport(report)}
                       className="flex items-center text-slate-500 hover:text-slate-800 transition-colors"
                       title="Aperçu"
                     >
@@ -1039,122 +764,6 @@ export function Reports() {
           </tbody>
         </table>
       </div>
-
-      {/* Fenêtre modale personnalisée de Révision / Amendement de Rapport (ISO/IEC 17025 §7.8.8) */}
-      {revisionTargetReport && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200">
-            <div className="p-5 border-b border-amber-200 bg-amber-50 flex items-center justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900">
-                    {revisionTargetReport.id}
-                  </span>
-                  <span className="text-xs font-bold text-amber-800">
-                    v{revisionTargetReport.version || 1} → v{(revisionTargetReport.version || 1) + 1}
-                  </span>
-                </div>
-                <h3 className="text-base font-bold text-slate-900 mt-1">
-                  Créer une révision / amendement de rapport
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setRevisionTargetReport(null)}
-                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!revisionReason.trim()) {
-                  setRevisionError("Veuillez renseigner un motif d'amendement (obligatoire selon ISO/IEC 17025 §7.8.8).");
-                  return;
-                }
-                const rev = createReportRevision(revisionTargetReport.id, revisionReason.trim());
-                setRevisionTargetReport(null);
-                setRevisionReason("");
-                setRevisionError("");
-                if (rev) {
-                  setAutoDownloadPdf(false);
-                  setPreviewReport(rev);
-                }
-              }}
-              className="p-5 space-y-4"
-            >
-              <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600 leading-relaxed">
-                Le rapport original <strong className="font-mono text-slate-800">{revisionTargetReport.id}</strong> restera archivé et verrouillé de manière immuable. Une nouvelle version tracée sera créée avec le motif ci-dessous.
-              </div>
-
-              {/* Raccourcis de motifs courants */}
-              <div>
-                <span className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">
-                  Motifs fréquents (clic rapide)
-                </span>
-                <div className="flex flex-wrap gap-1.5">
-                  {[
-                    "Correction d'une erreur typographique",
-                    "Ajout de résultats complémentaires",
-                    "Ré-essai suite à non-conformité",
-                    "Mise à jour de la conclusion technique"
-                  ].map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      onClick={() => {
-                        setRevisionReason(preset);
-                        setRevisionError("");
-                      }}
-                      className="px-2.5 py-1 text-xs rounded-full bg-slate-100 hover:bg-amber-100 text-slate-700 hover:text-amber-900 border border-slate-200 transition-colors"
-                    >
-                      {preset}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1">
-                  Motif détaillé de l'amendement *
-                </label>
-                <textarea
-                  rows={3}
-                  required
-                  value={revisionReason}
-                  onChange={(e) => {
-                    setRevisionReason(e.target.value);
-                    if (revisionError) setRevisionError("");
-                  }}
-                  placeholder="Précisez la nature exacte de la modification apportée par rapport à la version précédente..."
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                />
-                {revisionError && (
-                  <p className="text-xs text-red-600 font-medium mt-1">{revisionError}</p>
-                )}
-              </div>
-
-              <div className="pt-3 border-t border-slate-200 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setRevisionTargetReport(null)}
-                  className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 text-sm font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg shadow-xs"
-                >
-                  Créer la révision v{(revisionTargetReport.version || 1) + 1}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* Fenêtre modale de génération de Certificat de Conformité */}
       {isCertModalOpen && (
@@ -1305,18 +914,13 @@ export function Reports() {
       {/* Visualiseur de rapport complet */}
       <ReportPreviewModal 
         isOpen={!!previewReport}
-        onClose={() => {
-          setPreviewReport(null);
-          setAutoDownloadPdf(false);
-        }}
+        onClose={() => setPreviewReport(null)}
         report={previewReport}
         requests={requests}
         samples={samples}
         analyses={analyses}
         analysisTemplates={analysisTemplates}
         users={users}
-        autoDownload={autoDownloadPdf}
-        onAutoDownloadComplete={() => setAutoDownloadPdf(false)}
       />
     </div>
   );

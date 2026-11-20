@@ -6,24 +6,16 @@
  * 2. Procédure de mot de passe oublié avec génération et vérification d'un code OTP à 6 chiffres
  * 3. Formulaire de demande d'accès pour les nouveaux clients ou collaborateurs
  * 4. Présentation des comptes de démonstration pour les deux instances de laboratoire
- *
- * @module views/Login
  */
 
 import React, { useState } from 'react';
 import { useLims } from '../store';
 import { Lock, Shield, TestTube, Users, Mail, Building2 } from 'lucide-react';
 
-/**
- * Composant principal d'authentification et de gestion des accès pré-connexion.
- * Bascule dynamiquement entre quatre modes ('login', 'forgot', 'reset', 'request')
- * au sein d'une même carte interactive.
- */
 export function Login() {
-  // Extraction de l'action `login` depuis le contexte global LIMS pour hydrater la session utilisateur
   const { login } = useLims();
   
-  // États de saisie des identifiants et retours d'API (erreurs / confirmations / chargement)
+  // États de saisie des identifiants
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -32,12 +24,10 @@ export function Login() {
   
   // Mode d'affichage : 'login' (connexion), 'forgot' (demande code), 'reset' (saisie nouveau mdp), 'request' (demande de compte)
   const [mode, setMode] = useState<'login' | 'forgot' | 'reset' | 'request'>('login');
-  // Code OTP à 6 chiffres saisi par l'utilisateur lors de la réinitialisation
   const [resetCode, setResetCode] = useState('');
-  // Code OTP retourné en environnement de développement/test si aucun serveur SMTP n'est configuré
   const [devCode, setDevCode] = useState('');
   
-  // États spécifiques au formulaire de demande de création de compte (prospect / nouveau demandeur)
+  // États spécifiques au formulaire de demande de création de compte
   const [reqName, setReqName] = useState('');
   const [reqCompany, setReqCompany] = useState('');
   const [reqMessage, setReqMessage] = useState('');
@@ -45,8 +35,6 @@ export function Login() {
   /**
    * Traitement de la connexion utilisateur
    * Envoie les identifiants au serveur backend (/api/auth/login) et charge le profil dans le store
-   *
-   * @param e Événement de soumission du formulaire HTML
    */
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,7 +42,6 @@ export function Login() {
     setLoading(true);
 
     try {
-      // Appel REST d'authentification ; le serveur vérifie le hash du mot de passe et retourne l'objet User
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -63,7 +50,6 @@ export function Login() {
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erreur de connexion');
-      // Déclenche la mise à jour du state global et la persistance dans localStorage
       login(data.user);
     } catch (err: any) {
       setError(err.message);
@@ -75,8 +61,6 @@ export function Login() {
   /**
    * Envoi de la demande de réinitialisation de mot de passe
    * Génère un code OTP côté serveur et bascule sur l'écran de réinitialisation
-   *
-   * @param e Événement de soumission du formulaire HTML
    */
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,7 +69,6 @@ export function Login() {
     setLoading(true);
 
     try {
-      // Demande au backend de générer un code temporaire à 6 chiffres et de l'envoyer par email
       const res = await fetch('/api/auth/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -96,9 +79,7 @@ export function Login() {
       if (!res.ok) throw new Error(data.error || 'Erreur système');
       
       setSuccessMsg(data.message);
-      // En mode bac à sable / démo, le backend peut renvoyer `_devCode` pour faciliter les tests sans SMTP
       if (data._devCode) setDevCode(data._devCode);
-      // Passage automatique à l'étape 2 : saisie du code OTP et du nouveau mot de passe
       setMode('reset');
     } catch (err: any) {
       setError(err.message);
@@ -109,8 +90,6 @@ export function Login() {
 
   /**
    * Validation du code OTP et mise à jour du mot de passe
-   *
-   * @param e Événement de soumission du formulaire HTML
    */
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -119,7 +98,6 @@ export function Login() {
     setLoading(true);
 
     try {
-      // Vérifie la correspondance (email + code OTP non expiré) et enregistre le nouveau mot de passe
       const res = await fetch('/api/auth/reset-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -129,7 +107,6 @@ export function Login() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erreur lors de la réinitialisation');
       
-      // Nettoyage des données sensibles en mémoire et retour à l'écran de login
       setSuccessMsg('Mot de passe mis à jour avec succès. Vous pouvez vous connecter.');
       setMode('login');
       setPassword('');
@@ -145,8 +122,6 @@ export function Login() {
   /**
    * Soumission d'une demande de création de compte par un demandeur externe
    * Notifie les managers du laboratoire pour validation
-   *
-   * @param e Événement de soumission du formulaire HTML
    */
   const handleAccountRequest = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -155,7 +130,6 @@ export function Login() {
     setLoading(true);
 
     try {
-      // Crée une entrée d'approbation de compte et envoie une notification interne aux administrateurs/managers
       const res = await fetch('/api/auth/request-account', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -165,7 +139,6 @@ export function Login() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erreur lors de la demande');
       
-      // Réinitialisation complète du formulaire après envoi réussi
       setSuccessMsg(data.message);
       setMode('login');
       setEmail('');
@@ -239,7 +212,7 @@ export function Login() {
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   className="mt-1 block w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="Ex: jean.dupont@swg.ch"
+                  placeholder="Ex: jean.dupont@aero-tech.fr"
                 />
               </div>
               <div>
@@ -247,7 +220,7 @@ export function Login() {
                   <label className="block text-sm font-medium text-slate-700">Mot de passe</label>
                   <button 
                     type="button" 
-                    onClick={() => { setMode('forgot'); setPassword(''); setError(''); setSuccessMsg(''); }} 
+                    onClick={() => { setMode('forgot'); setError(''); setSuccessMsg(''); }} 
                     className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer"
                   >
                     Mot de passe oublié ?
@@ -410,6 +383,28 @@ export function Login() {
             </form>
           )}
 
+          {/* 5. Guide des profils et comptes de démonstration */}
+          <div className="mt-6 pt-5 border-t border-slate-200">
+            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2.5">
+              Comptes de test (Mot de passe: password123)
+            </h4>
+            <div className="space-y-2 text-xs text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-200">
+              <div className="pb-1.5 border-b border-slate-200">
+                <span className="font-bold text-blue-700">Portail Client Unifié :</span><br />
+                <span className="font-mono text-slate-800">jean.dupont@aero-tech.fr</span> (Demandeur)
+              </div>
+              <div className="pb-1.5 border-b border-slate-200">
+                <span className="font-bold text-slate-800">Lab Métallographie (MET) :</span><br />
+                <span className="font-mono text-slate-700">marc.durand@materiolab.fr</span> (Manager)<br />
+                <span className="font-mono text-slate-700">sophie.martin@materiolab.fr</span> (Laborant)
+              </div>
+              <div>
+                <span className="font-bold text-emerald-800">Lab Mécanique & Poudres (MEC) :</span><br />
+                <span className="font-mono text-slate-700">claire.rousseau@materiolab.fr</span> (Manager)<br />
+                <span className="font-mono text-slate-700">thomas.bernard@materiolab.fr</span> (Laborant)
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

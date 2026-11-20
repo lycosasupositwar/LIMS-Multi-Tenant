@@ -22,9 +22,6 @@ import { Settings } from './views/Settings';
 import { Login } from './views/Login';
 import { RequesterPortal } from './views/RequesterPortal';
 import { RequestsInternal } from './views/RequestsInternal';
-import { Equipments } from './views/Equipments';
-import { NonConformities } from './views/NonConformities';
-import { Planning } from './views/Planning';
 import { LogOut } from 'lucide-react';
 
 /**
@@ -65,7 +62,7 @@ function Main() {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard onNavigate={(tab) => setActiveTab(tab)} />;
+        return <Dashboard />;
       case 'requests':
         return <RequestsInternal />;
       case 'samples':
@@ -76,29 +73,13 @@ function Main() {
         return <Reports />;
       case 'inventory':
         return <Inventory />;
-      case 'equipments':
-        // Parc équipements & métrologie réservé aux managers et administrateurs
-        return currentUser.role === 'manager' || currentUser.role === 'admin' ? (
-          <Equipments />
-        ) : (
-          <Dashboard onNavigate={(tab) => setActiveTab(tab)} />
-        );
-      case 'nonconformities':
-        return <NonConformities />;
-      case 'planning':
-        // Calendrier complet & charge pour managers/admins ; calendrier personnel en lecture seule pour les analystes
-        return <Planning />;
       case 'builder':
         // Le module de conception de formulaires et templates est réservé aux managers
-        return currentUser.role === 'manager' || currentUser.role === 'admin' ? (
-          <BuilderCMS />
-        ) : (
-          <Dashboard onNavigate={(tab) => setActiveTab(tab)} />
-        );
+        return currentUser.role === 'manager' ? <BuilderCMS /> : <Dashboard />;
       case 'settings':
         return <Settings />;
       default:
-        return <Dashboard onNavigate={(tab) => setActiveTab(tab)} />;
+        return <Dashboard />;
     }
   };
 

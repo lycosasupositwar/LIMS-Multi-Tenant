@@ -11,6 +11,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useLims } from '../store';
+import { getDefaultLabSchedulingConfig } from '../utils/smartScheduler';
 import { Plus, Settings2, GripVertical, Database, Layers, TestTube2, Check, X, FileText, ArrowUp, ArrowDown, Trash2, Copy, Edit2, UploadCloud, Building2 } from 'lucide-react';
 import { MaterialTemplate, CustomField, AnalysisTemplate, ExpectedResult, RequestTemplate, ReportTemplate } from '../types';
 
@@ -26,7 +27,7 @@ export function BuilderCMS() {
     updateMaterialTemplate, updateRequestTemplate, updateAnalysisTemplate, updateReportTemplate,
     addMaterialTemplate, addAnalysisTemplate, addRequestTemplate, addReportTemplate,
     deleteMaterialTemplate, deleteAnalysisTemplate, deleteRequestTemplate, deleteReportTemplate,
-    activeLabId, activeLab, laboratories, setActiveLabId
+    activeLabId, activeLab, labSettings, laboratories, setActiveLabId
   } = useLims();
 
   // Onglet actif du constructeur ('materials' | 'analyses' | 'requests' | 'reports')
@@ -1493,6 +1494,61 @@ export function BuilderCMS() {
                         className="w-full text-sm border-slate-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
                       />
                     </div>
+                  </div>
+                  {/* Étapes de préparation requises (utilisées par le moteur de planification intelligente) */}
+                  <div className="pt-3 border-t border-slate-200 space-y-2">
+                    <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(activeAnalysisTpl.requiresPreparation)}
+                        onChange={e => {
+                          const updated = {
+                            ...activeAnalysisTpl,
+                            requiresPreparation: e.target.checked,
+                            preparationStepIds: e.target.checked ? (activeAnalysisTpl.preparationStepIds || []) : []
+                          };
+                          updateAnalysisTemplate(activeAnalysisTpl.id, updated);
+                          setActiveAnalysisTpl(updated);
+                        }}
+                        className="rounded border-slate-300 text-blue-600"
+                      />
+                      Nécessite une préparation d'échantillon préalable
+                    </label>
+                    {activeAnalysisTpl.requiresPreparation && (
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1.5">
+                        <p className="text-[11px] text-slate-500 mb-1">
+                          Sélectionnez les étapes de préparation de ce laboratoire (configurables dans Paramètres → Laboratoire) :
+                        </p>
+                        {(labSettings?.schedulingConfig?.preparationSteps || getDefaultLabSchedulingConfig().preparationSteps).map(step => {
+                          const selectedIds = activeAnalysisTpl.preparationStepIds || [];
+                          const checked = selectedIds.includes(step.id);
+                          return (
+                            <label key={step.id} className="flex items-center justify-between text-xs text-slate-700 py-1">
+                              <span className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => {
+                                    const nextIds = checked
+                                      ? selectedIds.filter(id => id !== step.id)
+                                      : [...selectedIds, step.id];
+                                    const updated = { ...activeAnalysisTpl, preparationStepIds: nextIds };
+                                    updateAnalysisTemplate(activeAnalysisTpl.id, updated);
+                                    setActiveAnalysisTpl(updated);
+                                  }}
+                                  className="rounded border-slate-300 text-indigo-600"
+                                />
+                                <span className="font-medium">{step.name}</span>
+                              </span>
+                              <span className="text-[11px] text-slate-500 font-mono">
+                                {step.durationMinutes} min • cap. {step.batchCapacity}
+                                {step.batchGroupBy === 'same_material' ? ' (même alliage)' : step.batchGroupBy === 'same_template' ? ' (même essai)' : step.batchGroupBy === 'any' ? ' (lot libre)' : ' (1 à 1)'}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </>
               )}

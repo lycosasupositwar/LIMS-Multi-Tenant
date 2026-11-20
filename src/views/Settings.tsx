@@ -12,6 +12,8 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useLims } from '../store';
+import { BatchGroupRule, LabSchedulingConfig, PreparationStepTemplate } from '../types';
+import { getDefaultLabSchedulingConfig } from '../utils/smartScheduler';
 import {
   Building,
   Phone,
@@ -1073,6 +1075,184 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                 />
               </div>
             </div>
+          </div>
+
+          {/* Règles de Planification Intelligente & Étapes de Préparation (100 % spécifique par laboratoire) */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mt-8">
+            <div className="p-6 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-800 flex items-center">
+                  <Clock className="w-5 h-5 mr-2 text-indigo-500" />
+                  Planification Intelligente & Étapes de Préparation
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Paramétrez la capacité horaire et les règles de regroupement en lots propres à ce laboratoire (ex : Enrobage 1 à la fois vs Polissage 6 enrobages d'un même alliage).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleSave}
+                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5"
+              >
+                <Save className="w-3.5 h-3.5" /> Enregistrer les règles
+              </button>
+            </div>
+            {(() => {
+              const schedCfg: LabSchedulingConfig = formData.schedulingConfig || getDefaultLabSchedulingConfig();
+              const updateSched = (patch: Partial<LabSchedulingConfig>) => {
+                setFormData({ ...formData, schedulingConfig: { ...schedCfg, ...patch } });
+                setSaved(false);
+              };
+              const updateStep = (stepId: string, patch: Partial<PreparationStepTemplate>) => {
+                const nextSteps = schedCfg.preparationSteps.map(s => (s.id === stepId ? { ...s, ...patch } : s));
+                updateSched({ preparationSteps: nextSteps });
+              };
+              const removeStep = (stepId: string) => {
+                updateSched({ preparationSteps: schedCfg.preparationSteps.filter(s => s.id !== stepId) });
+              };
+              const addStep = () => {
+                const newStep: PreparationStepTemplate = {
+                  id: `PREP-${Date.now()}`,
+                  name: 'Nouvelle étape de préparation',
+                  durationMinutes: 20,
+                  batchCapacity: 1,
+                  batchGroupBy: 'none'
+                };
+                updateSched({ preparationSteps: [...schedCfg.preparationSteps, newStep] });
+              };
+              const dayLabels = [
+                { d: 1, l: 'Lun' }, { d: 2, l: 'Mar' }, { d: 3, l: 'Mer' },
+                { d: 4, l: 'Jeu' }, { d: 5, l: 'Ven' }, { d: 6, l: 'Sam' }, { d: 0, l: 'Dim' }
+              ];
+
+              return (
+                <div className="p-6 space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Capacité journalière (heures/jour)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={24}
+                        step={0.5}
+                        value={schedCfg.dailyCapacityHours}
+                        onChange={e => updateSched({ dailyCapacityHours: Math.max(1, Number(e.target.value) || 7) })}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Jours ouvrés du laboratoire</label>
+                      <div className="flex flex-wrap gap-1 pt-1">
+                        {dayLabels.map(({ d, l }) => {
+                          const active = (schedCfg.workingDays || [1, 2, 3, 4, 5]).includes(d);
+                          return (
+                            <button
+                              key={d}
+                              type="button"
+                              onClick={() => {
+                                const cur = schedCfg.workingDays || [1, 2, 3, 4, 5];
+                                const next = active ? cur.filter(x => x !== d) : [...cur, d];
+                                updateSched({ workingDays: next.length ? next : [1] });
+                              }}
+                              className={`px-2 py-1 rounded text-xs font-semibold border ${active ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-300'}`}
+                            >
+                              {l}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="flex items-center pt-5">
+                      <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={schedCfg.allowUrgentPreemption !== false}
+                          onChange={e => updateSched({ allowUrgentPreemption: e.target.checked })}
+                          className="rounded border-slate-300 text-indigo-600"
+                        />
+                        Autoriser les urgences à décaler les essais non commencés
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Catalogue dynamique des étapes de préparation */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                        Catalogue des étapes de préparation ({schedCfg.preparationSteps.length})
+                      </h4>
+                      <button
+                        type="button"
+                        onClick={addStep}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> Ajouter une étape
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {schedCfg.preparationSteps.map(step => (
+                        <div key={step.id} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center p-3 rounded-lg bg-slate-50 border border-slate-200">
+                          <div className="sm:col-span-4">
+                            <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Nom de l'étape</label>
+                            <input
+                              type="text"
+                              value={step.name}
+                              onChange={e => updateStep(step.id, { name: e.target.value })}
+                              className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded bg-white"
+                            />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Durée (min)</label>
+                            <input
+                              type="number"
+                              min={1}
+                              value={step.durationMinutes}
+                              onChange={e => updateStep(step.id, { durationMinutes: Math.max(1, Number(e.target.value) || 1) })}
+                              className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded bg-white font-mono"
+                            />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Capacité / lot</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={100}
+                              value={step.batchCapacity}
+                              onChange={e => updateStep(step.id, { batchCapacity: Math.max(1, Number(e.target.value) || 1) })}
+                              className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded bg-white font-mono"
+                            />
+                          </div>
+                          <div className="sm:col-span-3">
+                            <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Regroupement autorisé</label>
+                            <select
+                              value={step.batchGroupBy}
+                              onChange={e => updateStep(step.id, { batchGroupBy: e.target.value as BatchGroupRule })}
+                              className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded bg-white"
+                            >
+                              <option value="none">Aucun (1 à la fois)</option>
+                              <option value="same_material">Même alliage / matériau</option>
+                              <option value="same_template">Même méthode d'essai</option>
+                              <option value="any">Libre (tous échantillons)</option>
+                            </select>
+                          </div>
+                          <div className="sm:col-span-1 flex justify-end pt-3 sm:pt-4">
+                            <button
+                              type="button"
+                              onClick={() => removeStep(step.id)}
+                              className="p-1.5 text-slate-400 hover:text-red-600 rounded"
+                              title="Supprimer cette étape"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mt-8">

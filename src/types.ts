@@ -313,6 +313,10 @@ export interface AnalysisTemplate {
   estimatedHours?: number;
   /** Catégorie d'équipement requise pour réaliser cet essai (ex: 'Microscopie', 'Dureté', 'Traction') */
   requiredEquipmentCategory?: string;
+  /** Indique si cette analyse nécessite des étapes de préparation d'échantillon préalables */
+  requiresPreparation?: boolean;
+  /** Identifiants ordonnés des étapes de préparation du laboratoire (`LabSchedulingConfig.preparationSteps`) */
+  preparationStepIds?: string[];
   /** Liste des grandeurs, tableaux ou clichés attendus lors de l'exécution de l'essai */
   expectedResults: ExpectedResult[];
 }
@@ -403,6 +407,10 @@ export interface AnalysisRequest {
   contractReview?: ContractReview;
   /** Fil de discussion client / laboratoire attaché au dossier */
   comments?: RequestComment[];
+  /** Nombre d'échantillons annoncé par le demandeur lors de la soumission */
+  sampleCount?: number;
+  /** Temps total estimé de réalisation des essais (en heures) calculé dès la demande */
+  estimatedHours?: number;
   /** Valorisation financière estimée (€ HT) calculée à partir des tarifs des essais */
   estimatedCost?: number;
 }
@@ -523,6 +531,45 @@ export interface Analysis {
   conformityStatus?: 'conforme' | 'non_conforme' | 'indetermine';
   /** Date planifiée d'exécution (YYYY-MM-DD) pour le module Planning */
   plannedDate?: string;
+  /** Verrou manuel du manager empêchant l'auto-planificateur de décaler cet essai */
+  isScheduleLocked?: boolean;
+  /** Identifiant du lot de préparation optimisé (ex: 'LOT-POL-1') auquel cet essai est rattaché */
+  scheduledBatchId?: string;
+}
+
+/** Règle de regroupement d'une étape de préparation en lot simultané */
+export type BatchGroupRule = 'none' | 'same_material' | 'same_template' | 'any';
+
+/**
+ * Définition d'une étape de préparation configurable propre à chaque laboratoire
+ * (ex: Enrobage à chaud cap=1 séquentiel vs Polissage automatique cap=6 pour un même alliage).
+ */
+export interface PreparationStepTemplate {
+  id: string;
+  /** Intitulé de l'étape (ex: "Enrobage à chaud", "Polissage automatique", "Dégazage BET") */
+  name: string;
+  /** Durée d'un cycle en minutes (par échantillon si batchCapacity=1, par lot si batchCapacity>1) */
+  durationMinutes: number;
+  /** Nombre maximal d'échantillons traitables simultanément (1 = séquentiel, 6 = 6 plots au polissage) */
+  batchCapacity: number;
+  /** Critère de regroupement autorisé ('none', 'same_material', 'same_template', 'any') */
+  batchGroupBy: BatchGroupRule;
+}
+
+/**
+ * Paramètres dynamiques du moteur de planification intelligente propres à un laboratoire
+ */
+export interface LabSchedulingConfig {
+  /** Capacité de travail journalière du laboratoire en heures (ex: 7h ou 14h) */
+  dailyCapacityHours: number;
+  /** Jours ouvrés (0=Dim, 1=Lun, ..., 6=Sam ; défaut [1,2,3,4,5]) */
+  workingDays: number[];
+  /** Autorise une analyse urgente ('haute') à décaler les essais 'planifie' non démarrés */
+  allowUrgentPreemption: boolean;
+  /** Horizon de regroupement en jours pour optimiser les lots de préparation */
+  batchWindowDays: number;
+  /** Catalogue dynamique des étapes de préparation propres à ce laboratoire */
+  preparationSteps: PreparationStepTemplate[];
 }
 
 /**
@@ -559,6 +606,8 @@ export interface LabSettings {
     /** Préfixe des sous-échantillons / enrobages (ex: 'ENR-MET') */
     subSample: string;
   };
+  /** Configuration dynamique du moteur de planification intelligente et des lots de préparation */
+  schedulingConfig?: LabSchedulingConfig;
 }
 
 /**

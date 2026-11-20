@@ -67,6 +67,18 @@ export const initialLaboratories: Laboratory[] = [
         request: 'REQ-MET',
         sample: 'ECH-MET',
         subSample: 'ENR-MET'
+      },
+      schedulingConfig: {
+        dailyCapacityHours: 7,
+        workingDays: [1, 2, 3, 4, 5],
+        allowUrgentPreemption: true,
+        batchWindowDays: 3,
+        preparationSteps: [
+          { id: 'PREP-MET-TRONC', name: 'Tronçonnage', durationMinutes: 10, batchCapacity: 1, batchGroupBy: 'none' },
+          { id: 'PREP-MET-ENROB', name: 'Enrobage à chaud', durationMinutes: 15, batchCapacity: 1, batchGroupBy: 'none' },
+          { id: 'PREP-MET-POLIS', name: 'Polissage automatique', durationMinutes: 45, batchCapacity: 6, batchGroupBy: 'same_material' },
+          { id: 'PREP-MET-ATTAQ', name: 'Attaque chimique', durationMinutes: 10, batchCapacity: 1, batchGroupBy: 'none' }
+        ]
       }
     }
   },
@@ -95,6 +107,17 @@ export const initialLaboratories: Laboratory[] = [
         request: 'REQ-MEC',
         sample: 'ECH-MEC',
         subSample: 'EPR-MEC'
+      },
+      schedulingConfig: {
+        dailyCapacityHours: 14,
+        workingDays: [1, 2, 3, 4, 5],
+        allowUrgentPreemption: true,
+        batchWindowDays: 3,
+        preparationSteps: [
+          { id: 'PREP-MEC-USIN', name: 'Usinage éprouvette', durationMinutes: 30, batchCapacity: 1, batchGroupBy: 'none' },
+          { id: 'PREP-MEC-DEGAZ', name: 'Dégazage BET', durationMinutes: 180, batchCapacity: 4, batchGroupBy: 'any' },
+          { id: 'PREP-MEC-ETUVE', name: 'Étuvage / Séchage poudres', durationMinutes: 60, batchCapacity: 10, batchGroupBy: 'same_template' }
+        ]
       }
     }
   }
@@ -268,6 +291,9 @@ export const initialAnalysisTemplates: AnalysisTemplate[] = [
     description: 'Examen de la microstructure et détection des porosités résiduelles par analyse d\'image.',
     standardRef: 'ISO 643 / ASTM E3',
     isActive: true,
+    estimatedHours: 1,
+    requiresPreparation: true,
+    preparationStepIds: ['PREP-MET-TRONC', 'PREP-MET-ENROB', 'PREP-MET-POLIS', 'PREP-MET-ATTAQ'],
     expectedResults: [
       { id: 'porosite', name: 'Taux de porosité surfacique', type: 'number', unit: '%', required: true },
       { id: 'phases', name: 'Description des phases observées', type: 'text', required: true },
@@ -283,6 +309,9 @@ export const initialAnalysisTemplates: AnalysisTemplate[] = [
     description: 'Mesure de dureté par pénétration d\'une pyramide diamant sous charge de 0.1 à 10 kgf.',
     standardRef: 'NF EN ISO 6507-1',
     isActive: true,
+    estimatedHours: 0.75,
+    requiresPreparation: true,
+    preparationStepIds: ['PREP-MET-ENROB', 'PREP-MET-POLIS'],
     expectedResults: [
       { id: 'charge', name: 'Charge d\'essai', type: 'select', options: ['HV0.1', 'HV0.3', 'HV0.5', 'HV1', 'HV5'], required: true },
       { id: 'hv_moyen', name: 'Dureté Vickers Moyenne', type: 'number', unit: 'HV', required: true },

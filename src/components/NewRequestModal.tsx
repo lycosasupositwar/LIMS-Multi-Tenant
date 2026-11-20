@@ -15,6 +15,7 @@ import { useLims } from '../store';
 import { AnalysisRequest } from '../types';
 import { getLabColor } from '../utils/colors';
 import { generateUniqueLimsId } from '../utils/idGenerator';
+import { estimateRequestDurationWithPrep } from '../utils/smartScheduler';
 
 /**
  * Propriétés de la modale de création de demande d'analyse
@@ -61,6 +62,8 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
   
   // Intitulé principal du projet ou référence pièce renseigné par le demandeur
   const [title, setTitle] = useState('');
+  // Nombre d'échantillons annoncé par le demandeur (sert au calcul estimatif de durée et de coût)
+  const [sampleCount, setSampleCount] = useState<number>(1);
   // Dictionnaire clé/valeur stockant les réponses aux champs dynamiques du formulaire CMS
   const [customData, setCustomData] = useState<Record<string, any>>({});
 
@@ -72,6 +75,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
         if (initialRequest.labId) setSelectedLabId(initialRequest.labId);
         if (initialRequest.templateId) setSelectedTemplateId(initialRequest.templateId);
         if (initialRequest.title) setTitle("Copie de " + initialRequest.title);
+        setSampleCount(initialRequest.sampleCount || 1);
         if (initialRequest.customData) setCustomData(JSON.parse(JSON.stringify(initialRequest.customData)));
       } else {
         // Mode création vierge : initialisation sur le laboratoire actif et son premier gabarit disponible
@@ -84,6 +88,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
           setSelectedTemplateId('');
         }
         setTitle('');
+        setSampleCount(1);
         setCustomData({});
       }
     }
@@ -114,6 +119,30 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
   // Modèles de matériaux actifs et packs d'essais préconfigurés pour ce laboratoire
   const availableMaterials = allMaterialTemplates.filter(m => m.labId === selectedLabId && m.isActive !== false);
   const availablePacks = allAnalysisPacks.filter(p => p.labId === selectedLabId && p.isActive !== false);
+
+  // Calcul estimatif en temps réel de la durée totale (en heures / jours ouvrés) et du coût indicatif
+  // à partir du nombre d'échantillons déclaré et des essais sélectionnés dans le formulaire.
+  const selectedAnalysisIds: string[] = [];
+  if (activeTemplate) {
+    activeTemplate.fields.forEach(f => {
+      if (f.type === 'analyses' && Array.isArray(customData[f.id])) {
+        customData[f.id].forEach((id: string) => {
+          if (!selectedAnalysisIds.includes(id)) selectedAnalysisIds.push(id);
+        });
+      }
+    });
+  }
+  const safeSampleCount = Math.max(1, Math.min(100, Math.floor(Number(sampleCount) || 1)));
+  const selectedAnalysisTemplates = availableAnalyses.filter(t => selectedAnalysisIds.includes(t.id));
+  const durationBreakdown = estimateRequestDurationWithPrep(
+    safeSampleCount,
+    selectedAnalysisTemplates,
+    targetLab?.settings?.schedulingConfig
+  );
+  const estimatedHours = durationBreakdown.totalHours;
+  const dailyCap = targetLab?.settings?.schedulingConfig?.dailyCapacityHours || 7;
+  const estimatedDays = estimatedHours > 0 ? Math.max(0.5, Math.round((estimatedHours / dailyCap) * 2) / 2) : 0;
+  const estimatedCost = selectedAnalysisTemplates.reduce((sum, t) => sum + (t.unitPrice || 0), 0) * safeSampleCount;
 
   /**
    * Enregistrement de la nouvelle demande avec assignation du laboratoire.
@@ -151,6 +180,9 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
       title,
       status: 'soumise',
       createdAt: new Date().toISOString(),
+      sampleCount: safeSampleCount,
+      estimatedHours: estimatedHours > 0 ? estimatedHours : undefined,
+      estimatedCost: estimatedCost > 0 ? estimatedCost : undefined,
       customData,
       auditTrail: []
     };
@@ -236,18 +268,34 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                 2. Spécifications du Dossier
               </label>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  Intitulé du projet / Réf. Pièce *
-                </label>
-                <input 
-                  type="text" 
-                  required 
-                  value={title} 
-                  onChange={e => setTitle(e.target.value)} 
-                  className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
-                  placeholder="Ex: Expertise métallurgique lot aube Inconel 718" 
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    Intitulé du projet / Réf. Pièce *
+                  </label>
+                  <input 
+                    type="text" 
+                    required 
+                    value={title} 
+                    onChange={e => setTitle(e.target.value)} 
+                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                    placeholder="Ex: Expertise métallurgique lot aube Inconel 718" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    Nb d'échantillons *
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    required
+                    value={sampleCount}
+                    onChange={e => setSampleCount(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-semibold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
               </div>
               
               <div>
@@ -471,6 +519,34 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                     </div>
                   ))}
                 </div>
+
+                {/* Bandeau de premier calcul estimatif du temps et du coût */}
+                {selectedAnalysisTemplates.length > 0 && (
+                  <div className="mt-4 p-3.5 rounded-xl bg-blue-50 border border-blue-200 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wider text-blue-900">
+                        Estimation préliminaire de charge laboratoire
+                      </p>
+                      <p className="text-xs text-blue-700 mt-0.5">
+                        {safeSampleCount} échantillon(s) × {selectedAnalysisTemplates.length} essai(s)
+                        {durationBreakdown.prepHours > 0 ? ` — Essais : ${durationBreakdown.testHours}h + Préparation : ${durationBreakdown.prepHours}h` : ''}
+                        {durationBreakdown.savedHours > 0 ? ` (${durationBreakdown.savedHours}h gagnées par lots)` : ''}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="text-right">
+                        <div className="text-sm font-bold text-blue-950">~{estimatedHours} h</div>
+                        <div className="text-[11px] text-blue-700">≈ {estimatedDays} jour(s) ouvré(s)</div>
+                      </div>
+                      {estimatedCost > 0 && (
+                        <div className="pl-3 border-l border-blue-200 text-right">
+                          <div className="text-sm font-bold text-emerald-800">{estimatedCost} € HT</div>
+                          <div className="text-[11px] text-emerald-700">Estimatif</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </form>

@@ -1283,7 +1283,7 @@ export function BuilderCMS() {
                     </p>
                     <div className="bg-white p-2 rounded border border-blue-200 mb-2">
                       <code className="text-[10px] block font-mono text-slate-700">{"{{#analyses}}"}</code>
-                      <code className="text-[10px] block font-mono text-slate-700 pl-2">Analyse: {"{{nom}}"} / {"{{technicien}}"}</code>
+                      <code className="text-[10px] block font-mono text-slate-700 pl-2">Analyse: {"{{nom}}"} / {"{{technicien}}"} / {"{{equipement}}"}</code>
                       <code className="text-[10px] block font-mono text-slate-700 pl-2">{"{{#valeurs}}"}</code>
                       <code className="text-[10px] block font-mono text-slate-700 pl-4">- {"{{cle}}"} : {"{{valeur}}"}</code>
                       <code className="text-[10px] block font-mono text-slate-700 pl-2">{"{{/valeurs}}"}</code>
@@ -1319,6 +1319,19 @@ export function BuilderCMS() {
                     <p className="text-[9px] text-slate-500 italic mt-1">N'oubliez pas les doubles accolades autour des variables internes !</p>
                   </div>
 
+                  <div className="mb-4 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                    <h5 className="text-xs font-bold text-emerald-900 mb-1">Équipements & Traçabilité Métrologique (ISO 17025)</h5>
+                    <p className="text-[10px] text-emerald-700 mb-2 leading-relaxed">
+                      Insérez directement le tableau Word auto-généré des équipements utilisés avec <code className="font-mono font-bold text-blue-700">{"{{@table_equipements}}"}</code>, ou utilisez la boucle personnalisée :
+                    </p>
+                    <div className="bg-white p-2 rounded border border-emerald-200 mb-2">
+                      <code className="text-[10px] block font-mono text-slate-700">{"{{#equipements}}"}</code>
+                      <code className="text-[10px] block font-mono text-slate-700 pl-3">- {"{{code}} : {{nom}} ({{fabricant}} {{modele}}, S/N {{serie}}) — Étal. {{prochain_etalonnage}}"}</code>
+                      <code className="text-[10px] block font-mono text-slate-700">{"{{/equipements}}"}</code>
+                    </div>
+                    <p className="text-[9px] text-emerald-800 italic">Dans <code>{"{{#analyses}}"}</code> : <code>{"{{equipement}}"}</code>, <code>{"{{equipement_code}}"}</code>, <code>{"{{equipement_serie}}"}</code>, <code>{"{{equipement_etalonnage}}"}</code>.</p>
+                  </div>
+
                   <h5 className="font-semibold text-xs text-slate-800 mb-2 uppercase tracking-wide">Variables simples</h5>
                   <ul className="space-y-2 text-sm">
                     {[
@@ -1335,6 +1348,11 @@ export function BuilderCMS() {
                       { label: "Analyse - Nom", tag: "{{analyse.nom}}" },
                       { label: "Analyse - Norme", tag: "{{analyse.norme}}" },
                       { label: "Analyse - Technicien", tag: "{{analyse.technicien}}" },
+                      { label: "Analyse - Équipement utilisé (résumé)", tag: "{{analyse.equipement}}" },
+                      { label: "Analyse - Code équipement", tag: "{{analyse.equipement_code}}" },
+                      { label: "Analyse - Validité étalonnage équipement", tag: "{{analyse.equipement_etalonnage}}" },
+                      { label: "Équipements - Tableau Word natif (auto-généré)", tag: "{{@table_equipements}}" },
+                      { label: "Équipements - Liste textuelle dédupliquée", tag: "{{equipements.liste}}" },
                       { label: "Résultats - Tableau", tag: "{{resultats.tableau}}" },
                       { label: "Images - Nombre / indication galerie (texte)", tag: "{{images.galerie}}" },
                       { label: "Remarques", tag: "{{analyse.remarques}}" },

@@ -71,8 +71,9 @@ export function ReportPreviewModal({
   autoDownload = false,
   onAutoDownloadComplete
 }: ReportPreviewModalProps) {
-  // Paramètres visuels/organisationnels du laboratoire actif et bibliothèque de modèles Word (.docx)
-  const { labSettings, reportTemplates, allMaterialTemplates } = useLims();
+  // Paramètres visuels/organisationnels du laboratoire actif, modèles Word (.docx) et parc équipements
+  const { labSettings, reportTemplates, allMaterialTemplates, allEquipments, equipments } = useLims();
+  const allKnownEquipments = allEquipments?.length ? allEquipments : (equipments || []);
 
   // Message d'erreur éventuel lors du parsing Docxtemplater ou de la conversion LibreOffice
   const [docxError, setDocxError] = useState<string | null>(null);
@@ -137,6 +138,16 @@ export function ReportPreviewModal({
 
   // Analyses réalisées sur les échantillons du rapport
   const reportAnalyses = analyses.filter(a => report?.sampleIds.includes(a.sampleId));
+
+  // Liste dédupliquée des équipements utilisés pour les essais du rapport (traçabilité métrologique ISO 17025)
+  const reportEquipments = Array.from(
+    new Map(
+      reportAnalyses
+        .map(a => (a.equipmentId ? allKnownEquipments.find(eq => eq.id === a.equipmentId) : undefined))
+        .filter((eq): eq is NonNullable<typeof eq> => Boolean(eq))
+        .map(eq => [eq.id, eq])
+    ).values()
+  );
 
   // Identification du modèle Word personnalisé associé
   const template = report?.templateId ? reportTemplates?.find((t: any) => t.id === report.templateId) : null;
@@ -341,6 +352,7 @@ export function ReportPreviewModal({
     // Transformation de chaque analyse du rapport en objet structuré pour les boucles Word `{{#analyses}}...{{/analyses}}`
     const analysesData = reportAnalyses.map((a: any) => {
       const t = analysisTemplates.find((tpl: any) => tpl.id === a.templateId);
+      const eq = a.equipmentId ? allKnownEquipments.find((e: any) => e.id === a.equipmentId) : null;
       const safeAnalysisName = sanitizeKey(t?.name || "inconnu");
 
       const baseObj: any = {
@@ -349,6 +361,17 @@ export function ReportPreviewModal({
         technicien: a.technician && a.technician !== 'Non assigné'
           ? a.technician
           : (users.find((u: any) => u.id === request?.assignedTo)?.name || "Non défini"),
+        equipement: eq
+          ? `${eq.code} — ${eq.name}${eq.serialNumber ? ` (S/N ${eq.serialNumber})` : ''}`
+          : "Non renseigné",
+        equipement_code: eq?.code || "N/A",
+        equipement_nom: eq?.name || "Non renseigné",
+        equipement_fabricant: eq?.manufacturer || "N/A",
+        equipement_modele: eq?.model || "N/A",
+        equipement_serie: eq?.serialNumber || "N/A",
+        equipement_etalonnage: eq?.nextCalibrationDate
+          ? new Intl.DateTimeFormat("fr-FR").format(new Date(eq.nextCalibrationDate))
+          : "N/A",
         remarques: a.notes || "Aucune",
         echantillon: a.sampleId,
         date: a.date ? new Intl.DateTimeFormat("fr-FR").format(new Date(a.date)) : todayFormatted,
@@ -625,9 +648,68 @@ export function ReportPreviewModal({
       }
     });
 
+    // Préparation des données et du tableau OpenXML des équipements utilisés (traçabilité métrologique ISO 17025)
+    const equipementsData = reportEquipments.map(eq => ({
+      id: eq.id,
+      code: eq.code,
+      nom: eq.name,
+      categorie: eq.category,
+      fabricant: eq.manufacturer || "N/A",
+      modele: eq.model || "N/A",
+      serie: eq.serialNumber || "N/A",
+      localisation: eq.location || "N/A",
+      dernier_etalonnage: eq.lastCalibrationDate
+        ? new Intl.DateTimeFormat("fr-FR").format(new Date(eq.lastCalibrationDate))
+        : "N/A",
+      prochain_etalonnage: eq.nextCalibrationDate
+        ? new Intl.DateTimeFormat("fr-FR").format(new Date(eq.nextCalibrationDate))
+        : "N/A",
+      statut: eq.status
+    }));
+
+    let table_equipements = `<w:p><w:r><w:t>Aucun équipement renseigné.</w:t></w:r></w:p>`;
+    if (equipementsData.length > 0) {
+      const tColor = cleanHex(labSettings?.tableStyles?.borderColor, "000000");
+      const tSize = labSettings?.tableStyles?.borderSize ?? 4;
+      const headerBg = cleanHex(labSettings?.tableStyles?.headerBgColor, "E2E8F0");
+      let eqXml = `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:left w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:bottom w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:right w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideH w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/><w:insideV w:val="${tSize > 0 ? 'single' : 'none'}" w:sz="${tSize}" w:space="0" w:color="${tColor}"/></w:tblBorders><w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>`;
+      const addEqHeader = (text: string) => {
+        eqXml += `<w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="${headerBg}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`;
+      };
+      const addEqCell = (text: string, align: 'left' | 'center' = 'left') => {
+        eqXml += `<w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:jc w:val="${align}"/></w:pPr><w:r><w:t>${escapeXML(text)}</w:t></w:r></w:p></w:tc>`;
+      };
+      eqXml += `<w:tr><w:trPr><w:trHeight w:val="380"/></w:trPr>`;
+      addEqHeader("Code");
+      addEqHeader("Désignation");
+      addEqHeader("Fabricant / Modèle");
+      addEqHeader("N° de Série");
+      addEqHeader("Validité Étalonnage");
+      eqXml += `</w:tr>`;
+      equipementsData.forEach(eq => {
+        eqXml += `<w:tr><w:trPr><w:trHeight w:val="340"/></w:trPr>`;
+        addEqCell(eq.code, 'center');
+        addEqCell(eq.nom, 'left');
+        addEqCell(`${eq.fabricant} ${eq.modele}`.trim(), 'left');
+        addEqCell(eq.serie, 'center');
+        addEqCell(eq.prochain_etalonnage, 'center');
+        eqXml += `</w:tr>`;
+      });
+      eqXml += `</w:tbl>`;
+      table_equipements = eqXml;
+    }
+
+    const equipementsListeText = equipementsData.length > 0
+      ? equipementsData.map(eq => `- ${eq.code} : ${eq.nom} (${eq.fabricant} ${eq.modele}, S/N ${eq.serie} — Étalonnage valide jusqu'au ${eq.prochain_etalonnage})`).join('\n')
+      : "Aucun équipement renseigné.";
+
     // Dictionnaire final exposé aux balises du document Word (supporte à la fois la notation à plat "demande.id" et l'objet imbriqué `demande`)
     return {
       "echantillons": reportSamples.map((s: any) => ({ ...s, materiau: s.materialState })),
+      "equipements": equipementsData,
+      "has_equipements": equipementsData.length > 0,
+      "table_equipements": table_equipements,
+      "equipements.liste": equipementsListeText,
       "tables_series": tables_series,
       "tables_verticales": tables_verticales,
       "tables_analyses": tables_analyses,
@@ -647,6 +729,9 @@ export function ReportPreviewModal({
       "analyse.nom": analysesData[0]?.nom || "Aucune analyse",
       "analyse.norme": analysesData[0]?.norme || "N/A",
       "analyse.technicien": analysesData.find(a => a.technicien && a.technicien !== 'Non assigné')?.technicien || users.find(u => u.id === request?.assignedTo)?.name || analysesData[0]?.technicien || "Non défini",
+      "analyse.equipement": analysesData.find(a => a.equipement && a.equipement !== 'Non renseigné')?.equipement || "Non renseigné",
+      "analyse.equipement_code": analysesData.find(a => a.equipement_code && a.equipement_code !== 'N/A')?.equipement_code || "N/A",
+      "analyse.equipement_etalonnage": analysesData.find(a => a.equipement_etalonnage && a.equipement_etalonnage !== 'N/A')?.equipement_etalonnage || "N/A",
       "resultats.tableau": reportAnalyses.length > 0 ? reportAnalyses.map((a: any) => {
         const t = analysisTemplates.find(tpl => tpl.id === a.templateId);
         return Object.entries(a.results || {}).map(([k, v]) => {
@@ -1172,10 +1257,22 @@ export function ReportPreviewModal({
                       {sampleAnalyses.map(analysis => {
                         const tpl = analysisTemplates.find(t => t.id === analysis.templateId);
                         if (!tpl) return null;
+                        const eq = analysis.equipmentId
+                          ? allKnownEquipments.find(e => e.id === analysis.equipmentId)
+                          : null;
 
                         return (
                           <div key={analysis.id} className="pdf-block pl-4 py-2 mb-3 break-inside-avoid bg-white">
-                            <h4 className="text-sm font-bold text-slate-800 mb-2">{tpl.name}</h4>
+                            <div className="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+                              <h4 className="text-sm font-bold text-slate-800">{tpl.name}</h4>
+                              {eq && (
+                                <span className="text-[11px] text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded">
+                                  Équipement : <strong className="font-mono text-slate-800">{eq.code}</strong> — {eq.name}
+                                  {eq.serialNumber ? ` (S/N ${eq.serialNumber})` : ''}
+                                  {eq.nextCalibrationDate ? ` • Étal. valide jusqu'au ${new Date(eq.nextCalibrationDate).toLocaleDateString('fr-FR')}` : ''}
+                                </span>
+                              )}
+                            </div>
                             <table className="w-full text-sm border-collapse border border-slate-200 mb-3">
                               <tbody>
                                 {tpl.expectedResults.map(expected => (
@@ -1291,9 +1388,44 @@ export function ReportPreviewModal({
                 )}
               </section>
 
-              {/* 4. Conclusion & Approbation (avec pb-6 et pr-3 pour ne jamais tronquer le tampon incliné APPROUVÉ) */}
+              {/* 4. Moyens d'Essais & Traçabilité Métrologique (si au moins un équipement est affecté) */}
+              {reportEquipments.length > 0 && (
+                <section className="pdf-block mb-6 pb-2 break-inside-avoid bg-white">
+                  <h2 className="text-lg font-bold border-b border-slate-200 pb-2 mb-4 text-slate-800">
+                    4. Moyens d'Essais & Traçabilité Métrologique
+                  </h2>
+                  <table className="w-full text-xs border-collapse border border-slate-200">
+                    <thead>
+                      <tr className="bg-slate-100">
+                        <th className="border border-slate-200 p-2 text-left font-semibold text-slate-700">Code</th>
+                        <th className="border border-slate-200 p-2 text-left font-semibold text-slate-700">Désignation</th>
+                        <th className="border border-slate-200 p-2 text-left font-semibold text-slate-700">Fabricant / Modèle</th>
+                        <th className="border border-slate-200 p-2 text-left font-semibold text-slate-700">N° de Série</th>
+                        <th className="border border-slate-200 p-2 text-center font-semibold text-slate-700">Validité Étalonnage</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportEquipments.map(eq => (
+                        <tr key={eq.id}>
+                          <td className="border border-slate-200 p-2 font-mono font-semibold text-slate-800">{eq.code}</td>
+                          <td className="border border-slate-200 p-2">{eq.name}</td>
+                          <td className="border border-slate-200 p-2">{[eq.manufacturer, eq.model].filter(Boolean).join(' ') || '-'}</td>
+                          <td className="border border-slate-200 p-2 font-mono">{eq.serialNumber || '-'}</td>
+                          <td className="border border-slate-200 p-2 text-center">
+                            {eq.nextCalibrationDate ? new Date(eq.nextCalibrationDate).toLocaleDateString('fr-FR') : '-'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              )}
+
+              {/* Conclusion & Approbation (avec pb-6 et pr-3 pour ne jamais tronquer le tampon incliné APPROUVÉ) */}
               <section className="pdf-block mt-8 pt-6 pb-6 pr-3 border-t-2 border-slate-200 break-inside-avoid bg-white">
-                <h2 className="text-lg font-bold mb-4 text-slate-800">4. Conclusion & Approbation</h2>
+                <h2 className="text-lg font-bold mb-4 text-slate-800">
+                  {reportEquipments.length > 0 ? '5. Conclusion & Approbation' : '4. Conclusion & Approbation'}
+                </h2>
 
                 {/* Encadré de la conclusion technique de la demande */}
                 <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-lg">

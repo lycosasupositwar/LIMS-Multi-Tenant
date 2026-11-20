@@ -8,50 +8,311 @@
  * 4. Génération automatique des échantillons LIMS physiques et des analyses associées
  * 5. Piste d'audit inviolable (Audit Trail conforme 21 CFR Part 11 / ISO 17025)
  * 6. Visualisation et édition des données personnalisées issues des formulaires CMS
+ *
+ * @module views/RequestsInternal
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { jsPDF } from 'jspdf';
 import { useLims } from '../store';
-import { FileText, Clock, User, CheckCircle, Shield, AlertCircle, PlayCircle, History, Mail, XCircle, Plus, Box, Edit2, Save, Database, Layers, TestTube2 } from 'lucide-react';
+import { FileText, Clock, User, CheckCircle, Shield, AlertCircle, PlayCircle, History, Mail, XCircle, Plus, Box, Edit2, Save, Database, Layers, TestTube2, Trash2, Printer, QrCode } from 'lucide-react';
 import { RequestStatus, AnalysisRequest, MaterialState, Sample } from '../types';
+import { generateUniqueLimsId, generateUniqueBarcode } from '../utils/idGenerator';
+import { printZebraLabelsWindow, generateZplForSamples } from '../utils/zebraLabelPrinter';
 
+/**
+ * Composant principal de revue technique, d'assignation et de réception des demandes clients côté laboratoire.
+ */
 export function RequestsInternal() {
-  const { 
-    currentUser, 
-    requests, 
-    users, 
-    requestTemplates, 
-    materialTemplates, 
-    analysisTemplates, 
-    assignRequest, 
-    updateRequestStatus, 
-    rejectRequest, 
-    addSample, 
-    addAnalysis, 
-    updateRequestData, 
-    samples, 
-    analyses, 
-    globalSearchQuery 
+  // Extraction du store global LIMS (entités filtrées par labo + entités globales `allSamples`/`allAnalyses` pour l'unicité des IDs)
+  const {
+    currentUser,
+    requests,
+    users,
+    requestTemplates,
+    materialTemplates,
+    analysisTemplates,
+    assignRequest,
+    updateRequestStatus,
+    rejectRequest,
+    addSample,
+    deleteSample,
+    addAnalysis,
+    deleteAnalysis,
+    updateRequestData,
+    samples,
+    analyses,
+    allSamples,
+    allAnalyses,
+    labSettings,
+    globalSearchQuery,
+    activeLabId,
+    laboratories,
+    addRequestComment,
+    saveContractReview
   } = useLims();
 
-  // États locaux de sélection et d'édition
+  // États locaux de sélection et d'édition du dossier actif
   const [selectedRequest, setSelectedRequest] = useState<AnalysisRequest | null>(null);
+
+  // Maintient le panneau de détail synchronisé avec le store global (statut, assignation, auditTrail)
+  useEffect(() => {
+    if (selectedRequest) {
+      const fresh = requests.find(r => r.id === selectedRequest.id);
+      if (fresh && fresh !== selectedRequest) {
+        setSelectedRequest(fresh);
+      } else if (!fresh) {
+        setSelectedRequest(null);
+      }
+    }
+  }, [requests]);
+  // Commentaire ou justification saisi lors d'un changement de statut (obligatoire en cas de rejet)
   const [statusComment, setStatusComment] = useState('');
+  // Active le mode édition inline des champs personnalisés `customData` de la demande (réservé manager/admin)
   const [isEditing, setIsEditing] = useState(false);
+  // Copie de travail des données personnalisées `customData` pendant l'édition
   const [editedData, setEditedData] = useState<Record<string, any>>({});
+  // Filtre d'onglet de la liste de gauche : demandes actives vs historique (terminées/rejetées)
   const [filterMode, setFilterMode] = useState<'actives' | 'terminees'>('actives');
-  
-  // Paramètres de génération d'échantillons en masse
+
+  // Paramètres de génération d'échantillons en masse (réception physique au laboratoire)
   const [sampleQuantity, setSampleQuantity] = useState(1);
+  // Ne propose que les modèles de matériaux actifs dans le sélecteur
   const activeMaterialTemplates = materialTemplates.filter(t => t.isActive !== false);
   const [sampleMaterialTemplateId, setSampleMaterialTemplateId] = useState(activeMaterialTemplates[0]?.id || '');
-  const [sampleMaterialState, setSampleMaterialState] = useState<MaterialState>('Massif');
 
-  // Liste des utilisateurs ayant le rôle analyste pour l'assignation
-  const analysts = users.filter(u => u.role === 'analyste');
+  // Initialise le modèle de matériau par défaut dès que la liste est chargée si aucun modèle n'est sélectionné
+  useEffect(() => {
+    if (!sampleMaterialTemplateId && activeMaterialTemplates.length > 0) {
+      setSampleMaterialTemplateId(activeMaterialTemplates[0].id);
+    }
+  }, [activeMaterialTemplates, sampleMaterialTemplateId]);
+  const [sampleMaterialState, setSampleMaterialState] = useState<MaterialState>('Massif');
+  const [samplePriority, setSamplePriority] = useState<'basse' | 'normale' | 'haute'>('normale');
+  // Propriétés physico-chimiques / géométriques du matériau pré-remplies depuis la demande et ajustables à réception
+  const [sampleCustomData, setSampleCustomData] = useState<Record<string, any>>({});
+  // Texte de conclusion générale et avis technique destiné à la balise `{{demande.conclusion}}` des rapports
+  const [conclusionText, setConclusionText] = useState('');
+  // Identifiant de l'échantillon pour lequel le mini-formulaire d'ajout d'analyse à la volée est ouvert
+  const [addingAnalysisForSample, setAddingAnalysisForSample] = useState<string | null>(null);
+  // Modèle d'analyse sélectionné lors de l'ajout manuel d'un essai sur un échantillon existant
+  const [selectedNewAnalysisTplId, setSelectedNewAnalysisTplId] = useState<string>('');
+  // Contrôle le repli/dépli de la chronologie Audit Trail
+  const [showAudit, setShowAudit] = useState(false);
+  // États pour le fil de discussion intégré et la revue de contrat ISO 17025
+  const [newCommentText, setNewCommentText] = useState('');
+  const [isInternalComment, setIsInternalComment] = useState(false);
+  const [committedDateDraft, setCommittedDateDraft] = useState('');
+  const [reviewMethodsOk, setReviewMethodsOk] = useState(true);
+  const [reviewResourcesOk, setReviewResourcesOk] = useState(true);
+  const [reviewStaffOk, setReviewStaffOk] = useState(true);
+  // Message d'erreur affiché si une tentative d'assignation échoue faute d'habilitation ISO 17025
+  const [assignError, setAssignError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAssignError(null);
+  }, [selectedRequest?.id]);
+
+  // Liste des utilisateurs ayant le rôle analyste ou manager rattachés au laboratoire du dossier pour l'assignation
+  const analysts = users.filter(u =>
+    (u.role === 'analyste' || u.role === 'manager') &&
+    (!u.labId || u.labId === 'all' || u.labId === (selectedRequest?.labId || activeLabId))
+  );
 
   /**
-   * Filtrage des demandes visibles selon l'onglet (actives/terminées), la recherche et le rôle
+   * Retourne la liste dédupliquée des identifiants de modèles d'analyses requis par une demande :
+   * combine les essais déjà instanciés sur les échantillons et ceux déclarés dans `customData`.
+   */
+  const getRequestRequiredTemplateIds = (req: AnalysisRequest | null): string[] => {
+    if (!req) return [];
+    const ids = new Set<string>();
+
+    // 1. Analyses déjà créées pour les échantillons de cette demande
+    const reqSampleIds = new Set(samples.filter(s => s.requestId === req.id).map(s => s.id));
+    analyses.forEach(a => {
+      if (reqSampleIds.has(a.sampleId) && a.templateId) {
+        ids.add(a.templateId);
+      }
+    });
+
+    // 2. Analyses demandées dans le formulaire dynamique (même avant génération des échantillons)
+    const resolveTplId = (raw: string) => {
+      const matched = analysisTemplates.find(t => t.id === raw || t.name === raw);
+      return matched?.id;
+    };
+
+    const reqTpl = requestTemplates.find(t => t.id === req.templateId);
+    let rawRequested: string[] = [];
+    if (reqTpl) {
+      reqTpl.fields
+        .filter(f => f.type === 'analyses')
+        .forEach(f => {
+          const val = req.customData?.[f.id];
+          if (Array.isArray(val)) rawRequested.push(...val.map(String));
+        });
+    }
+    if (rawRequested.length === 0 && Array.isArray(req.customData?.['analyses_demandees'])) {
+      rawRequested = req.customData['analyses_demandees'].map(String);
+    }
+    if (rawRequested.length === 0 && req.customData) {
+      Object.values(req.customData).forEach(value => {
+        if (Array.isArray(value)) {
+          value.forEach(v => {
+            const resolved = resolveTplId(String(v));
+            if (resolved) rawRequested.push(resolved);
+          });
+        } else if (typeof value === 'string') {
+          const resolved = resolveTplId(value);
+          if (resolved) rawRequested.push(resolved);
+        }
+      });
+    }
+    rawRequested.forEach(raw => {
+      const resolved = resolveTplId(raw);
+      if (resolved) ids.add(resolved);
+    });
+
+    return Array.from(ids);
+  };
+
+  /** Vérifie si un utilisateur possède une habilitation valide (non expirée) pour une méthode d'analyse donnée (ISO 17025 §6.2) */
+  const isUserQualifiedForTemplate = (userId: string | undefined, templateId: string): boolean => {
+    if (!userId) return false;
+    const u = users.find(usr => usr.id === userId);
+    const quals = u?.qualifiedTemplateIds || [];
+    if (!quals.includes(templateId)) return false;
+    const expStr = u?.qualificationExpiries?.[templateId];
+    if (expStr && new Date(expStr).getTime() < new Date().setHours(0, 0, 0, 0)) {
+      return false;
+    }
+    return true;
+  };
+
+  /** Génère un Devis PDF A4 (option activable par laboratoire via `labSettings.enableQuotes`) */
+  const handleGenerateQuotePdf = (req: AnalysisRequest) => {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const quoteNum = req.quoteNumber || `DEV-${req.id.replace(/^REQ-/, '')}`;
+    const requester = users.find(u => u.id === req.requesterId);
+    const neededIds = getRequestRequiredTemplateIds(req);
+    const sampleQty = Math.max(1, req.sampleCount || 1);
+
+    doc.setFontSize(18);
+    doc.setTextColor(30, 58, 138);
+    doc.text(labSettings?.labName || 'Laboratoire', 15, 20);
+    doc.setFontSize(9);
+    doc.setTextColor(100, 116, 139);
+    doc.text(labSettings?.labAddress || '', 15, 26);
+    doc.text(`${labSettings?.contactEmail || ''} • ${labSettings?.phone || ''}`, 15, 31);
+
+    doc.setFontSize(16);
+    doc.setTextColor(15, 23, 42);
+    doc.text('DEVIS D\'ESSAIS', 195, 20, { align: 'right' });
+    doc.setFontSize(10);
+    doc.text(`N° ${quoteNum}`, 195, 26, { align: 'right' });
+    doc.text(`Date : ${new Date().toLocaleDateString('fr-FR')} (Validité 30 jours)`, 195, 31, { align: 'right' });
+
+    doc.setDrawColor(203, 213, 225);
+    doc.line(15, 37, 195, 37);
+
+    doc.setFontSize(10);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`Client : ${requester?.company || requester?.name || 'N/A'} (${requester?.name || ''})`, 15, 45);
+    doc.text(`Demande : ${req.id} — ${req.title}`, 15, 51);
+    doc.text(`Nombre d'échantillons estimé : ${sampleQty} • Durée estimée : ~${req.estimatedHours || '-'} h`, 15, 57);
+
+    let y = 68;
+    doc.setFillColor(241, 245, 249);
+    doc.rect(15, y - 5, 180, 8, 'F');
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Prestation / Essai', 18, y);
+    doc.text('Qté', 130, y, { align: 'right' });
+    doc.text('P.U. HT', 160, y, { align: 'right' });
+    doc.text('Total HT', 192, y, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
+    y += 8;
+
+    let totalHT = 0;
+    neededIds.forEach(tid => {
+      const tpl = analysisTemplates.find(t => t.id === tid);
+      const unitPrice = tpl?.unitPrice || 0;
+      const lineTotal = unitPrice * sampleQty;
+      totalHT += lineTotal;
+      doc.text(`${tpl?.name || tid}${tpl?.standardRef ? ` (${tpl.standardRef})` : ''}`, 18, y);
+      doc.text(String(sampleQty), 130, y, { align: 'right' });
+      doc.text(`${unitPrice.toFixed(2)} €`, 160, y, { align: 'right' });
+      doc.text(`${lineTotal.toFixed(2)} €`, 192, y, { align: 'right' });
+      y += 7;
+    });
+    if (totalHT === 0 && req.estimatedCost) {
+      totalHT = req.estimatedCost;
+    }
+
+    y += 6;
+    doc.line(120, y, 195, y);
+    y += 7;
+    const tva = totalHT * 0.2;
+    const totalTTC = totalHT + tva;
+    doc.text(`Total HT : ${totalHT.toFixed(2)} €`, 192, y, { align: 'right' });
+    y += 6;
+    doc.text(`TVA (20 %) : ${tva.toFixed(2)} €`, 192, y, { align: 'right' });
+    y += 7;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(`Total TTC : ${totalTTC.toFixed(2)} €`, 192, y, { align: 'right' });
+
+    doc.save(`${quoteNum}.pdf`);
+    updateRequestData(
+      req.id,
+      {
+        quoteNumber: quoteNum,
+        quoteStatus: req.quoteStatus && req.quoteStatus !== 'aucun' ? req.quoteStatus : 'genere',
+        quoteGeneratedAt: new Date().toISOString()
+      },
+      `Devis PDF ${quoteNum} généré (${totalHT.toFixed(2)} € HT)`
+    );
+  };
+
+  /**
+   * Extrait la valeur d'une propriété de matériau depuis le customData d'une demande
+   * (compatible avec la structure `${field.id}__material_properties` de NewRequestModal / EditRequestModal)
+   *
+   * @param req Demande d'analyse source
+   * @param matTplId Identifiant du modèle de matériau
+   * @param propFieldId Identifiant technique du champ de propriété matériau
+   * @param propFieldName Libellé humain du champ de propriété matériau
+   * @returns La valeur saisie par le demandeur ou `undefined` si non renseignée
+   */
+  const getMaterialPropFromRequest = (
+    req: AnalysisRequest | null,
+    matTplId: string,
+    propFieldId: string,
+    propFieldName: string
+  ) => {
+    if (!req || !req.customData) return undefined;
+    const reqTpl = requestTemplates.find(t => t.id === req.templateId);
+    const matFields = reqTpl?.fields.filter(f => f.type === 'materials') || [];
+
+    for (const mf of matFields) {
+      const propsContainer = req.customData[`${mf.id}__material_properties`];
+      if (propsContainer && propsContainer[matTplId]) {
+        const val = propsContainer[matTplId][propFieldId] ?? propsContainer[matTplId][propFieldName];
+        if (val !== undefined) return val;
+      }
+    }
+
+    // Fallbacks si stocké à plat
+    return (
+      req.customData[`matprop_${matTplId}_${propFieldId}`] ??
+      req.customData[propFieldId] ??
+      req.customData[propFieldName]
+    );
+  };
+
+  /**
+   * Filtrage des demandes visibles selon l'onglet (actives/terminées), la recherche et le rôle :
+   * - Managers & Admins : voient toutes les demandes du laboratoire actif
+   * - Analystes : ne voient que les demandes qui leur sont nominativement assignées (`r.assignedTo === currentUser.id`)
    */
   const visibleRequests = requests.filter(r => {
     if (filterMode === 'actives' && (r.status === 'terminee' || r.status === 'rejetee')) return false;
@@ -62,74 +323,99 @@ export function RequestsInternal() {
       const template = requestTemplates.find(t => t.id === r.templateId);
       const requester = users.find(u => u.id === r.requesterId);
       const matchesSearch = r.id.toLowerCase().includes(q) ||
-                            (template && template.name.toLowerCase().includes(q)) ||
-                            (requester && requester.name.toLowerCase().includes(q));
+        r.title.toLowerCase().includes(q) ||
+        (template && template.name.toLowerCase().includes(q)) ||
+        (requester && requester.name.toLowerCase().includes(q));
       if (!matchesSearch) return false;
     }
 
-    if (currentUser?.role === 'manager') return true;
+    if ((currentUser?.role === 'manager' || currentUser?.role === 'admin')) return true;
     if (currentUser?.role === 'analyste') return r.assignedTo === currentUser.id;
     return false;
   });
 
+  // Synchronise automatiquement les champs du Modèle Matériau sélectionné avec les valeurs saisies par le client
+  React.useEffect(() => {
+    const matTpl = materialTemplates.find(t => t.id === sampleMaterialTemplateId);
+    if (!matTpl) {
+      setSampleCustomData({});
+      return;
+    }
+    const initialProps: Record<string, any> = {};
+    matTpl.fields.forEach(field => {
+      const fromReq = getMaterialPropFromRequest(selectedRequest, matTpl.id, field.id, field.name);
+      initialProps[field.name] = fromReq !== undefined
+        ? fromReq
+        : (field.type === 'boolean' ? false : field.type === 'multiselect' ? [] : '');
+    });
+    setSampleCustomData(initialProps);
+  }, [sampleMaterialTemplateId, selectedRequest, materialTemplates, requestTemplates]);
+
   /**
    * Rendu graphique du badge de statut
+   *
+   * @param status Statut du dossier dans le workflow LIMS
    */
   const getStatusBadge = (status: RequestStatus) => {
     switch (status) {
-      case 'brouillon': 
+      case 'brouillon':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-slate-100 text-slate-800">Brouillon</span>;
-      case 'soumise': 
+      case 'soumise':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">Nouvelle Soumission</span>;
-      case 'en_revue': 
+      case 'En Revue':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-800">En Revue</span>;
-      case 'validee': 
+      case 'validee':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-800">Validée</span>;
-      case 'assignee': 
+      case 'assignee':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-indigo-100 text-indigo-800">Assignée</span>;
-      case 'en_cours': 
+      case 'En Cours':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-amber-100 text-amber-800">En Cours</span>;
-      case 'en_validation': 
+      case 'En Validation':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-orange-100 text-orange-800">En Validation finale</span>;
-      case 'terminee': 
+      case 'terminee':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-emerald-100 text-emerald-800">Terminée</span>;
-      case 'rejetee': 
+      case 'rejetee':
         return <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-red-100 text-red-800">Rejetée</span>;
     }
   };
 
   /**
    * Formatage des dates pour l'affichage de l'audit trail et des en-têtes
+   *
+   * @param dateString Chaîne ISO 8601
    */
   const formatDate = (dateString: string) => {
-    return new Intl.DateTimeFormat('fr-FR', { 
-      day: '2-digit', 
-      month: 'short', 
-      year: 'numeric', 
-      hour: '2-digit', 
-      minute: '2-digit' 
+    return new Intl.DateTimeFormat('fr-FR', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
     }).format(new Date(dateString));
   };
 
   /**
    * Évolution du statut avec consignation dans l'audit trail
+   * Met à jour à la fois le store global et la copie locale `selectedRequest` pour un retour visuel immédiat.
+   *
+   * @param newStatus Nouveau statut cible de la demande
    */
   const handleStatusChange = (newStatus: RequestStatus) => {
     if (selectedRequest) {
       updateRequestStatus(selectedRequest.id, newStatus, statusComment);
       setStatusComment('');
       setSelectedRequest(prev => prev ? {
-        ...prev, 
-        status: newStatus, 
+        ...prev,
+        status: newStatus,
         auditTrail: [
-          { 
-            id: `temp-${Date.now()}`, 
-            timestamp: new Date().toISOString(), 
-            userId: currentUser!.id, 
-            action: 'Changement', 
-            details: `Statut: ${newStatus}` 
-          }, 
-          ...prev.auditTrail
+          {
+            id: `temp-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            userId: currentUser!.id,
+            action: 'Changement',
+            details: `Statut: ${newStatus}`
+          },
+          ...(prev.auditTrail || [])
         ]
       } : null);
     }
@@ -137,36 +423,41 @@ export function RequestsInternal() {
 
   /**
    * Refus technique d'une demande avec justification obligatoire
+   * Enregistre le motif du rejet et ajoute une entrée dans la piste d'audit.
    */
   const handleReject = () => {
     if (selectedRequest && statusComment) {
       rejectRequest(selectedRequest.id, statusComment);
       setStatusComment('');
       setSelectedRequest(prev => prev ? {
-        ...prev, 
-        status: 'rejetee', 
-        rejectionReason: statusComment, 
+        ...prev,
+        status: 'rejetee',
+        rejectionReason: statusComment,
         auditTrail: [
-          { 
-            id: `temp-${Date.now()}`, 
-            timestamp: new Date().toISOString(), 
-            userId: currentUser!.id, 
-            action: 'Rejetée', 
-            details: `Refus: ${statusComment}` 
-          }, 
-          ...prev.auditTrail
+          {
+            id: `temp-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            userId: currentUser!.id,
+            action: 'Rejetée',
+            details: `Refus: ${statusComment}`
+          },
+          ...(prev.auditTrail || [])
         ]
       } : null);
     }
   };
 
   /**
-   * Génère les échantillons LIMS réels et associe automatiquement les analyses demandées
+   * Génère les échantillons LIMS réels et associe automatiquement les analyses demandées :
+   * 1. Identifie les essais demandés dans les champs de type `'analyses'` du formulaire (avec fallbacks)
+   * 2. Génère `sampleQuantity` échantillons dotés d'identifiants et codes-barres uniques inter-laboratoires
+   * 3. Pour chaque échantillon créé, instancie les analyses correspondantes à l'état `'planifie'`
+   * 4. Passe automatiquement la demande au statut `'En Cours'`
    */
   const handleGenerateSamples = () => {
     if (!selectedRequest) return;
     const requester = users.find(u => u.id === selectedRequest.requesterId);
-    
+
     // Extraction des analyses spécifiées dans le formulaire dynamique
     const template = requestTemplates.find(t => t.id === selectedRequest.templateId);
     let requestedAnalyses: string[] = [];
@@ -174,11 +465,11 @@ export function RequestsInternal() {
       const analysesFields = template.fields.filter(f => f.type === 'analyses');
       analysesFields.forEach(f => {
         if (selectedRequest.customData[f.id] && Array.isArray(selectedRequest.customData[f.id])) {
-           requestedAnalyses.push(...selectedRequest.customData[f.id]);
+          requestedAnalyses.push(...selectedRequest.customData[f.id]);
         }
       });
     }
-    
+
     // Solutions de secours si le modèle est ancien ou non typé
     if (requestedAnalyses.length === 0) {
       requestedAnalyses = selectedRequest.customData['analyses_demandees'] || [];
@@ -192,19 +483,34 @@ export function RequestsInternal() {
           }
         } else if (typeof value === 'string') {
           if (analysisTemplates.some(t => t.id === value || t.name === value)) {
-             requestedAnalyses.push(value);
+            requestedAnalyses.push(value);
           }
         }
       });
     }
-    
+
+    // Ensembles locaux pour suivre les IDs déjà existants + ceux créés dans la boucle en cours
+    const usedSampleIds = new Set(allSamples.map(s => s.id));
+    const usedBarcodes = new Set(allSamples.map(s => s.barcode));
+    const usedAnalysisIds = new Set(allAnalyses.map(a => a.id));
+
+    const samplePrefix = labSettings?.idPrefixes?.sample || 'ECH';
+
+    // Bornage de sécurité (entre 1 et 50) pour empêcher la génération de 0 ou d'un nombre excessif d'échantillons
+    const safeQuantity = Math.min(50, Math.max(1, Math.floor(Number(sampleQuantity) || 1)));
+
     // Création de N échantillons avec leurs essais associés
-    for (let i = 0; i < sampleQuantity; i++) {
-      const sampleId = `ECH-${new Date().getFullYear().toString().slice(2)}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+    for (let i = 0; i < safeQuantity; i++) {
+      const sampleId = generateUniqueLimsId(samplePrefix, usedSampleIds);
+      usedSampleIds.add(sampleId);
+
+      const barcode = generateUniqueBarcode(usedBarcodes, 'BC');
+      usedBarcodes.add(barcode);
+
       const newSample: Sample = {
         id: sampleId,
-        labId: selectedRequest.labId || 'lab-metallurgie',
-        barcode: `REQ-${Math.floor(Math.random() * 100000).toString().padStart(6, '0')}`,
+        labId: selectedRequest.labId || activeLabId,
+        barcode: barcode,
         templateId: sampleMaterialTemplateId,
         requestId: selectedRequest.id,
         materialState: sampleMaterialState,
@@ -212,24 +518,30 @@ export function RequestsInternal() {
         receivedAt: new Date().toISOString(),
         client: requester?.company || requester?.name || 'Inconnu',
         project: selectedRequest.title,
-        priority: 'normale',
-        customData: {},
+        priority: samplePriority,
+        // Utilise directement les valeurs pré-remplies et éventuellement ajustées par l'opérateur dans sampleCustomData
+        customData: { ...sampleCustomData },
         images: [],
         notes: `Échantillon généré depuis la demande ${selectedRequest.id}`
       };
       addSample(newSample);
-      
-      // Instanciation des essais correspondants
+
+      // Instanciation des essais correspondants (uniquement assignés si l'opérateur est habilité sur la méthode)
       requestedAnalyses.forEach((analysisIdentifier: string) => {
         const matchedTemplate = analysisTemplates.find(t => t.id === analysisIdentifier || t.name === analysisIdentifier);
         if (matchedTemplate) {
+          const analysisId = generateUniqueLimsId('ESS', usedAnalysisIds);
+          usedAnalysisIds.add(analysisId);
+          const assignedQualified = isUserQualifiedForTemplate(selectedRequest.assignedTo, matchedTemplate.id);
+
           addAnalysis({
-            id: `ESS-${new Date().getFullYear().toString().slice(2)}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`,
+            id: analysisId,
+            labId: selectedRequest.labId || activeLabId,
             sampleId: sampleId,
             templateId: matchedTemplate.id,
             status: 'planifie',
-            technician: selectedRequest.assignedTo 
-              ? (users.find(u => u.id === selectedRequest.assignedTo)?.name || 'Non assigné') 
+            technician: assignedQualified && selectedRequest.assignedTo
+              ? (users.find(u => u.id === selectedRequest.assignedTo)?.name || 'Non assigné')
               : 'Non assigné',
             updatedAt: new Date().toISOString(),
             results: {},
@@ -238,9 +550,9 @@ export function RequestsInternal() {
         }
       });
     }
-    
+
     // Bascule automatique de la demande au statut 'En Cours'
-    handleStatusChange('en_cours');
+    handleStatusChange('En Cours');
   };
 
   return (
@@ -249,7 +561,7 @@ export function RequestsInternal() {
         <div>
           <h2 className="text-2xl font-display font-bold text-slate-900">Workflow & Demandes Clients</h2>
           <p className="text-sm text-slate-500 mt-1">
-            Gestion des assignations, revue de contrat et conformité (Audit Trail 21 CFR Part 11).
+            Gestion des assignations, revue des mandats et conformité (Audit Trail 21 CFR Part 11).
           </p>
         </div>
       </div>
@@ -258,19 +570,17 @@ export function RequestsInternal() {
         {/* Volet de gauche : Liste des Demandes */}
         <div className="lg:col-span-1 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden">
           <div className="flex border-b border-slate-200 bg-slate-50">
-            <button 
+            <button
               onClick={() => setFilterMode('actives')}
-              className={`flex-1 py-3 text-sm font-semibold transition-colors border-b-2 ${
-                filterMode === 'actives' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
-              }`}
+              className={`flex-1 py-3 text-sm font-semibold transition-colors border-b-2 ${filterMode === 'actives' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}
             >
               En cours / À traiter
             </button>
-            <button 
+            <button
               onClick={() => setFilterMode('terminees')}
-              className={`flex-1 py-3 text-sm font-semibold transition-colors border-b-2 ${
-                filterMode === 'terminees' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
-              }`}
+              className={`flex-1 py-3 text-sm font-semibold transition-colors border-b-2 ${filterMode === 'terminees' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}
             >
               Historique
             </button>
@@ -280,7 +590,6 @@ export function RequestsInternal() {
               <div className="text-center p-6 text-slate-500 text-sm">Aucune demande assignée ou visible.</div>
             ) : (
               visibleRequests.map(req => {
-                const template = requestTemplates.find(t => t.id === req.templateId);
                 const requester = users.find(u => u.id === req.requesterId);
                 const isSelected = selectedRequest?.id === req.id;
                 return (
@@ -290,10 +599,25 @@ export function RequestsInternal() {
                       setSelectedRequest(req);
                       setIsEditing(false);
                       setEditedData(req.customData);
+                      setSamplePriority((req as any).priority || 'normale');
+                      setSampleQuantity(req.sampleCount || 1);
+                      setConclusionText(req.conclusion || '');
+                      setShowAudit(false);
+
+                      // Pré-sélectionne automatiquement le premier matériau choisi par le client dans le formulaire
+                      const reqTpl = requestTemplates.find(t => t.id === req.templateId);
+                      const matField = reqTpl?.fields.find(f => f.type === 'materials');
+                      if (matField && req.customData?.[matField.id]) {
+                        const rawVal = req.customData[matField.id];
+                        const firstMatId = Array.isArray(rawVal) ? rawVal[0] : rawVal;
+                        const matchedMat = materialTemplates.find(m => m.id === firstMatId || m.name === firstMatId);
+                        if (matchedMat) {
+                          setSampleMaterialTemplateId(matchedMat.id);
+                        }
+                      }
                     }}
-                    className={`w-full text-left p-4 rounded-lg border transition-all ${
-                      isSelected ? 'bg-blue-50 border-blue-300 shadow-sm' : 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-sm'
-                    }`}
+                    className={`w-full text-left p-4 rounded-lg border transition-all ${isSelected ? 'bg-blue-50 border-blue-300 shadow-sm' : 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-sm'
+                      }`}
                   >
                     <div className="flex justify-between items-start mb-2">
                       <span className="text-xs font-mono font-bold text-slate-500">{req.id}</span>
@@ -325,92 +649,245 @@ export function RequestsInternal() {
                   <h4 className="text-md font-medium text-slate-800">{selectedRequest.title}</h4>
                   <p className="text-xs text-slate-500 mt-1">Soumis le {formatDate(selectedRequest.createdAt)}</p>
                 </div>
-                {currentUser?.role === 'manager' && (
-                  <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
-                    <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
-                      Assignation Analyste
-                    </label>
-                    <select 
-                      value={selectedRequest.assignedTo || ''}
-                      onChange={(e) => {
-                        assignRequest(selectedRequest.id, e.target.value);
-                        setSelectedRequest({...selectedRequest, assignedTo: e.target.value});
-                      }}
-                      className="w-full text-sm border-slate-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
-                    >
-                      <option value="">-- Non assigné --</option>
-                      {analysts.map(a => (
-                        <option key={a.id} value={a.id}>{a.name}</option>
-                      ))}
-                    </select>
+                {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
+                  <div className="flex flex-wrap gap-3">
+                    <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
+                      <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
+                        Priorité
+                      </label>
+                      <select
+                        value={selectedRequest.priority || samplePriority}
+                        onChange={(e) => {
+                          const newPrio = e.target.value as 'basse' | 'normale' | 'haute';
+                          setSamplePriority(newPrio);
+                          updateRequestData(selectedRequest.id, { priority: newPrio }, `Priorité passée à : ${newPrio}`);
+                          setSelectedRequest({ ...selectedRequest, priority: newPrio });
+                        }}
+                        className="w-full text-sm border-slate-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="basse">Basse</option>
+                        <option value="normale">Normale</option>
+                        <option value="haute">Urgente (Haute)</option>
+                      </select>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
+                      <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
+                        Assignation Analyste (Contrôle Habilitations)
+                      </label>
+                      {(() => {
+                        const neededTplIds = getRequestRequiredTemplateIds(selectedRequest);
+                        const getMissingTplNames = (userId: string) =>
+                          neededTplIds
+                            .filter(tid => !isUserQualifiedForTemplate(userId, tid))
+                            .map(tid => analysisTemplates.find(t => t.id === tid)?.name || tid);
+
+                        const currentMissingNames = selectedRequest.assignedTo
+                          ? getMissingTplNames(selectedRequest.assignedTo)
+                          : [];
+
+                        return (
+                          <>
+                            <select
+                              value={selectedRequest.assignedTo || ''}
+                              onChange={(e) => {
+                                const targetId = e.target.value;
+                                if (!targetId) {
+                                  setAssignError(null);
+                                  assignRequest(selectedRequest.id, '');
+                                  setSelectedRequest({ ...selectedRequest, assignedTo: '' });
+                                  return;
+                                }
+                                const candidate = analysts.find(a => a.id === targetId);
+                                const missing = getMissingTplNames(targetId);
+                                if (missing.length > 0) {
+                                  setAssignError(
+                                    `Assignation bloquée (ISO 17025 §6.2) : ${candidate?.name || 'cet opérateur'} n'est pas habilité (ou habilitation expirée) pour : ${missing.join(', ')}.`
+                                  );
+                                  return;
+                                }
+                                setAssignError(null);
+                                assignRequest(selectedRequest.id, targetId);
+                                setSelectedRequest({ ...selectedRequest, assignedTo: targetId });
+                              }}
+                              className="w-full text-sm border-slate-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                            >
+                              <option value="">-- Non assigné --</option>
+                              {analysts.map(a => {
+                                const missing = getMissingTplNames(a.id);
+                                const isQualified = missing.length === 0;
+                                const isCurrentlyAssigned = a.id === selectedRequest.assignedTo;
+                                return (
+                                  <option
+                                    key={a.id}
+                                    value={a.id}
+                                    disabled={!isQualified && !isCurrentlyAssigned}
+                                  >
+                                    {a.name}{' '}
+                                    {neededTplIds.length === 0
+                                      ? `(${(a.qualifiedTemplateIds || []).length} habilit.)`
+                                      : isQualified
+                                        ? '— ✓ Habilité'
+                                        : `— ⛔ Non habilité (${missing.length} méthode(s) manquante(s))`}
+                                  </option>
+                                );
+                              })}
+                            </select>
+
+                            {assignError && (
+                              <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5 mt-1.5 font-medium">
+                                ⛔ {assignError}
+                              </p>
+                            )}
+
+                            {!assignError && currentMissingNames.length > 0 && (
+                              <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5 mt-1.5">
+                                ⛔ Opérateur non habilité (ISO 17025 §6.2) pour : <strong>{currentMissingNames.join(', ')}</strong>. Veuillez réassigner le dossier ou mettre à jour ses habilitations dans Paramètres.
+                              </p>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
+                    <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
+                      <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
+                        Forcer l'étape du Workflow
+                      </label>
+                      <select
+                        value={selectedRequest.status}
+                        onChange={(e) => {
+                          const targetStatus = e.target.value as RequestStatus;
+                          handleStatusChange(targetStatus);
+                        }}
+                        className="w-full text-sm border-slate-300 rounded-md focus:ring-blue-500 focus:border-blue-500 font-medium text-blue-700"
+                      >
+                        <option value="soumise">1. Soumise</option>
+                        <option value="En Revue">2. En Revue</option>
+                        <option value="validee">3. Validée</option>
+                        <option value="assignee">4. Assignée</option>
+                        <option value="En Cours">5. En Cours</option>
+                        <option value="En Validation">6. En Validation finale</option>
+                        <option value="terminee">7. Terminée</option>
+                        <option value="rejetee">Rejetée</option>
+                      </select>
+                    </div>
+
+                    {/* Option Devis PDF Commercial (affichée uniquement si activée dans Paramètres → Laboratoire) */}
+                    {labSettings?.enableQuotes && (
+                      <div className="bg-emerald-50/60 border border-emerald-200 p-3 rounded-lg shadow-sm sm:col-span-2 lg:col-span-3 flex flex-wrap items-center justify-between gap-3">
+                        <div className="space-y-0.5">
+                          <div className="text-xs font-bold uppercase tracking-wider text-emerald-900">
+                            Devis Commercial (Optionnel){selectedRequest.quoteNumber ? ` — ${selectedRequest.quoteNumber}` : ''}
+                          </div>
+                          <div className="text-xs text-emerald-800">
+                            Montant estimé : <strong>{(selectedRequest.estimatedCost || 0).toLocaleString('fr-FR')} € HT</strong>
+                            {selectedRequest.quoteGeneratedAt && ` • Généré le ${new Date(selectedRequest.quoteGeneratedAt).toLocaleDateString('fr-FR')}`}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <select
+                            value={selectedRequest.quoteStatus || 'aucun'}
+                            onChange={e => {
+                              const nextSt = e.target.value as NonNullable<AnalysisRequest['quoteStatus']>;
+                              updateRequestData(selectedRequest.id, { quoteStatus: nextSt }, `Statut devis passé à : ${nextSt}`);
+                            }}
+                            className="text-xs border border-emerald-300 rounded-md px-2 py-1.5 bg-white text-slate-700"
+                          >
+                            <option value="aucun">Devis : Non émis</option>
+                            <option value="genere">Devis généré</option>
+                            <option value="envoye">Devis envoyé au client</option>
+                            <option value="approuve">Accord / BC reçu ✓</option>
+                            <option value="refuse">Devis refusé</option>
+                          </select>
+                          <input
+                            type="text"
+                            placeholder="N° Bon de commande..."
+                            defaultValue={selectedRequest.purchaseOrderRef || ''}
+                            onBlur={e => {
+                              if (e.target.value !== (selectedRequest.purchaseOrderRef || '')) {
+                                updateRequestData(selectedRequest.id, { purchaseOrderRef: e.target.value }, `Bon de commande renseigné : ${e.target.value}`);
+                              }
+                            }}
+                            className="text-xs border border-emerald-300 rounded-md px-2 py-1.5 bg-white w-40"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleGenerateQuotePdf(selectedRequest)}
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-md shadow-xs"
+                          >
+                            Générer Devis PDF
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-              
+
               <div className="flex-1 overflow-y-auto p-6 space-y-8">
                 {/* Actions de changement d'état du Workflow */}
                 {selectedRequest.status !== 'rejetee' && selectedRequest.status !== 'terminee' && (
                   <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-5">
                     <h4 className="text-sm font-bold text-blue-900 uppercase tracking-wider mb-3 flex items-center">
                       <Shield className="w-4 h-4 mr-2" />
-                      Validation & Changement de Statut (Signature Électronique)
+                      Validation & Changement de Statut
                     </h4>
                     <div className="flex gap-3 items-start flex-wrap">
-                      <input 
-                        type="text" 
-                        placeholder="Justification ou commentaire (obligatoire pour Refus ou Validation)..." 
+                      <input
+                        type="text"
+                        placeholder="Justification ou commentaire (obligatoire pour Refus)..."
                         value={statusComment}
                         onChange={e => setStatusComment(e.target.value)}
                         className="flex-1 min-w-[250px] text-sm border-slate-300 rounded-md"
                       />
                       <div className="flex gap-2 flex-wrap">
-                        {selectedRequest.status === 'soumise' && currentUser?.role === 'manager' && (
-                          <button 
-                            onClick={() => handleStatusChange('en_revue')} 
+                        {selectedRequest.status === 'soumise' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
+                          <button
+                            onClick={() => handleStatusChange('En Revue')}
                             className="bg-purple-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-purple-700 transition-colors shadow-sm"
                           >
                             Passer en Revue
                           </button>
                         )}
-                        {selectedRequest.status === 'en_revue' && currentUser?.role === 'manager' && (
+                        {selectedRequest.status === 'En Revue' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
                           <>
-                            <button 
-                              disabled={!statusComment} 
-                              onClick={handleReject} 
+                            <button
+                              disabled={!statusComment}
+                              onClick={handleReject}
                               className="bg-red-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-colors shadow-sm flex items-center"
                             >
-                              <XCircle className="w-4 h-4 mr-1.5"/> Refuser la demande
+                              <XCircle className="w-4 h-4 mr-1.5" /> Refuser la demande
                             </button>
-                            <button 
-                              onClick={() => handleStatusChange('validee')} 
+                            <button
+                              onClick={() => handleStatusChange('validee')}
                               className="bg-emerald-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm flex items-center"
                             >
-                              <CheckCircle className="w-4 h-4 mr-1.5"/> Valider la demande
+                              <CheckCircle className="w-4 h-4 mr-1.5" /> Valider la demande
                             </button>
                           </>
                         )}
                         {(selectedRequest.status === 'assignee' || selectedRequest.status === 'validee') && (
-                          <button 
-                            onClick={() => handleStatusChange('en_cours')} 
+                          <button
+                            onClick={() => handleStatusChange('En Cours')}
                             className="bg-amber-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-amber-700 transition-colors shadow-sm flex items-center"
                           >
-                            <PlayCircle className="w-4 h-4 mr-1.5"/> Démarrer les essais sans échantillon
+                            <PlayCircle className="w-4 h-4 mr-1.5" /> Démarrer les essais sans échantillon
                           </button>
                         )}
-                        {selectedRequest.status === 'en_cours' && (
-                          <button 
-                            onClick={() => handleStatusChange('en_validation')} 
+                        {selectedRequest.status === 'En Cours' && (
+                          <button
+                            onClick={() => handleStatusChange('En Validation')}
                             className="bg-orange-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-orange-700 transition-colors shadow-sm flex items-center"
                           >
-                            <CheckCircle className="w-4 h-4 mr-1.5"/> Soumettre pour validation
+                            <CheckCircle className="w-4 h-4 mr-1.5" /> Soumettre pour validation
                           </button>
                         )}
-                        {selectedRequest.status === 'en_validation' && currentUser?.role === 'manager' && (
-                          <button 
-                            onClick={() => handleStatusChange('terminee')} 
+                        {selectedRequest.status === 'En Validation' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
+                          <button
+                            onClick={() => handleStatusChange('terminee')}
                             className="bg-emerald-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm flex items-center"
                           >
-                            <Shield className="w-4 h-4 mr-1.5"/> Approuver (Libération)
+                            <Shield className="w-4 h-4 mr-1.5" /> Approuver (Libération)
                           </button>
                         )}
                       </div>
@@ -419,34 +896,34 @@ export function RequestsInternal() {
                 )}
 
                 {/* Option de réouverture pour les managers */}
-                {(selectedRequest.status === 'terminee' || selectedRequest.status === 'rejetee') && currentUser?.role === 'manager' && (
+                {(selectedRequest.status === 'terminee' || selectedRequest.status === 'rejetee') && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
                   <div className="bg-amber-50/50 border border-amber-100 rounded-xl p-5">
                     <h4 className="text-sm font-bold text-amber-900 uppercase tracking-wider mb-3 flex items-center">
                       <History className="w-4 h-4 mr-2" />
                       Actions de Gestion (Manager)
                     </h4>
-                    <button 
-                      onClick={() => handleStatusChange('en_cours')} 
+                    <button
+                      onClick={() => handleStatusChange('En Cours')}
                       className="bg-white border border-amber-300 text-amber-700 px-4 py-2 rounded-md text-sm font-medium hover:bg-amber-50 transition-colors shadow-sm flex items-center"
                     >
-                      <PlayCircle className="w-4 h-4 mr-1.5"/> Réouvrir le dossier (Passer En Cours)
+                      <PlayCircle className="w-4 h-4 mr-1.5" /> Réouvrir le dossier (Passer En Cours)
                     </button>
                   </div>
                 )}
 
                 {/* Module de génération rapide des échantillons physiques */}
-                {(selectedRequest.status === 'validee' || selectedRequest.status === 'assignee' || (selectedRequest.status === 'en_cours' && currentUser?.role === 'manager')) && (
+                {(selectedRequest.status === 'validee' || selectedRequest.status === 'assignee' || (selectedRequest.status === 'En Cours' && (currentUser?.role === 'manager' || currentUser?.role === 'admin'))) && (
                   <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-5">
                     <h4 className="text-sm font-bold text-indigo-900 uppercase tracking-wider mb-3 flex items-center">
                       <Box className="w-4 h-4 mr-2" />
                       Réception & Création d'Échantillons
                     </h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-4">
                       <div>
                         <label className="block text-xs font-medium text-indigo-800 mb-1">Modèle Matériau (CMS)</label>
-                        <select 
-                          value={sampleMaterialTemplateId} 
-                          onChange={e => setSampleMaterialTemplateId(e.target.value)} 
+                        <select
+                          value={sampleMaterialTemplateId}
+                          onChange={e => setSampleMaterialTemplateId(e.target.value)}
                           className="w-full text-sm border-indigo-200 rounded-md"
                         >
                           {activeMaterialTemplates.map(t => (
@@ -456,9 +933,9 @@ export function RequestsInternal() {
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-indigo-800 mb-1">État Physique</label>
-                        <select 
-                          value={sampleMaterialState} 
-                          onChange={e => setSampleMaterialState(e.target.value as any)} 
+                        <select
+                          value={sampleMaterialState}
+                          onChange={e => setSampleMaterialState(e.target.value as any)}
                           className="w-full text-sm border-indigo-200 rounded-md"
                         >
                           <option value="Massif">Massif</option>
@@ -468,19 +945,112 @@ export function RequestsInternal() {
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-indigo-800 mb-1">Nombre d'échantillons reçus</label>
-                        <input 
-                          type="number" 
-                          min="1" 
-                          max="50" 
-                          value={sampleQuantity} 
-                          onChange={e => setSampleQuantity(Number(e.target.value))} 
-                          className="w-full text-sm border-indigo-200 rounded-md" 
+                        <label className="block text-xs font-medium text-indigo-800 mb-1">Priorité</label>
+                        <select
+                          value={samplePriority}
+                          onChange={e => setSamplePriority(e.target.value as 'basse' | 'normale' | 'haute')}
+                          className="w-full text-sm border-indigo-200 rounded-md"
+                        >
+                          <option value="basse">Basse</option>
+                          <option value="normale">Normale</option>
+                          <option value="haute">Urgente (Haute)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-indigo-800 mb-1">Nombre d'échantillons</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="50"
+                          value={sampleQuantity}
+                          onChange={e => setSampleQuantity(Number(e.target.value))}
+                          className="w-full text-sm border-indigo-200 rounded-md"
                         />
                       </div>
                     </div>
-                    <button 
-                      onClick={handleGenerateSamples} 
+
+                    {/* Champs dynamiques du Modèle Matériau sélectionné */}
+                    {(() => {
+                      const selectedMatTpl = materialTemplates.find(t => t.id === sampleMaterialTemplateId);
+                      if (!selectedMatTpl || selectedMatTpl.fields.length === 0) return null;
+                      return (
+                        <div className="mb-4 pt-3 border-t border-indigo-200/60">
+                          <span className="block text-xs font-bold text-indigo-900 uppercase tracking-wider mb-2">
+                            Propriétés du matériau ({selectedMatTpl.name})
+                          </span>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            {selectedMatTpl.fields.map(field => (
+                              <div key={field.id}>
+                                <label className="block text-xs font-medium text-indigo-800 mb-1">
+                                  {field.name} {field.unit ? `(${field.unit})` : ''}
+                                </label>
+                                {field.type === 'select' ? (
+                                  <select
+                                    value={sampleCustomData[field.name] ?? ''}
+                                    onChange={e => setSampleCustomData({ ...sampleCustomData, [field.name]: e.target.value })}
+                                    className="w-full text-sm border-indigo-200 rounded-md bg-white px-2 py-1.5"
+                                  >
+                                    <option value="">-- Sélectionner --</option>
+                                    {field.options?.map(opt => (
+                                      <option key={opt} value={opt}>{opt}</option>
+                                    ))}
+                                  </select>
+                                ) : field.type === 'multiselect' ? (
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {field.options?.map(opt => {
+                                      const currentVals = Array.isArray(sampleCustomData[field.name]) ? sampleCustomData[field.name] : [];
+                                      const isChecked = currentVals.includes(opt);
+                                      return (
+                                        <button
+                                          key={opt}
+                                          type="button"
+                                          onClick={() => {
+                                            const nextVals = isChecked
+                                              ? currentVals.filter((v: string) => v !== opt)
+                                              : [...currentVals, opt];
+                                            setSampleCustomData({ ...sampleCustomData, [field.name]: nextVals });
+                                          }}
+                                          className={`px-2 py-1 rounded text-xs font-medium border ${
+                                            isChecked
+                                              ? 'bg-indigo-600 text-white border-indigo-600'
+                                              : 'bg-white text-slate-700 border-indigo-200'
+                                          }`}
+                                        >
+                                          {opt}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                ) : field.type === 'boolean' ? (
+                                  <label className="inline-flex items-center gap-2 text-sm text-indigo-900 mt-1">
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(sampleCustomData[field.name])}
+                                      onChange={e => setSampleCustomData({ ...sampleCustomData, [field.name]: e.target.checked })}
+                                      className="rounded border-indigo-300 text-indigo-600"
+                                    />
+                                    Oui
+                                  </label>
+                                ) : (
+                                  <input
+                                    type={field.type === 'number' ? 'number' : field.type === 'date' ? 'date' : 'text'}
+                                    value={sampleCustomData[field.name] ?? ''}
+                                    placeholder={field.unit ? `Valeur en ${field.unit}...` : 'Saisir...'}
+                                    onChange={e => setSampleCustomData({
+                                      ...sampleCustomData,
+                                      [field.name]: field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value
+                                    })}
+                                    className="w-full text-sm border-indigo-200 rounded-md bg-white px-2 py-1.5"
+                                  />
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                    <button
+                      onClick={handleGenerateSamples}
                       className="bg-indigo-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm flex items-center"
                     >
                       <Plus className="w-4 h-4 mr-2" /> Générer {sampleQuantity} échantillon(s) LIMS
@@ -496,94 +1066,201 @@ export function RequestsInternal() {
                         <FileText className="w-4 h-4 mr-2" />
                         Données Client
                       </h4>
-                      {currentUser?.role === 'manager' && (
+                      {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
                         isEditing ? (
                           <div className="flex gap-2">
-                            <button 
+                            <button
                               onClick={() => {
                                 setIsEditing(false);
                                 setEditedData(selectedRequest.customData);
-                              }} 
+                              }}
                               className="text-xs px-2 py-1 bg-slate-100 text-slate-600 rounded hover:bg-slate-200"
                             >
                               Annuler
                             </button>
-                            <button 
+                            <button
                               onClick={() => {
                                 updateRequestData(selectedRequest.id, { customData: editedData }, 'Modification des données de la demande.');
                                 setSelectedRequest(prev => prev ? { ...prev, customData: editedData } : null);
                                 setIsEditing(false);
-                              }} 
+                              }}
                               className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center"
                             >
-                              <Save className="w-3 h-3 mr-1"/> Enregistrer
+                              <Save className="w-3 h-3 mr-1" /> Enregistrer
                             </button>
                           </div>
                         ) : (
-                          <button 
-                            onClick={() => setIsEditing(true)} 
+                          <button
+                            onClick={() => setIsEditing(true)}
                             className="text-xs px-2 py-1 bg-slate-100 text-slate-600 rounded hover:bg-slate-200 flex items-center"
                           >
-                            <Edit2 className="w-3 h-3 mr-1"/> Modifier
+                            <Edit2 className="w-3 h-3 mr-1" /> Modifier
                           </button>
                         )
                       )}
                     </div>
-                    
+
                     <dl className="space-y-4">
                       {Object.entries(selectedRequest.customData).map(([key, value]) => {
+                        // On masque les clés techniques de sous-propriétés matériaux car elles sont affichées directement sous le champ 'materials'
+                        if (key.endsWith('__material_properties') || key.startsWith('matprop_')) {
+                          return null;
+                        }
+
                         const template = requestTemplates.find(t => t.id === selectedRequest.templateId);
                         const field = template?.fields.find(f => f.id === key);
+
+                        // Helper pour résoudre le nom d'un matériau depuis son ID
+                        const resolveMaterialName = (idOrName: string) =>
+                          materialTemplates.find(m => m.id === idOrName || m.name === idOrName)?.name || idOrName;
+
                         let displayValue = value;
                         if (typeof value === 'boolean') {
                           displayValue = value ? 'Oui' : 'Non';
                         } else if (field?.type === 'analyses' && Array.isArray(value)) {
                           displayValue = value.map(id => analysisTemplates.find(a => a.id === id)?.name || id).join(', ');
+                        } else if (field?.type === 'materials') {
+                          displayValue = Array.isArray(value)
+                            ? value.map(resolveMaterialName).join(', ')
+                            : resolveMaterialName(String(value));
                         } else if (Array.isArray(value)) {
                           displayValue = value.join(', ');
                         }
-                        
+
+                        // Si c'est un champ de type 'materials', on récupère les modèles sélectionnés et leurs propriétés associées
+                        const selectedMatTemplates = field?.type === 'materials'
+                          ? (Array.isArray(value) ? value : [value])
+                              .map(v => materialTemplates.find(m => m.id === v || m.name === v))
+                              .filter(Boolean)
+                          : [];
+
+                        const propertiesKey = `${key}__material_properties`;
+                        const materialPropertiesContainer = isEditing
+                          ? (editedData[propertiesKey] || {})
+                          : (selectedRequest.customData[propertiesKey] || {});
+
                         return (
                           <div key={key} className="bg-slate-50 p-3 rounded-lg border border-slate-100">
                             <dt className="text-xs font-medium text-slate-500 mb-1">{field?.name || key}</dt>
                             <dd className="text-sm text-slate-900 font-medium">
-                              {isEditing ? (
+                              {isEditing && field?.type !== 'materials' && field?.type !== 'analyses' ? (
                                 typeof value === 'boolean' ? (
-                                  <input 
-                                    type="checkbox" 
-                                    checked={editedData[key] || false} 
-                                    onChange={e => setEditedData({...editedData, [key]: e.target.checked})} 
-                                    className="rounded border-slate-300" 
+                                  <input
+                                    type="checkbox"
+                                    checked={editedData[key] || false}
+                                    onChange={e => setEditedData({ ...editedData, [key]: e.target.checked })}
+                                    className="rounded border-slate-300"
                                   />
                                 ) : Array.isArray(value) ? (
                                   <span className="text-xs text-slate-400 italic">Non modifiable (Tableau)</span>
                                 ) : field?.type === 'date' ? (
-                                  <input 
-                                    type="date" 
-                                    value={editedData[key] || ''} 
-                                    onChange={e => setEditedData({...editedData, [key]: e.target.value})} 
-                                    className="w-full text-sm border-slate-300 rounded px-2 py-1" 
+                                  <input
+                                    type="date"
+                                    value={editedData[key] || ''}
+                                    onChange={e => setEditedData({ ...editedData, [key]: e.target.value })}
+                                    className="w-full text-sm border-slate-300 rounded px-2 py-1"
                                   />
                                 ) : (
-                                  <input 
-                                    type="text" 
-                                    value={editedData[key] || ''} 
-                                    onChange={e => setEditedData({...editedData, [key]: e.target.value})} 
-                                    className="w-full text-sm border-slate-300 rounded px-2 py-1" 
+                                  <input
+                                    type="text"
+                                    value={editedData[key] || ''}
+                                    onChange={e => setEditedData({ ...editedData, [key]: e.target.value })}
+                                    className="w-full text-sm border-slate-300 rounded px-2 py-1"
                                   />
                                 )
+                              ) : Array.isArray(value) ? (
+                                <div className="flex flex-wrap gap-1.5 mt-1">
+                                  {value.map(v => (
+                                    <span
+                                      key={v}
+                                      className={`px-2 py-0.5 rounded text-xs font-medium border ${
+                                        field?.type === 'materials'
+                                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                          : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                      }`}
+                                    >
+                                      {field?.type === 'analyses'
+                                        ? (analysisTemplates.find(a => a.id === v)?.name || v)
+                                        : field?.type === 'materials'
+                                          ? resolveMaterialName(v)
+                                          : v}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : field?.type === 'date' && displayValue ? (
+                                new Date(displayValue as string).toLocaleDateString('fr-FR')
                               ) : (
-                                field?.type === 'date' && displayValue ? new Date(displayValue as string).toLocaleDateString('fr-FR') : (
-                                  Array.isArray(value) ? (
-                                    <div className="flex flex-wrap gap-1.5 mt-1">
-                                      {value.map(v => (
-                                        <span key={v} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded text-xs font-medium">
-                                          {field?.type === 'analyses' ? (analysisTemplates.find(a => a.id === v)?.name || v) : v}
+                                displayValue
+                              )}
+
+                              {/* Affichage et édition des propriétés des matériaux sélectionnés */}
+                              {selectedMatTemplates.length > 0 && (
+                                <div className="mt-3 pt-2 border-t border-slate-200 space-y-2.5">
+                                  {selectedMatTemplates.map(matTpl => {
+                                    const matPropsForTpl = materialPropertiesContainer[matTpl!.id] || {};
+                                    return (
+                                      <div key={matTpl!.id} className="bg-white rounded-lg border border-emerald-200 p-2.5 text-xs space-y-1.5">
+                                        <span className="font-bold text-emerald-900 uppercase tracking-wider block">
+                                          Propriétés — {matTpl!.name}
                                         </span>
-                                      ))}
-                                    </div>
-                                  ) : displayValue
-                                )
+                                        {matTpl!.fields.length === 0 ? (
+                                          <span className="text-slate-400 italic">Aucune propriété configurée sur ce modèle.</span>
+                                        ) : (
+                                          <div className="space-y-1">
+                                            {matTpl!.fields.map(matField => {
+                                              const propVal =
+                                                matPropsForTpl[matField.id] ??
+                                                matPropsForTpl[matField.name] ??
+                                                getMaterialPropFromRequest(selectedRequest, matTpl!.id, matField.id, matField.name);
+
+                                              return (
+                                                <div key={matField.id} className="flex items-center justify-between bg-slate-50 px-2.5 py-1.5 rounded border border-slate-100 gap-2">
+                                                  <span className="text-slate-600">
+                                                    {matField.name} {matField.unit ? `(${matField.unit})` : ''}
+                                                  </span>
+                                                  {isEditing ? (
+                                                    <input
+                                                      type={matField.type === 'number' ? 'number' : 'text'}
+                                                      value={propVal !== undefined ? String(propVal) : ''}
+                                                      onChange={e => {
+                                                        const updatedVal = matField.type === 'number'
+                                                          ? (e.target.value === '' ? '' : Number(e.target.value))
+                                                          : e.target.value;
+                                                        setEditedData({
+                                                          ...editedData,
+                                                          [propertiesKey]: {
+                                                            ...materialPropertiesContainer,
+                                                            [matTpl!.id]: {
+                                                              ...matPropsForTpl,
+                                                              [matField.id]: updatedVal
+                                                            }
+                                                          }
+                                                        });
+                                                      }}
+                                                      className="w-36 text-xs border border-slate-300 rounded px-2 py-1 bg-white text-right"
+                                                    />
+                                                  ) : (
+                                                    <span className="font-semibold text-slate-900 text-right">
+                                                      {propVal !== undefined && propVal !== '' ? (
+                                                        Array.isArray(propVal)
+                                                          ? propVal.join(', ')
+                                                          : typeof propVal === 'boolean'
+                                                            ? (propVal ? 'Oui' : 'Non')
+                                                            : `${propVal}${matField.unit ? ` ${matField.unit}` : ''}`
+                                                      ) : (
+                                                        <span className="text-slate-400 italic font-normal">Non renseigné</span>
+                                                      )}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               )}
                             </dd>
                           </div>
@@ -592,84 +1269,425 @@ export function RequestsInternal() {
                     </dl>
                   </div>
 
-                  {/* Audit Trail et Traçabilité Complète */}
+                  {/* Audit Trail et Traçabilité Complète (Masqué par défaut) */}
                   <div>
-                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center">
-                      <History className="w-4 h-4 mr-2" />
-                      Audit Trail (Traçabilité)
-                    </h4>
-                    <div className="relative border-l border-slate-200 ml-3 space-y-6">
-                      {selectedRequest.auditTrail.map((audit, i) => {
-                        const user = users.find(u => u.id === audit.userId);
-                        return (
-                          <div key={audit.id || i} className="relative pl-5">
-                            <div className="absolute w-2.5 h-2.5 bg-blue-500 rounded-full -left-[5px] top-1.5 ring-4 ring-white"></div>
-                            <div className="text-xs text-slate-400 mb-0.5">{formatDate(audit.timestamp)}</div>
-                            <div className="text-sm font-semibold text-slate-800">{audit.action}</div>
-                            <div className="text-sm text-slate-600 mt-1">{audit.details}</div>
-                            <div className="text-xs font-medium text-slate-500 mt-2 flex items-center">
-                              <User className="w-3 h-3 mr-1" />
-                              Par : {user?.name || audit.userId}
+                    <div className="flex items-center justify-between mb-4">
+                      <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center m-0">
+                        <History className="w-4 h-4 mr-2" />
+                        Audit Trail (Traçabilité)
+                      </h4>
+                      <button
+                        type="button"
+                        onClick={() => setShowAudit(!showAudit)}
+                        className="text-xs font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg border border-blue-200 transition-colors cursor-pointer"
+                      >
+                        {showAudit ? 'Masquer l\'audit' : 'Afficher l\'audit'}
+                      </button>
+                    </div>
+
+                    {showAudit && (
+                      <div className="relative border-l border-slate-200 ml-3 space-y-6 pt-2 animate-in fade-in duration-200">
+                        {selectedRequest.auditTrail && selectedRequest.auditTrail.length > 0 ? (
+                          selectedRequest.auditTrail.map((audit, i) => {
+                            const user = users.find(u => u.id === audit.userId);
+                            return (
+                              <div key={audit.id || i} className="relative pl-5">
+                                <div className="absolute w-2.5 h-2.5 bg-blue-500 rounded-full -left-[5px] top-1.5 ring-4 ring-white"></div>
+                                <div className="text-xs text-slate-400 mb-0.5">{formatDate(audit.timestamp)}</div>
+                                <div className="text-sm font-semibold text-slate-800">{audit.action}</div>
+                                <div className="text-sm text-slate-600 mt-1">{audit.details}</div>
+                                <div className="text-xs font-medium text-slate-500 mt-2 flex items-center">
+                                  <User className="w-3 h-3 mr-1" />
+                                  Par : {user?.name || audit.userId}
+                                </div>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div className="text-xs text-slate-400 italic pl-5">Aucun historique d'audit pour ce dossier.</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Encart Conclusion Générale pour les Rapports */}
+                <div className="mt-8 border-t border-slate-200 pt-6">
+                  <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                      <div>
+                        <h4 className="text-sm font-bold text-emerald-950 uppercase tracking-wider flex items-center">
+                          <FileText className="w-4 h-4 mr-2 text-emerald-700" />
+                          Conclusion Générale & Avis Technique (Rapport)
+                        </h4>
+                        <p className="text-xs text-emerald-700 mt-0.5">
+                          Cette conclusion sera automatiquement injectable dans vos rapports Word/PDF via la balise <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-emerald-200">{"{{demande.conclusion}}"}</code>.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateRequestData(selectedRequest.id, { conclusion: conclusionText }, 'Mise à jour de la conclusion du rapport');
+                          setSelectedRequest(prev => prev ? { ...prev, conclusion: conclusionText } : null);
+                        }}
+                        className="shrink-0 bg-emerald-600 text-white px-4 py-2 rounded-lg text-xs font-semibold hover:bg-emerald-700 transition-colors shadow-xs flex items-center"
+                      >
+                        <Save className="w-3.5 h-3.5 mr-1.5" />
+                        Enregistrer la conclusion
+                      </button>
+                    </div>
+                    <textarea
+                      rows={4}
+                      value={conclusionText}
+                      onChange={e => setConclusionText(e.target.value)}
+                      placeholder="Rédigez ici la conclusion générale de l'expertise, la conformité des échantillons ou les recommandations techniques..."
+                      className="w-full rounded-lg border border-emerald-300 bg-white p-3 text-sm text-slate-800 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 focus:outline-none"
+                    />
+                  </div>
+
+                  {/* Revue de Contrat ISO 17025 §7.1, Date Engagée & Valorisation Financière */}
+                  {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
+                    <div className="mt-5 bg-indigo-50/50 border border-indigo-200 rounded-xl p-5 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h4 className="text-xs font-bold text-indigo-950 uppercase tracking-wider">Revue de Demande / Contrat (ISO 17025 §7.1)</h4>
+                          {selectedRequest.contractReview && (
+                            <p className="text-[11px] text-indigo-700 mt-0.5">
+                              Validée par {selectedRequest.contractReview.reviewedBy} le {new Date(selectedRequest.contractReview.reviewedAt).toLocaleDateString('fr-FR')}
+                              {selectedRequest.committedDueDate ? ` • Échéance engagée : ${new Date(selectedRequest.committedDueDate).toLocaleDateString('fr-FR')}` : ''}
+                            </p>
+                          )}
+                        </div>
+                        {(() => {
+                          const reqAnas = analyses.filter(a => samples.some(s => s.requestId === selectedRequest.id && s.id === a.sampleId));
+                          const totalCost = reqAnas.reduce((sum, a) => sum + (analysisTemplates.find(t => t.id === a.templateId)?.unitPrice || 0), 0) || selectedRequest.estimatedCost || 0;
+                          const estHours = selectedRequest.estimatedHours || reqAnas.reduce((sum, a) => sum + (analysisTemplates.find(t => t.id === a.templateId)?.estimatedHours || 2), 0);
+                          return (
+                            <div className="flex flex-wrap items-center gap-2">
+                              {selectedRequest.sampleCount && (
+                                <span className="px-2.5 py-1 rounded-full bg-white border border-indigo-200 text-xs font-semibold text-indigo-800">
+                                  {selectedRequest.sampleCount} échantillon(s) déclaré(s)
+                                </span>
+                              )}
+                              {estHours > 0 && (
+                                <span className="px-2.5 py-1 rounded-full bg-white border border-blue-200 text-xs font-bold text-blue-800">
+                                  Temps estimé : ~{estHours}h
+                                </span>
+                              )}
+                              {totalCost > 0 && (
+                                <span className="px-2.5 py-1 rounded-full bg-white border border-emerald-200 text-xs font-bold text-emerald-800">
+                                  Valorisation : {totalCost} € HT
+                                </span>
+                              )}
                             </div>
+                          );
+                        })()}
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+                        <label className="flex items-center gap-2 text-xs text-slate-700">
+                          <input type="checkbox" checked={reviewMethodsOk} onChange={e => setReviewMethodsOk(e.target.checked)} className="rounded text-indigo-600" />
+                          Méthodes adaptées
+                        </label>
+                        <label className="flex items-center gap-2 text-xs text-slate-700">
+                          <input type="checkbox" checked={reviewResourcesOk} onChange={e => setReviewResourcesOk(e.target.checked)} className="rounded text-indigo-600" />
+                          Moyens / équipements OK
+                        </label>
+                        <label className="flex items-center gap-2 text-xs text-slate-700">
+                          <input type="checkbox" checked={reviewStaffOk} onChange={e => setReviewStaffOk(e.target.checked)} className="rounded text-indigo-600" />
+                          Personnel habilité
+                        </label>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-indigo-900 mb-1">Date engagée labo</label>
+                          <input
+                            type="date"
+                            value={committedDateDraft || selectedRequest.committedDueDate || ''}
+                            onChange={e => setCommittedDateDraft(e.target.value)}
+                            className="w-full px-2 py-1 text-xs border border-indigo-300 rounded bg-white"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            saveContractReview(
+                              selectedRequest.id,
+                              { methodsAdequate: reviewMethodsOk, resourcesAvailable: reviewResourcesOk, staffQualified: reviewStaffOk },
+                              committedDateDraft || selectedRequest.committedDueDate || undefined
+                            );
+                          }}
+                          className="px-3.5 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700"
+                        >
+                          Enregistrer la revue de contrat
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Fil de discussion intégré client / laboratoire */}
+                  <div className="mt-5 bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      Fil de discussion du dossier ({(selectedRequest.comments || []).length})
+                    </h4>
+                    <div className="space-y-2 max-h-52 overflow-y-auto">
+                      {(selectedRequest.comments || []).length === 0 ? (
+                        <p className="text-xs text-slate-400 italic">Aucun échange pour le moment.</p>
+                      ) : (
+                        (selectedRequest.comments || []).map(c => (
+                          <div key={c.id} className={`p-2.5 rounded-lg text-xs border ${c.isInternal ? 'bg-amber-50/70 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
+                            <div className="flex items-center justify-between text-[11px] text-slate-500 mb-1">
+                              <span className="font-semibold text-slate-800">
+                                {c.authorName} <span className="uppercase text-[10px] text-slate-400">({c.authorRole})</span>
+                                {c.isInternal && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-200 text-amber-900 rounded text-[9px] font-bold">NOTE INTERNE</span>}
+                              </span>
+                              <span>{new Date(c.createdAt).toLocaleString('fr-FR')}</span>
+                            </div>
+                            <p className="text-slate-700 whitespace-pre-wrap">{c.message}</p>
                           </div>
-                        );
-                      })}
+                        ))
+                      )}
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-slate-100">
+                      <input
+                        type="text"
+                        value={newCommentText}
+                        onChange={e => setNewCommentText(e.target.value)}
+                        placeholder="Écrire un message au client ou une note interne..."
+                        className="flex-1 px-3 py-2 text-xs border border-slate-300 rounded-lg"
+                      />
+                      <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 px-2">
+                        <input type="checkbox" checked={isInternalComment} onChange={e => setIsInternalComment(e.target.checked)} className="rounded text-amber-600" />
+                        Interne
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!newCommentText.trim()) return;
+                          addRequestComment(selectedRequest.id, newCommentText, isInternalComment);
+                          setNewCommentText('');
+                        }}
+                        className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800"
+                      >
+                        Envoyer
+                      </button>
                     </div>
                   </div>
                 </div>
 
-                {/* Échantillons et Essais Rattachés */}
+                {/* Échantillons et Essais Rattachés (avec Impression Zebra & ZPL) */}
                 <div className="mt-8 border-t border-slate-200 pt-6">
-                  <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center">
-                    <Database className="w-4 h-4 mr-2" />
-                    Échantillons & Analyses Générés
-                  </h4>
                   {(() => {
+                    const isManager = currentUser?.role === 'manager' || currentUser?.role === 'admin';
                     const reqSamples = samples.filter(s => s.requestId === selectedRequest.id);
-                    if (reqSamples.length === 0) {
-                      return (
-                        <div className="text-sm text-slate-500 italic bg-slate-50 p-4 rounded-lg border border-slate-100">
-                          Aucun échantillon LIMS généré pour cette demande.
-                        </div>
-                      );
-                    }
+                    const activeAnalysisTpls = analysisTemplates.filter(t => t.isActive !== false);
+
+                    const buildLabelPayload = (targetSamples: Sample[]) =>
+                      targetSamples.map(s => {
+                        // On cherche le laboratoire associé à l'échantillon
+                        const lab = laboratories.find(l => l.id === s.labId);
+                        return {
+                          sample: s,
+                          materialName: materialTemplates.find(m => m.id === s.templateId)?.name || s.templateId,
+                          // On passe lab.code (ex: 'MET') au lieu de s.labId
+                          labCode: lab?.code || s.labId?.toUpperCase() || 'LIMS'
+                        };
+                      });
+
                     return (
-                      <div className="space-y-4">
-                        {reqSamples.map(sample => {
-                          const sampleAnalyses = analyses.filter(a => a.sampleId === sample.id);
-                          return (
-                            <div key={sample.id} className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
-                              <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
-                                <div className="font-semibold text-slate-800 flex items-center">
-                                  <Layers className="w-4 h-4 text-indigo-500 mr-2" />
-                                  Échantillon: {sample.id}
-                                </div>
-                                <span className="text-xs px-2 py-1 bg-slate-100 text-slate-600 rounded-full font-medium">
-                                  {sample.barcode}
-                                </span>
-                              </div>
-                              {sampleAnalyses.length === 0 ? (
-                                <div className="text-xs text-slate-400 italic">Aucune analyse associée.</div>
-                              ) : (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                  {sampleAnalyses.map(analysis => {
-                                    const tpl = analysisTemplates.find(t => t.id === analysis.templateId);
-                                    return (
-                                      <div key={analysis.id} className="flex items-center text-sm border border-slate-100 rounded bg-slate-50 px-3 py-2">
-                                        <TestTube2 className="w-3.5 h-3.5 text-blue-500 mr-2" />
-                                        <span className="font-medium text-slate-700 truncate">{tpl?.name || analysis.id}</span>
-                                        <span className="ml-auto text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-500">
-                                          {analysis.status}
-                                        </span>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
+                      <>
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                          <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center">
+                            <Database className="w-4 h-4 mr-2" />
+                            Échantillons & Analyses Générés ({reqSamples.length})
+                          </h4>
+
+                          {reqSamples.length > 0 && (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => printZebraLabelsWindow(buildLabelPayload(reqSamples))}
+                                className="text-xs px-3 py-1.5 bg-slate-900 text-white hover:bg-slate-800 rounded-lg font-semibold flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                                title="Imprimer toutes les étiquettes de cette demande sur imprimante Zebra (50x30mm)"
+                              >
+                                <Printer className="w-3.5 h-3.5" />
+                                Imprimer Étiquettes Zebra ({reqSamples.length})
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const zpl = generateZplForSamples(buildLabelPayload(reqSamples));
+                                  navigator.clipboard?.writeText(zpl);
+                                  alert('Code ZPL copié dans le presse-papiers !\n\nAperçu :\n' + zpl.slice(0, 350) + '...');
+                                }}
+                                className="text-xs px-2.5 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-300 rounded-lg font-mono font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                                title="Copier le code ZPL II natif pour imprimante Zebra"
+                              >
+                                <QrCode className="w-3.5 h-3.5" />
+                                ZPL
+                              </button>
                             </div>
-                          );
-                        })}
-                      </div>
+                          )}
+                        </div>
+
+                        {reqSamples.length === 0 ? (
+                          <div className="text-sm text-slate-500 italic bg-slate-50 p-4 rounded-lg border border-slate-100">
+                            Aucun échantillon LIMS généré pour cette demande.
+                          </div>
+                        ) : (
+                          <div className="space-y-4">
+                            {reqSamples.map(sample => {
+                              const sampleAnalyses = analyses.filter(a => a.sampleId === sample.id);
+                              return (
+                                <div key={sample.id} className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+                                  <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
+                                    <div className="font-semibold text-slate-800 flex items-center gap-2 flex-wrap">
+                                      <Layers className="w-4 h-4 text-indigo-500" />
+                                      <span>Échantillon : {sample.id}</span>
+                                      <span className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full font-mono">
+                                        {sample.barcode}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => printZebraLabelsWindow(buildLabelPayload([sample]))}
+                                        className="text-xs px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded border border-slate-300 flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                                        title="Imprimer l'étiquette Zebra de cet échantillon"
+                                      >
+                                        <Printer className="w-3 h-3" /> Étiquette
+                                      </button>
+                                    </div>
+                                    {isManager && (
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setAddingAnalysisForSample(addingAnalysisForSample === sample.id ? null : sample.id);
+                                            setSelectedNewAnalysisTplId(activeAnalysisTpls[0]?.id || '');
+                                          }}
+                                          className="text-xs px-2.5 py-1 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-md font-medium flex items-center transition-colors"
+                                        >
+                                          <Plus className="w-3.5 h-3.5 mr-1" /> Ajouter une analyse
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (window.confirm(`Supprimer l'échantillon ${sample.id} et toutes ses analyses associées ?`)) {
+                                              deleteSample(sample.id);
+                                            }
+                                          }}
+                                          className="text-xs p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                                          title="Supprimer cet échantillon"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Petit formulaire d'ajout d'analyse à la volée pour cet échantillon */}
+                                  {isManager && addingAnalysisForSample === sample.id && (
+                                    <div className="mb-3 p-3 bg-indigo-50/70 border border-indigo-100 rounded-lg flex flex-wrap items-center gap-2">
+                                      <select
+                                        value={selectedNewAnalysisTplId}
+                                        onChange={e => setSelectedNewAnalysisTplId(e.target.value)}
+                                        className="text-xs border-indigo-200 rounded-md py-1.5 px-2 bg-white flex-1 min-w-[200px]"
+                                      >
+                                        {activeAnalysisTpls.map(tpl => (
+                                          <option key={tpl.id} value={tpl.id}>{tpl.name} ({tpl.standardRef || 'Interne'})</option>
+                                        ))}
+                                      </select>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (!selectedNewAnalysisTplId) return;
+                                          const usedAnalysisIds = new Set(allAnalyses.map(a => a.id));
+                                          const newAnalysisId = generateUniqueLimsId('ESS', usedAnalysisIds);
+                                          const isAssignedQualified = isUserQualifiedForTemplate(
+                                            selectedRequest.assignedTo,
+                                            selectedNewAnalysisTplId
+                                          );
+                                          const assignedUser = selectedRequest.assignedTo
+                                            ? users.find(u => u.id === selectedRequest.assignedTo)
+                                            : null;
+                                          if (assignedUser && !isAssignedQualified) {
+                                            const tplName = analysisTemplates.find(t => t.id === selectedNewAnalysisTplId)?.name || selectedNewAnalysisTplId;
+                                            setAssignError(
+                                              `L'essai "${tplName}" a été créé sans technicien car ${assignedUser.name} ne dispose pas de cette habilitation.`
+                                            );
+                                          }
+                                          addAnalysis({
+                                            id: newAnalysisId,
+                                            labId: selectedRequest.labId || activeLabId,
+                                            sampleId: sample.id,
+                                            templateId: selectedNewAnalysisTplId,
+                                            status: 'planifie',
+                                            technician: isAssignedQualified && assignedUser
+                                              ? assignedUser.name
+                                              : 'Non assigné',
+                                            updatedAt: new Date().toISOString(),
+                                            results: {},
+                                            images: []
+                                          });
+                                          setAddingAnalysisForSample(null);
+                                        }}
+                                        className="text-xs px-3 py-1.5 bg-indigo-600 text-white rounded-md font-medium hover:bg-indigo-700"
+                                      >
+                                        Confirmer l'ajout
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setAddingAnalysisForSample(null)}
+                                        className="text-xs px-2.5 py-1.5 text-slate-600 hover:bg-slate-200 rounded-md"
+                                      >
+                                        Annuler
+                                      </button>
+                                    </div>
+                                  )}
+
+                                  {sampleAnalyses.length === 0 ? (
+                                    <div className="text-xs text-slate-400 italic">Aucune analyse associée.</div>
+                                  ) : (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                      {sampleAnalyses.map(analysis => {
+                                        const tpl = analysisTemplates.find(t => t.id === analysis.templateId);
+                                        return (
+                                          <div key={analysis.id} className="flex items-center text-sm border border-slate-100 rounded bg-slate-50 px-3 py-2 gap-2">
+                                            <TestTube2 className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                                            <div className="truncate flex-1">
+                                              <span className="font-medium text-slate-700">{tpl?.name || analysis.id}</span>
+                                              <span className="ml-1.5 text-[10px] font-mono text-slate-400">({analysis.id})</span>
+                                            </div>
+                                            <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border ${analysis.status === 'rejete'
+                                              ? 'bg-red-50 border-red-200 text-red-700'
+                                              : 'bg-white border-slate-200 text-slate-500'
+                                              }`}>
+                                              {analysis.status}
+                                            </span>
+                                            {isManager && (
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  if (window.confirm(`Supprimer l'analyse ${analysis.id} (${tpl?.name || ''}) ?`)) {
+                                                    deleteAnalysis(analysis.id);
+                                                  }
+                                                }}
+                                                className="text-slate-400 hover:text-red-600 p-1 rounded hover:bg-red-50 transition-colors"
+                                                title="Supprimer cette analyse"
+                                              >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                              </button>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
                     );
                   })()}
                 </div>

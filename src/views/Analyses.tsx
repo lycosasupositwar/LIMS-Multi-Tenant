@@ -1,148 +1,490 @@
 /**
  * Vue Suivi des Analyses & Essais Métallurgiques (Analyses)
- * 
- * Cette vue gère l'exécution technique, la saisie des mesures et la validation des essais :
- * 1. Double vue de travail : "En cours" (essais actifs) vs "Historique" (essais validés / terminés)
- * 2. Organisation flexible : vue unitaire ou regroupement hiérarchique par dossier de demande
- * 3. Formulaires dynamiques de saisie basés sur les modèles CMS :
- *    - Numérique simple avec unités (ex: Dureté HV10, Rm en MPa)
- *    - Séries de mesures répétées avec calcul en temps réel de la Moyenne et de l'Écart-type
- *    - Sélecteurs simples et multisélection (ex: Type d'inclusions, microstructure)
- *    - Booléens de conformité visuelle
- *    - Dépôt de micrographies optiques
- * 4. Cycle de validation 4-yeux (Planifié -> En cours -> À valider -> Validé / Rejeté)
- * 5. Piste d'audit intégrée pour chaque analyse (historique horodaté des valeurs)
+ *
+ * Cette vue gère le cycle de vie opérationnel des essais et contrôles de laboratoire :
+ * 1. Filtrage par onglet ("En cours" incluant les essais rejetés à reprendre vs "Historique" pour les essais validés/terminés).
+ * 2. Groupement dynamique (par analyse individuelle ou regroupé par dossier/demande client).
+ * 3. Saisie multimodale des résultats selon le modèle d'essai (`AnalysisTemplate`) :
+ *    - Valeurs simples (texte, nombre, booléen, liste déroulante, sélection multiple).
+ *    - Séries numériques (`number_series`) avec calcul automatique en temps réel de la moyenne et de l'écart-type d'échantillon (ex: filiations de dureté Vickers/Rockwell).
+ *    - Tableaux verticaux (`vertical_table`, ex: spectrométrie ICP / OES multi-éléments) avec import CSV/TXT et collage intelligent depuis Excel.
+ *    - Galerie micrographique annotée (`micrography`) avec compression/redimensionnement automatique côté client sur Canvas HTML5.
+ * 4. Workflow de validation et traçabilité (Audit Trail) :
+ *    - Démarrage de l'essai (`planifie` -> `En Cours`), soumission par le technicien (`a_valider`), validation (`valide`) ou rejet motivé (`rejete`) par un Manager/Admin.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLims } from '../store';
-import { Search, Filter, Microscope, Check, UploadCloud, Image as ImageIcon, Plus, X, Lock } from 'lucide-react';
+import { getCalibrationDaysRemaining } from './Equipments';
+import { Search, Microscope, Check, UploadCloud, Image as ImageIcon, Plus, X, Lock, ClipboardPaste } from 'lucide-react';
 import { AnalysisStatus, ExpectedResult } from '../types';
 
+/** Structure d'une image de micrographie stockée dans un résultat d'analyse */
+type MicrographyImage = { id: string; name: string; dataUrl: string; comment: string };
+/** Structure d'une ligne d'un tableau vertical de résultats (ex: dosage élémentaire ICP) */
+type VerticalRow = { element: string; value: string; unit: string };
+
+/**
+ * Lit un fichier image local, le redimensionne (côté max 1800px) et le compresse en JPEG (qualité 0.84)
+ * via un élément `<canvas>` afin d'optimiser le poids en base de données et dans les rapports PDF/Word.
+ * @param file Fichier image sélectionné par l'opérateur
+ * @returns Promesse résolue avec l'objet `MicrographyImage` généré
+ */
+const readMicrographyImage = (file: File): Promise<MicrographyImage> => new Promise((resolve, reject) => {
+  if (!file.type.startsWith('image/')) { reject(new Error('Le fichier sélectionné n’est pas une image.')); return; }
+  const reader = new FileReader();
+  reader.onerror = () => reject(new Error(`Impossible de lire ${file.name}`));
+  reader.onload = () => {
+    const source = String(reader.result || '');
+    const image = new Image();
+    image.onload = () => {
+      try {
+        // Limitation de la résolution maximale à 1800px sur le plus grand côté pour préserver la mémoire
+        const maxSide = 1800;
+        const ratio = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * ratio));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * ratio));
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Canvas indisponible');
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const defaultName = file.name.replace(/\.[^/.]+$/, '');
+        resolve({
+          id: `micro_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          name: defaultName,
+          dataUrl: canvas.toDataURL('image/jpeg', 0.84),
+          comment: ''
+        });
+      } catch (error) { reject(error); }
+    };
+    image.onerror = () => reject(new Error(`Format d’image non pris en charge : ${file.name}`));
+    image.src = source;
+  };
+  reader.readAsDataURL(file);
+});
+
+/**
+ * Analyse un texte issu d'un fichier CSV/TXT ou d'un copier-coller Excel
+ * et fusionne les valeurs dans les lignes du tableau vertical.
+ * Supporte à la fois le collage d'une colonne unique de valeurs (à partir de `startRowIndex`)
+ * et le collage multi-colonnes (Élément | Valeur | Unité) avec réconciliation par nom d'élément.
+ *
+ * @param rawText Texte brut issu du presse-papiers ou d'un fichier CSV/TSV
+ * @param currentRows Lignes actuelles du tableau vertical
+ * @param defaultUnit Unité par défaut définie sur le modèle de résultat
+ * @param startRowIndex Index de la ligne cible lors d'un collage direct dans une cellule
+ * @returns Nouveau tableau de lignes `VerticalRow[]` fusionné
+ */
+const parseAndMergeVerticalTableText = (
+  rawText: string,
+  currentRows: VerticalRow[],
+  defaultUnit: string,
+  startRowIndex = 0
+): VerticalRow[] => {
+  const lines = rawText
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) return currentRows;
+
+  /** Découpe une ligne en cellules selon le délimiteur détecté (Tabulation, point-virgule ou virgule hors nombres décimaux) */
+  const parseLineCells = (line: string): string[] => {
+    if (line.includes('\t')) return line.split('\t').map(c => c.trim().replace(/^"|"$/g, ''));
+    if (line.includes(';')) return line.split(';').map(c => c.trim().replace(/^"|"$/g, ''));
+    if (line.includes(',')) {
+      const parts = line.split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+      // Si la première colonne ressemble à un nom d'élément (contient des lettres) et non à un décimal type "12,4"
+      if (parts.length >= 2 && /[a-zA-Z]/.test(parts[0])) {
+        return parts;
+      }
+    }
+    return [line.replace(/^"|"$/g, '').trim()];
+  };
+
+  const parsedLines = lines.map(parseLineCells);
+
+  // Ignore une éventuelle première ligne d'en-tête (ex: "Élément;Valeur;Unité")
+  const firstLine = parsedLines[0];
+  const isHeader =
+    firstLine.length >= 2 &&
+    /^(el[eé]ment|param[eè]tre|symbole|analyte|nom)$/i.test(firstLine[0]) &&
+    /^(valeur|r[eé]sultat|concentration|mesure|teneur)$/i.test(firstLine[1]);
+
+  const dataLines = isHeader ? parsedLines.slice(1) : parsedLines;
+  if (dataLines.length === 0) return currentRows;
+
+  // Cas 1 : Une seule colonne de valeurs copiée depuis Excel -> remplit les valeurs à partir de startRowIndex
+  const isSingleValueColumn = dataLines.every(cells => cells.length === 1);
+  if (isSingleValueColumn) {
+    const nextRows = [...currentRows];
+    dataLines.forEach((cells, offset) => {
+      const targetIdx = startRowIndex + offset;
+      if (targetIdx < nextRows.length) {
+        nextRows[targetIdx] = { ...nextRows[targetIdx], value: cells[0] };
+      } else {
+        nextRows.push({ element: '', value: cells[0], unit: defaultUnit });
+      }
+    });
+    return nextRows;
+  }
+
+  // Cas 2 : Plusieurs colonnes (Élément | Valeur | [Unité]) -> associe par nom d'élément ou ajoute à la fin
+  const nextRows = currentRows.filter(
+    r => String(r.element || '').trim() !== '' || String(r.value || '').trim() !== ''
+  );
+
+  dataLines.forEach(cells => {
+    const elName = (cells[0] || '').trim();
+    const valStr = (cells[1] ?? '').trim();
+    const unitStr = (cells[2] ?? '').trim();
+    if (!elName && !valStr) return;
+
+    const existingIdx = nextRows.findIndex(
+      r => String(r.element || '').trim().toLowerCase() === elName.toLowerCase()
+    );
+
+    if (existingIdx !== -1) {
+      nextRows[existingIdx] = {
+        ...nextRows[existingIdx],
+        value: valStr,
+        unit: unitStr || nextRows[existingIdx].unit || defaultUnit
+      };
+    } else {
+      nextRows.push({
+        element: elName,
+        value: valStr,
+        unit: unitStr || defaultUnit
+      });
+    }
+  });
+
+  return nextRows.length > 0 ? nextRows : [{ element: '', value: '', unit: defaultUnit }];
+};
+
+/**
+ * Composant principal de suivi et de saisie des analyses de laboratoire.
+ */
 export function Analyses() {
-  const { 
-    currentUser, 
-    analyses, 
-    analysisTemplates, 
-    updateAnalysisStatus, 
-    updateAnalysisResult, 
-    addAnalysisImage, 
-    samples, 
-    requests, 
-    globalSearchQuery 
+  const {
+    currentUser,
+    users,
+    activeLabId,
+    analyses,
+    analysisTemplates,
+    updateAnalysisStatus,
+    updateAnalysisResult,
+    updateAnalysisMeta,
+    addAnalysisImage,
+    samples,
+    requests,
+    equipments,
+    consumables,
+    globalSearchQuery,
+    setGlobalSearchQuery
   } = useLims();
 
-  // États de recherche, d'affichage et de regroupement
+  /** Terme de recherche locale (ID d'analyse ou ID d'échantillon) */
   const [searchTerm, setSearchTerm] = useState('');
+  /** ID de l'analyse dont le journal d'audit (Audit Trail) est actuellement déplié */
   const [showAuditFor, setShowAuditFor] = useState<string | null>(null);
+  /** Mode de regroupement de l'affichage : liste plate ('none') ou par demande parente ('request') */
   const [groupBy, setGroupBy] = useState<'none' | 'request'>('none');
+  /** Onglet actif : 'actives' (essais à traiter / corriger) ou 'historique' (essais validés / terminés) */
   const [filterMode, setFilterMode] = useState<'actives' | 'historique'>('actives');
 
-  const isManager = currentUser?.role === 'manager';
+  /** Indique si l'utilisateur courant dispose des privilèges d'approbation/déverrouillage (Manager ou Admin) */
+  const isManager = (currentUser?.role === 'manager' || currentUser?.role === 'admin');
 
   /**
-   * Filtrage des analyses selon l'état d'activité, la recherche textuelle et les liens dossiers
+   * Indique si une valeur de résultat doit être considérée comme "non renseignée"
+   * (gère les types simples, séries numériques, tableaux verticaux et galeries de micrographies).
+   */
+  const isResultEmpty = (value: any): boolean => {
+    if (value === undefined || value === null) return true;
+    if (typeof value === 'string') return value.trim() === '';
+    if (Array.isArray(value)) {
+      return !value.some((v: any) => {
+        if (v && typeof v === 'object') return String(v.value ?? '').trim() !== '';
+        return v !== null && v !== undefined && String(v).trim() !== '';
+      });
+    }
+    if (typeof value === 'object' && Array.isArray(value.images)) return value.images.length === 0;
+    return false;
+  };
+
+  /**
+   * Soumet une analyse à la validation Manager après contrôle des résultats obligatoires
+   * (`ExpectedResult.required === true`). Bloque la soumission si un champ requis est vide.
+   */
+  const submitForValidation = (analysis: typeof analyses[number]) => {
+    const template = analysisTemplates.find(t => t.id === analysis.templateId);
+    const missing = (template?.expectedResults || [])
+      .filter(er => er.required && isResultEmpty(analysis.results?.[er.id]))
+      .map(er => er.name);
+    if (missing.length > 0) {
+      alert(`Impossible de soumettre : les résultats obligatoires suivants ne sont pas renseignés :\n- ${missing.join('\n- ')}`);
+      return;
+    }
+    updateAnalysisStatus(analysis.id, 'a_valider');
+  };
+
+  /**
+   * Synchronise automatiquement l'onglet ('actives' vs 'historique') et fait défiler jusqu'à l'analyse
+   * lorsqu'un manager clique sur une notification ciblant un essai (ex: ESS-26-0612).
+   */
+  useEffect(() => {
+    if (!globalSearchQuery) return;
+    const q = globalSearchQuery.trim().toLowerCase();
+    const targetAnalysis = analyses.find(
+      a => a.id.toLowerCase() === q || (a.sampleId && a.sampleId.toLowerCase() === q)
+    );
+    if (targetAnalysis) {
+      // Les analyses rejetées restent dans l'onglet 'actives' (à corriger par l'analyste)
+      if (targetAnalysis.status === 'valide' || targetAnalysis.status === 'termine') {
+        setFilterMode('historique');
+      } else {
+        setFilterMode('actives');
+      }
+      setTimeout(() => {
+        const el = document.getElementById(`analysis-card-${targetAnalysis.id}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
+    }
+  }, [globalSearchQuery, analyses]);
+
+  /**
+   * Liste des analyses filtrées selon l'état de préparation de l'échantillon parent,
+   * le mode d'affichage ('actives' vs 'historique'), la recherche locale/globale,
+   * et triées par ordre décroissant de priorité (haute > normale > basse).
    */
   const filteredAnalyses = analyses.filter(a => {
-    // Filtrage principal : en-cours vs historique
-    if (filterMode === 'actives' && (a.status === 'valide' || a.status === 'termine' || a.status === 'rejete')) {
-      return false;
-    }
-    if (filterMode === 'historique' && (a.status !== 'valide' && a.status !== 'termine' && a.status !== 'rejete')) {
+    const sample = samples.find(s => s.id === a.sampleId);
+
+    // Masquer l'analyse tant que l'échantillon n'est pas passé à l'étape "En essai" (ou "Terminé")
+    if (!sample || (sample.status !== 'en_essai' && sample.status !== 'termine')) {
       return false;
     }
 
-    // Masquage des essais rattachés à des dossiers déjà clôturés
-    const sample = samples.find(s => s.id === a.sampleId);
-    if (filterMode === 'actives' && sample && sample.requestId) {
+    // Une analyse rejetée ('rejete') reste dans 'actives' pour que l'analyste puisse la corriger et la resoumettre !
+    if (filterMode === 'actives' && (a.status === 'valide' || a.status === 'termine')) {
+      return false;
+    }
+    if (filterMode === 'historique' && (a.status !== 'valide' && a.status !== 'termine')) {
+      return false;
+    }
+
+    if (filterMode === 'actives' && sample.requestId) {
       const request = requests.find(r => r.id === sample.requestId);
-      if (request && (request.status === 'terminee' || request.status === 'rejetee')) {
+      // Si l'utilisateur recherche spécifiquement cette analyse via notification, on ne la masque pas
+      const isDirectlyTargeted = globalSearchQuery && a.id.toLowerCase() === globalSearchQuery.trim().toLowerCase();
+      if (!isDirectlyTargeted && request && (request.status === 'terminee' || request.status === 'rejetee')) {
         return false;
       }
     }
 
-    // Recherche textuelle sur l'identifiant et l'échantillon
-    const matchesSearch = a.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          (a.sampleId && a.sampleId.toLowerCase().includes(searchTerm.toLowerCase()));
-    
-    // Recherche globale transversale
+    const matchesSearch = a.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (a.sampleId && a.sampleId.toLowerCase().includes(searchTerm.toLowerCase()));
+
     if (globalSearchQuery) {
       const template = analysisTemplates.find(t => t.id === a.templateId);
       const q = globalSearchQuery.toLowerCase();
       if (!a.id.toLowerCase().includes(q) &&
-          !a.sampleId?.toLowerCase().includes(q) &&
-          !template?.name.toLowerCase().includes(q)) {
+        !a.sampleId?.toLowerCase().includes(q) &&
+        !sample?.barcode?.toLowerCase().includes(q) && //
+        !template?.name.toLowerCase().includes(q)) {
         return false;
       }
     }
-    
+
     return matchesSearch;
+  }).sort((a, b) => {
+    // Tri par priorité de l'échantillon afin de placer les urgences en tête de liste
+    const priorityWeight: Record<string, number> = { haute: 3, normale: 2, basse: 1 };
+    const sampleA = samples.find(s => s.id === a.sampleId);
+    const sampleB = samples.find(s => s.id === b.sampleId);
+    const prioA = priorityWeight[sampleA?.priority || 'normale'] || 2;
+    const prioB = priorityWeight[sampleB?.priority || 'normale'] || 2;
+    return prioB - prioA;
   });
 
   /**
-   * Rendu visuel du badge de statut d'analyse
+   * Retourne le badge visuel correspondant au statut de l'analyse.
+   * @param status Statut de l'analyse
    */
   const getStatusBadge = (status: AnalysisStatus) => {
     switch (status) {
-      case 'planifie': 
+      case 'planifie':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-800">Planifié</span>;
-      case 'en_cours': 
+      case 'En Cours':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">En cours</span>;
-      case 'a_valider': 
+      case 'a_valider':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">À valider</span>;
-      case 'valide': 
+      case 'valide':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">Validé</span>;
-      case 'termine': 
+      case 'termine':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">Terminé</span>;
-      case 'rejete': 
+      case 'rejete':
         return <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">Rejeté</span>;
     }
   };
 
   /**
-   * Ajout simulé d'une micrographie optique pour documenter l'essai
+   * Retourne le badge visuel de priorité s'il s'agit d'une priorité haute ou basse.
+   * @param priority Priorité effective de l'échantillon ou de la demande
    */
-  const handleMockImageUpload = (analysisId: string, resultId: string) => {
-    const mockImages = [
-      'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&q=80&w=400',
-      'https://images.unsplash.com/photo-1614935151651-0bea6508abb0?auto=format&fit=crop&q=80&w=400',
-      'https://images.unsplash.com/photo-1582719202047-76d3332be339?auto=format&fit=crop&q=80&w=400',
-    ];
-    const randomImg = mockImages[Math.floor(Math.random() * mockImages.length)];
-    updateAnalysisResult(analysisId, resultId, randomImg);
-    addAnalysisImage(analysisId, randomImg);
+  const getPriorityBadge = (priority?: string) => {
+    if (priority === 'haute') {
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700 border border-red-200">
+          Urgent
+        </span>
+      );
+    }
+    if (priority === 'basse') {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
+          Priorité basse
+        </span>
+      );
+    }
+    return null; // On n'affiche rien (ou un badge discret) si la priorité est normale
   };
 
   /**
-   * Rendu dynamique du champ de saisie selon le type attendu dans le modèle CMS
+   * Charge, compresse et ajoute une ou plusieurs images de micrographie dans un champ de résultat dédié.
+   * @param analysisId Identifiant de l'analyse
+   * @param resultId Identifiant du champ de résultat (`ExpectedResult.id`)
+   * @param files Liste des fichiers sélectionnés dans l'input file
+   * @param currentValue Valeur actuelle du champ de résultat
+   */
+  const handleMicrographyUpload = async (analysisId: string, resultId: string, files: FileList | null, currentValue: any) => {
+    if (!files?.length) return;
+    const existing: MicrographyImage[] = currentValue && Array.isArray(currentValue.images) ? currentValue.images : [];
+    try {
+      const additions = await Promise.all(Array.from(files).map(readMicrographyImage));
+      updateAnalysisResult(analysisId, resultId, { images: [...existing, ...additions] });
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Erreur pendant le chargement des images.');
+    }
+  };
+
+  /**
+   * Met à jour les métadonnées (nom ou commentaire d'observation) d'une micrographie existante.
+   * @param analysisId Identifiant de l'analyse
+   * @param resultId Identifiant du champ de résultat
+   * @param currentValue Valeur actuelle du résultat contenant le tableau `images`
+   * @param imageId Identifiant unique de l'image à modifier
+   * @param updates Propriétés partielles à mettre à jour (`name`, `comment`)
+   */
+  const updateMicrographyImage = (analysisId: string, resultId: string, currentValue: any, imageId: string, updates: Partial<MicrographyImage>) => {
+    const images: MicrographyImage[] = Array.isArray(currentValue?.images) ? currentValue.images : [];
+    updateAnalysisResult(analysisId, resultId, { images: images.map(img => img.id === imageId ? { ...img, ...updates } : img) });
+  };
+
+  /**
+   * Rendu de l'interface de gestion des micrographies (ajout multiple, renommage, commentaire, suppression).
+   */
+  const renderMicrographyInput = (analysisId: string, resultId: string, currentValue: any, disabled: boolean) => {
+    const images: MicrographyImage[] = Array.isArray(currentValue?.images) ? currentValue.images : [];
+    return (
+      <div className="mt-2 space-y-3 sm:col-span-2">
+        <label className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed px-3 py-3 text-sm font-medium transition-colors ${disabled ? 'cursor-not-allowed bg-slate-100 text-slate-400' : 'border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100'}`}>
+          <UploadCloud className="h-4 w-4" /> Ajouter une ou plusieurs images
+          <input type="file" accept="image/*" multiple disabled={disabled} className="hidden" onChange={e => { void handleMicrographyUpload(analysisId, resultId, e.target.files, currentValue); e.currentTarget.value = ''; }} />
+        </label>
+        <p className="text-xs text-slate-500">Images redimensionnées automatiquement pour limiter la taille des données. Le nom et le commentaire de chaque image sont modifiables.</p>
+        {images.length > 0 && (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {images.map((img, index) => (
+              <div key={img.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+                <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2 bg-slate-50/50">
+                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                    <span className="shrink-0 text-xs font-semibold text-slate-500">
+                      Image {index + 1} ·
+                    </span>
+                    <input
+                      type="text"
+                      value={img.name || ''}
+                      disabled={disabled}
+                      onChange={e => updateMicrographyImage(analysisId, resultId, currentValue, img.id, { name: e.target.value })}
+                      placeholder="Nom de l'image..."
+                      title="Modifier le nom de l'image"
+                      className="w-full min-w-0 rounded border border-transparent bg-transparent px-1.5 py-0.5 text-xs font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:bg-white focus:border-indigo-400 focus:bg-white focus:outline-none disabled:hover:border-transparent disabled:hover:bg-transparent"
+                    />
+                  </div>
+                  {!disabled && (
+                    <button
+                      type="button"
+                      title="Supprimer l’image"
+                      onClick={() => updateAnalysisResult(analysisId, resultId, { images: images.filter(item => item.id !== img.id) })}
+                      className="shrink-0 rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                <img src={img.dataUrl} alt={img.name || `Micrographie ${index + 1}`} className="max-h-64 w-full bg-slate-50 object-contain" />
+                <div className="p-3">
+                  <label className="mb-1 block text-xs font-medium text-slate-600">Commentaire (facultatif)</label>
+                  <textarea
+                    value={img.comment || ''}
+                    disabled={disabled}
+                    onChange={e => updateMicrographyImage(analysisId, resultId, currentValue, img.id, { comment: e.target.value })}
+                    rows={2}
+                    placeholder="Observation liée à cette image…"
+                    className="w-full resize-y rounded-md border border-slate-200 px-2 py-1.5 text-sm focus:border-indigo-400 focus:outline-none disabled:bg-slate-50"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  /**
+   * Fabrique dynamiquement le composant de saisie adapté à la typologie du résultat attendu (`ExpectedResult.type`) :
+   * - `micrography` : galerie d'images avec commentaires
+   * - `image` : image simple
+   * - `select` / `multiselect` : choix prédéfinis
+   * - `number_series` : série de mesures numériques avec calcul automatique Moyenne / Écart-type (formule de Bessel n-1)
+   * - `vertical_table` : tableau d'éléments chimiques avec import CSV/TXT et collage presse-papiers Excel
+   * - `boolean` / `number` / `text` : champs unitaires standards
    */
   const renderInputForResult = (analysisId: string, resultTemplate: ExpectedResult, currentValue: any, status: AnalysisStatus) => {
-    // Verrouillage de la saisie selon le rôle et le statut
+    // Verrouillage de la saisie : un technicien ne peut plus modifier dès que le statut est 'a_valider', 'valide' ou 'termine'.
+    // Un manager peut encore éditer tant que le statut n'est pas 'termine'.
     const disabled = (!isManager && (status === 'a_valider' || status === 'valide' || status === 'termine')) || (isManager && status === 'termine');
-    
-    // Type Image Micrographique
+
+    if (resultTemplate.type === 'micrography') {
+      return renderMicrographyInput(analysisId, resultTemplate.id, currentValue, disabled);
+    }
+
     if (resultTemplate.type === 'image') {
       return (
-        <div className="flex items-center gap-2 mt-2">
-          {currentValue || (status === 'valide' && analyses.find(a => a.id === analysisId)?.images.length) ? (
-            <div className="flex items-center text-emerald-600 text-xs font-medium bg-emerald-50 px-2 py-1 rounded border border-emerald-100">
-              <ImageIcon className="w-3 h-3 mr-1" />
-              Image attachée
-            </div>
-          ) : (
-            <button 
-              onClick={() => handleMockImageUpload(analysisId, resultTemplate.id)} 
-              disabled={disabled} 
-              className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded flex items-center border border-slate-200 transition-colors disabled:opacity-50"
-            >
-              <UploadCloud className="w-3 h-3 mr-1.5" /> Charger une image
-            </button>
-          )}
+        <div className="mt-2">
+          <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-indigo-700">
+            <UploadCloud className="h-4 w-4" /> {currentValue ? 'Remplacer l’image' : 'Charger une image'}
+            <input type="file" accept="image/*" disabled={disabled} className="hidden" onChange={async e => {
+              const input = e.currentTarget;
+              const file = input.files?.[0];
+              if (!file) return;
+              try { const image = await readMicrographyImage(file); updateAnalysisResult(analysisId, resultTemplate.id, image.dataUrl); addAnalysisImage(analysisId, image.dataUrl); }
+              catch (error) { alert(error instanceof Error ? error.message : 'Erreur pendant le chargement.'); }
+              input.value = '';
+            }} />
+          </label>
+          {typeof currentValue === 'string' && currentValue && <img src={currentValue} alt={resultTemplate.name} className="mt-2 max-h-40 rounded border border-slate-200 object-contain" />}
         </div>
       );
     }
-    
-    // Type Liste Déroulante Simple
+
     if (resultTemplate.type === 'select') {
       return (
         <div className="flex items-center gap-2 mt-1">
@@ -162,7 +504,6 @@ export function Analyses() {
       );
     }
 
-    // Type Sélection Multiple
     if (resultTemplate.type === 'multiselect') {
       const currentValues = Array.isArray(currentValue) ? currentValue : [];
       return (
@@ -180,11 +521,10 @@ export function Analyses() {
                     : [...currentValues, opt];
                   updateAnalysisResult(analysisId, resultTemplate.id, newValues);
                 }}
-                className={`px-3 py-1.5 text-sm font-medium rounded-full border transition-colors disabled:opacity-50 ${
-                  isSelected 
-                    ? 'bg-blue-100 text-blue-800 border-blue-300' 
-                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                }`}
+                className={`px-3 py-1.5 text-sm font-medium rounded-full border transition-colors disabled:opacity-50 ${isSelected
+                  ? 'bg-blue-100 text-blue-800 border-blue-300'
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                  }`}
               >
                 {opt}
               </button>
@@ -194,13 +534,17 @@ export function Analyses() {
       );
     }
 
-    // Type Série de Mesures avec Calculs Statistiques (Moyenne, Écart-Type)
+    // Saisie de séries numériques (ex: empreintes de dureté multiples) avec statistiques automatiques
     if (resultTemplate.type === 'number_series') {
-      const currentValues = Array.isArray(currentValue) ? currentValue : (currentValue ? [currentValue] : []);
-      const numValues = currentValues.map(v => Number(v)).filter(v => !isNaN(v));
+      const currentValues = Array.isArray(currentValue) ? currentValue : (currentValue !== undefined && currentValue !== '' ? [currentValue] : []);
+      const numValues = currentValues
+        .filter(v => v !== '' && v !== null && v !== undefined && String(v).trim() !== '')
+        .map(v => Number(v))
+        .filter(v => !isNaN(v));
+      // Calcul de la moyenne arithmétique et de l'écart-type d'échantillon (divisé par n - 1)
       const mean = numValues.length > 0 ? numValues.reduce((a, b) => a + b, 0) / numValues.length : null;
-      const variance = numValues.length > 1 
-        ? numValues.reduce((a, b) => a + Math.pow(b - mean!, 2), 0) / (numValues.length - 1) 
+      const variance = numValues.length > 1
+        ? numValues.reduce((a, b) => a + Math.pow(b - mean!, 2), 0) / (numValues.length - 1)
         : null;
       const stdDev = variance !== null ? Math.sqrt(variance) : null;
 
@@ -221,12 +565,12 @@ export function Analyses() {
                   disabled={disabled}
                 />
                 {!disabled && (
-                  <button 
+                  <button
                     onClick={() => {
                       const newValues = [...currentValues];
                       newValues.splice(idx, 1);
                       updateAnalysisResult(analysisId, resultTemplate.id, newValues);
-                    }} 
+                    }}
                     className="text-red-400 hover:text-red-600"
                   >
                     <X className="w-3 h-3" />
@@ -235,15 +579,43 @@ export function Analyses() {
               </div>
             ))}
             {!disabled && (
-              <button
-                type="button"
-                onClick={() => {
-                  updateAnalysisResult(analysisId, resultTemplate.id, [...currentValues, '']);
-                }}
-                className="text-xs flex items-center text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-1 rounded"
-              >
-                <Plus className="w-3 h-3 mr-1" /> Ajouter valeur
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    updateAnalysisResult(analysisId, resultTemplate.id, [...currentValues, '']);
+                  }}
+                  className="text-xs flex items-center text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-1 rounded"
+                >
+                  <Plus className="w-3 h-3 mr-1" /> Ajouter valeur
+                </button>
+                <label
+                  className="text-xs flex items-center text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2 py-1 rounded cursor-pointer"
+                  title="Importer les valeurs numériques depuis un export machine (.csv / .txt)"
+                >
+                  <Upload className="w-3 h-3 mr-1" /> Importer CSV
+                  <input
+                    type="file"
+                    accept=".csv,.txt"
+                    className="hidden"
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        const raw = String(reader.result || '');
+                        const tokens = raw.split(/[\r\n;,\t]+/).map(s => s.trim().replace(',', '.'));
+                        const parsed = tokens.filter(t => t !== '' && !isNaN(Number(t)));
+                        if (parsed.length > 0) {
+                          updateAnalysisResult(analysisId, resultTemplate.id, parsed);
+                        }
+                      };
+                      reader.readAsText(file);
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+              </>
             )}
           </div>
           {numValues.length > 0 && (
@@ -258,7 +630,233 @@ export function Analyses() {
       );
     }
 
-    // Type Booléen (Conforme / Non Conforme)
+    // Tableau vertical (ex: composition chimique multi-éléments ICP/OES)
+    if (resultTemplate.type === 'vertical_table') {
+      const defaultUnit = resultTemplate.unit || '';
+      const templateElements = Array.isArray(resultTemplate.options)
+        ? resultTemplate.options.flatMap(opt => String(opt).split(/[,;\n]+/)).map(s => s.trim()).filter(Boolean)
+        : [];
+
+      // Vérifie si currentValue contient réellement des lignes non vides
+      const savedRows: VerticalRow[] = Array.isArray(currentValue)
+        ? currentValue.filter(r => r && typeof r === 'object')
+        : [];
+
+      const isOnlyEmptyPlaceholder =
+        savedRows.length === 1 &&
+        !String(savedRows[0].element || '').trim() &&
+        !String(savedRows[0].value || '').trim();
+
+      let rows: VerticalRow[];
+
+      if (savedRows.length > 0 && !isOnlyEmptyPlaceholder) {
+        // S'il y a des éléments dans le modèle qui ne sont pas encore dans les lignes sauvegardées, on les ajoute à la suite
+        const existingElements = new Set(savedRows.map(r => String(r.element || '').trim().toLowerCase()));
+        const missingFromTemplate = templateElements
+          .filter(el => !existingElements.has(el.toLowerCase()))
+          .map(el => ({ element: el, value: '', unit: defaultUnit }));
+        rows = [...savedRows, ...missingFromTemplate];
+      } else if (templateElements.length > 0) {
+        rows = templateElements.map(opt => ({ element: opt, value: '', unit: defaultUnit }));
+      } else {
+        rows = [{ element: '', value: '', unit: defaultUnit }];
+      }
+
+      /** Persiste la mise à jour du tableau vertical dans le store global */
+      const updateRows = (nextRows: VerticalRow[]) => {
+        updateAnalysisResult(analysisId, resultTemplate.id, nextRows);
+      };
+
+      /** Importe et fusionne un fichier CSV/TXT/TSV local dans le tableau vertical */
+      const handleFileImport = (file: File | undefined) => {
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const content = String(ev.target?.result || '');
+          const merged = parseAndMergeVerticalTableText(content, rows, defaultUnit, 0);
+          updateRows(merged);
+        };
+        reader.readAsText(file);
+      };
+
+      /** Lit le presse-papiers (ou ouvre une invite manuelle en fallback) pour coller des colonnes Excel */
+      const handleClipboardPasteButton = async () => {
+        try {
+          const text = await navigator.clipboard.readText();
+          if (text && text.trim()) {
+            const merged = parseAndMergeVerticalTableText(text, rows, defaultUnit, 0);
+            updateRows(merged);
+            return;
+          }
+        } catch {
+          // Si le navigateur bloque navigator.clipboard, on ouvre une boîte de saisie rapide
+        }
+        const manualText = window.prompt(
+          'Collez ici vos lignes copiées depuis Excel ou CSV (Format : Élément [Tab/;] Valeur [Tab/;] Unité, ou une colonne de valeurs) :'
+        );
+        if (manualText && manualText.trim()) {
+          const merged = parseAndMergeVerticalTableText(manualText, rows, defaultUnit, 0);
+          updateRows(merged);
+        }
+      };
+
+      return (
+        <div className="mt-2 sm:col-span-2">
+          <div className="max-h-96 overflow-y-auto border border-slate-200 rounded-lg bg-white shadow-xs">
+            <table className="w-full text-xs text-left border-collapse">
+              <thead className="bg-slate-100 text-slate-600 uppercase sticky top-0 z-10 border-b border-slate-200">
+                <tr>
+                  <th className="py-2 px-3 font-semibold w-2/5">Élément / Paramètre</th>
+                  <th className="py-2 px-3 font-semibold w-2/5">Résultat / Valeur</th>
+                  <th className="py-2 px-3 font-semibold w-1/5">Unité</th>
+                  {!disabled && <th className="py-2 px-2 w-8"></th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {rows.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50/80">
+                    <td className="p-1.5 px-2">
+                      <input
+                        type="text"
+                        value={row.element}
+                        disabled={disabled}
+                        onPaste={(e) => {
+                          const text = e.clipboardData.getData('text/plain');
+                          if (text && (text.includes('\n') || text.includes('\t'))) {
+                            e.preventDefault();
+                            updateRows(parseAndMergeVerticalTableText(text, rows, defaultUnit, idx));
+                          }
+                        }}
+                        onChange={(e) => {
+                          const next = rows.map((r, i) => i === idx ? { ...r, element: e.target.value } : r);
+                          updateRows(next);
+                        }}
+                        placeholder="Ex: Fe, Cr, Ni..."
+                        className="w-full px-2 py-1 border border-slate-200 rounded text-xs font-semibold text-slate-800 focus:border-blue-500 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </td>
+                    <td className="p-1.5 px-2">
+                      <input
+                        type="text"
+                        value={row.value}
+                        disabled={disabled}
+                        onPaste={(e) => {
+                          const text = e.clipboardData.getData('text/plain');
+                          if (text && (text.includes('\n') || text.includes('\t'))) {
+                            e.preventDefault();
+                            updateRows(parseAndMergeVerticalTableText(text, rows, defaultUnit, idx));
+                          }
+                        }}
+                        onChange={(e) => {
+                          const next = rows.map((r, i) => i === idx ? { ...r, value: e.target.value } : r);
+                          updateRows(next);
+                        }}
+                        placeholder="Ex: 12.4 ou < 0.01"
+                        className="w-full px-2 py-1 border border-slate-200 rounded text-xs text-slate-900 focus:border-blue-500 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </td>
+                    <td className="p-1.5 px-2">
+                      <input
+                        type="text"
+                        value={row.unit ?? defaultUnit}
+                        disabled={disabled}
+                        onChange={(e) => {
+                          const next = rows.map((r, i) => i === idx ? { ...r, unit: e.target.value } : r);
+                          updateRows(next);
+                        }}
+                        placeholder={defaultUnit || 'ppm, %'}
+                        className="w-full px-2 py-1 border border-slate-200 rounded text-xs text-slate-600 focus:border-blue-500 focus:outline-none disabled:bg-slate-50"
+                      />
+                    </td>
+                    {!disabled && (
+                      <td className="p-1.5 text-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = rows.filter((_, i) => i !== idx);
+                            updateRows(next);
+                          }}
+                          className="text-slate-400 hover:text-red-600 p-1"
+                          title="Supprimer la ligne"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {!disabled && (
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => updateRows([...rows, { element: '', value: '', unit: defaultUnit }])}
+                  className="text-xs flex items-center text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2.5 py-1.5 rounded font-medium"
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1" /> Ajouter un élément
+                </button>
+
+                <label
+                  className="text-xs flex items-center text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1.5 rounded font-medium cursor-pointer"
+                  title="Importer un fichier CSV ou TXT (colonnes : Élément ; Valeur ; Unité)"
+                >
+                  <UploadCloud className="w-3.5 h-3.5 mr-1" /> Importer CSV / TXT
+                  <input
+                    type="file"
+                    accept=".csv,.txt,.tsv"
+                    className="hidden"
+                    onChange={(e) => {
+                      handleFileImport(e.target.files?.[0]);
+                      e.currentTarget.value = '';
+                    }}
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={handleClipboardPasteButton}
+                  className="text-xs flex items-center text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1.5 rounded font-medium"
+                  title="Coller directement des colonnes copiées depuis Excel"
+                >
+                  <ClipboardPaste className="w-3.5 h-3.5 mr-1" /> Coller depuis Excel
+                </button>
+
+                {templateElements.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const existingMap = new Map<string, VerticalRow>(
+                        rows.map(r => [String(r.element || '').trim().toLowerCase(), r] as [string, VerticalRow])
+                      );
+                      const resetRows = templateElements.map(el => {
+                        const prev = existingMap.get(el.toLowerCase());
+                        return {
+                          element: el,
+                          value: prev?.value || '',
+                          unit: prev?.unit || defaultUnit
+                        };
+                      });
+                      updateRows(resetRows);
+                    }}
+                    className="text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-200 px-2.5 py-1.5 rounded font-medium"
+                    title="Recharger les éléments définis dans le modèle d'analyse"
+                  >
+                    Charger la liste du modèle ({templateElements.length})
+                  </button>
+                )}
+              </div>
+              <span className="text-[11px] text-slate-400">
+                {rows.filter(r => String(r.value).trim() !== '').length} / {rows.length} élément(s) renseigné(s)
+              </span>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     if (resultTemplate.type === 'boolean') {
       return (
         <div className="flex items-center gap-2 mt-2">
@@ -275,11 +873,10 @@ export function Analyses() {
         </div>
       );
     }
-    
-    // Type Numérique ou Texte Simple
+
     return (
       <div className="flex items-center gap-2 mt-1">
-        <input 
+        <input
           type={resultTemplate.type === 'number' ? 'number' : 'text'}
           value={currentValue !== undefined ? currentValue : ''}
           onChange={(e) => updateAnalysisResult(analysisId, resultTemplate.id, e.target.value)}
@@ -293,17 +890,33 @@ export function Analyses() {
   };
 
   /**
-   * Rendu de la liste des cartes d'essais individuelles
+   * Génère le rendu de la liste des cartes d'analyses (métadonnées à gauche, formulaire de résultats au centre,
+   * boutons de transition du workflow d'approbation à droite, et journal d'audit dépliable en bas).
+   * @param analysesList Liste des analyses à afficher
    */
   const renderAnalysesList = (analysesList: typeof analyses) => {
     return analysesList.map((analysis) => {
       const template = analysisTemplates.find(t => t.id === analysis.templateId);
       if (!template) return null;
-      
+
+      const sample = samples.find(s => s.id === analysis.sampleId);
+      const request = sample?.requestId ? requests.find(r => r.id === sample.requestId) : undefined;
+      const effectivePriority = sample?.priority || request?.priority || 'normale';
+
       const isAnalysisLocked = (!isManager && (analysis.status === 'a_valider' || analysis.status === 'valide' || analysis.status === 'termine')) || (isManager && analysis.status === 'termine');
+      const isHighlighted = globalSearchQuery && analysis.id.toLowerCase() === globalSearchQuery.trim().toLowerCase();
 
       return (
-        <li key={analysis.id} className="p-4 sm:p-6 hover:bg-slate-50/30 transition-colors">
+        <li
+          key={analysis.id}
+          id={`analysis-card-${analysis.id}`}
+          className={`p-4 sm:p-6 transition-colors ${isHighlighted
+            ? 'bg-amber-50/40 ring-2 ring-inset ring-amber-300'
+            : effectivePriority === 'haute'
+              ? 'bg-red-50/20 hover:bg-red-50/40 border-l-4 border-l-red-500'
+              : 'hover:bg-slate-50/30'
+            }`}
+        >
           <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-6">
             {/* Colonne de gauche : Métadonnées de l'essai */}
             <div className="flex items-start flex-1">
@@ -311,95 +924,293 @@ export function Analyses() {
                 <Microscope className="h-5 w-5 text-indigo-600" />
               </div>
               <div className="ml-4">
-                <div className="flex items-center gap-3 mb-1">
+                <div className="flex flex-wrap items-center gap-2.5 mb-1">
+                  <span className="font-mono text-xs font-bold bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded">
+                    {analysis.id}
+                  </span>
                   <h3 className="text-base font-bold text-slate-900">{template.name}</h3>
                   {getStatusBadge(analysis.status)}
+                  {getPriorityBadge(effectivePriority)}
                 </div>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-500 mb-3">
                   <span>Échantillon: <strong className="text-blue-600">{analysis.sampleId}</strong></span>
                   <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 text-xs">
                     {template.standardRef || 'Méthode interne'}
                   </span>
-                  <span>Tech: <strong className="text-slate-700">{analysis.technician}</strong></span>
-                </div>
-                <p className="text-xs text-slate-500">{template.description}</p>
-              </div>
-            </div>
-            
-            {/* Colonne de droite : Saisie des résultats et contrôle du workflow */}
-            <div className="flex flex-col sm:flex-row gap-6 xl:justify-end xl:w-3/5">
-              
-              {/* Matrice de saisie des résultats */}
-              <div className="flex-1 bg-slate-50 rounded-lg border border-slate-200 p-4 relative">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Saisie des résultats</h4>
-                  {isAnalysisLocked && (
-                    <div className="flex items-center text-[10px] font-bold uppercase text-slate-500 bg-slate-200 px-2 py-1 rounded">
-                      <Lock className="w-3 h-3 mr-1" />
-                      Verrouillé
-                    </div>
+                  {template.sopDocumentData && (
+                    <a
+                      href={template.sopDocumentData}
+                      download={template.sopDocumentName || `${template.id}_mode_operatoire.pdf`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded"
+                      title={`Consulter le mode opératoire${template.sopVersion ? ` (${template.sopVersion})` : ''}`}
+                    >
+                      📄 Mode Opératoire{template.sopVersion ? ` (${template.sopVersion})` : ''}
+                    </a>
+                  )}
+                  {(currentUser?.role === 'manager' || currentUser?.role === 'admin') ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <span>Tech:</span>
+                      <select
+                        value={analysis.technician || 'Non assigné'}
+                        onChange={e => updateAnalysisMeta(analysis.id, { technician: e.target.value })}
+                        className="text-xs border border-slate-300 rounded px-1.5 py-0.5 bg-white text-slate-800 font-medium"
+                        title="Assigner cet essai à un opérateur habilité (ISO 17025 §6.2)"
+                      >
+                        <option value="Non assigné">Non assigné</option>
+                        {users
+                          .filter(u =>
+                            (u.role === 'analyste' || u.role === 'manager') &&
+                            (!u.labId || u.labId === 'all' || u.labId === (analysis.labId || activeLabId))
+                          )
+                          .map(u => {
+                            const hasQual = (u.qualifiedTemplateIds || []).includes(analysis.templateId);
+                            const expStr = u.qualificationExpiries?.[analysis.templateId];
+                            const isQualExpired = expStr
+                              ? new Date(expStr).getTime() < new Date().setHours(0, 0, 0, 0)
+                              : false;
+                            const validQual = hasQual && !isQualExpired;
+                            return (
+                              <option
+                                key={u.id}
+                                value={u.name}
+                                disabled={!validQual && analysis.technician !== u.name}
+                              >
+                                {u.name} {validQual ? '✓' : isQualExpired ? '(Habilit. expirée)' : '(Non habilité)'}
+                              </option>
+                            );
+                          })}
+                      </select>
+                    </span>
+                  ) : (
+                    <span>Tech: <strong className="text-slate-700">{analysis.technician}</strong></span>
                   )}
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {template.expectedResults.map(expectedResult => (
-                    <div key={expectedResult.id}>
-                      <label className="text-xs font-semibold text-slate-700">
-                        {expectedResult.name} {expectedResult.required && <span className="text-red-500">*</span>}
-                      </label>
-                      {renderInputForResult(analysis.id, expectedResult, analysis.results[expectedResult.id], analysis.status)}
-                    </div>
-                  ))}
-                </div>
-                
-                {analysis.images.length > 0 && (
-                  <div className="mt-4 pt-3 border-t border-slate-200">
-                    <h4 className="text-xs font-semibold text-slate-500 mb-2">Micrographies jointes :</h4>
-                    <div className="flex gap-2 overflow-x-auto">
-                      {analysis.images.map((img, i) => (
-                        <img key={i} src={img} alt="micrographie" className="h-16 w-16 object-cover rounded border border-slate-300" />
-                      ))}
-                    </div>
+                <p className="text-xs text-slate-500">{template.description}</p>
+                {analysis.status === 'rejete' && (
+                  <div className="mt-2 p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-800">
+                    <strong>Essai refusé par le manager :</strong> {analysis.rejectionReason || 'Veuillez vérifier et corriger les résultats saisis.'}
                   </div>
                 )}
               </div>
+            </div>
+
+            {/* Colonne de droite : Saisie des résultats et contrôle du workflow */}
+            <div className="flex flex-col sm:flex-row gap-6 xl:justify-end xl:w-3/5">
+
+              {/* Affiché uniquement si l'essai est démarré (statut différent de 'planifie') */}
+              {analysis.status !== 'planifie' ? (
+                <div className="flex-1 bg-slate-50 rounded-lg border border-slate-200 p-4 relative">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Saisie des résultats</h4>
+                    {isAnalysisLocked && (
+                      <div className="flex items-center text-[10px] font-bold uppercase text-slate-500 bg-slate-200 px-2 py-1 rounded">
+                        <Lock className="w-3 h-3 mr-1" />
+                        Verrouillé
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Traçabilité Métrologique (Équipement utilisé + Contrôle d'étalonnage ISO 17025 §6.4) & Lots de consommables */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4 pb-3 border-b border-slate-200">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Équipement de mesure (ISO 17025)</label>
+                      <select
+                        disabled={isAnalysisLocked}
+                        value={analysis.equipmentId || ''}
+                        onChange={e => updateAnalysisMeta(analysis.id, { equipmentId: e.target.value || undefined })}
+                        className="w-full text-xs border border-slate-300 rounded-md px-2 py-1.5 bg-white"
+                      >
+                        <option value="">Sélectionner un instrument...</option>
+                        {equipments.map(eq => {
+                          const days = getCalibrationDaysRemaining(eq.nextCalibrationDate);
+                          const expired = days < 0 || eq.status !== 'operationnel';
+                          return (
+                            <option key={eq.id} value={eq.id} disabled={expired && analysis.equipmentId !== eq.id}>
+                              {eq.code} — {eq.name} {expired ? '(BLOQUÉ : étalonnage expiré / HS)' : `(OK ${days}j)`}
+                            </option>
+                          );
+                        })}
+                      </select>
+                      {analysis.equipmentId && (() => {
+                        const eq = equipments.find(e => e.id === analysis.equipmentId);
+                        if (!eq) return null;
+                        const days = getCalibrationDaysRemaining(eq.nextCalibrationDate);
+                        if (days < 0 || eq.status !== 'operationnel') {
+                          return (
+                            <div className="mt-1 space-y-1">
+                              <p className="text-[11px] text-red-600 font-semibold">
+                                ⚠ Équipement hors validité métrologique ({days < 0 ? `expiré depuis ${Math.abs(days)}j` : eq.status}).
+                              </p>
+                              {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && !isAnalysisLocked && (
+                                <input
+                                  type="text"
+                                  value={analysis.calibrationOverrideReason || ''}
+                                  onChange={e => updateAnalysisMeta(analysis.id, { calibrationOverrideReason: e.target.value })}
+                                  placeholder="Justification de dérogation manager (ISO 17025)..."
+                                  className="w-full text-[11px] border border-red-300 bg-red-50/50 rounded px-2 py-1 text-red-900"
+                                />
+                              )}
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Lot consommable / réactif utilisé</label>
+                      <select
+                        disabled={isAnalysisLocked}
+                        defaultValue=""
+                        onChange={e => {
+                          const cons = consumables.find(c => c.id === e.target.value);
+                          if (!cons) return;
+                          updateAnalysisMeta(analysis.id, {
+                            consumableLotsUsed: [
+                              ...(analysis.consumableLotsUsed || []),
+                              { consumableId: cons.id, name: cons.name, lotNumber: cons.lotNumber }
+                            ]
+                          });
+                          e.target.value = '';
+                        }}
+                        className="w-full text-xs border border-slate-300 rounded-md px-2 py-1.5 bg-white"
+                      >
+                        <option value="">+ Tracer un lot utilisé...</option>
+                        {consumables.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}{c.lotNumber ? ` [${c.lotNumber}]` : ''}</option>
+                        ))}
+                      </select>
+                      {(analysis.consumableLotsUsed || []).length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {(analysis.consumableLotsUsed || []).map((l, idx) => (
+                            <span key={idx} className="text-[10px] px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded border border-indigo-200">
+                              {l.name}{l.lotNumber ? ` (${l.lotNumber})` : ''}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {template.expectedResults.map(expectedResult => {
+                      const rawVal = analysis.results[expectedResult.id];
+                      // Calcul automatique de conformité par rapport aux bornes minSpec / maxSpec (ISO 17025 §7.8.6)
+                      let numericVal: number | null = null;
+                      if (expectedResult.type === 'number' && rawVal !== '' && rawVal !== undefined && rawVal !== null) {
+                        const n = Number(rawVal);
+                        if (!Number.isNaN(n)) numericVal = n;
+                      } else if (expectedResult.type === 'number_series' && Array.isArray(rawVal)) {
+                        const nums = rawVal.map(Number).filter(n => !Number.isNaN(n));
+                        if (nums.length > 0) numericVal = nums.reduce((a, b) => a + b, 0) / nums.length;
+                      }
+                      const hasSpec = expectedResult.minSpec !== undefined || expectedResult.maxSpec !== undefined;
+                      const isCompliant = numericVal !== null && hasSpec
+                        ? (expectedResult.minSpec === undefined || numericVal >= expectedResult.minSpec) &&
+                          (expectedResult.maxSpec === undefined || numericVal <= expectedResult.maxSpec)
+                        : null;
+
+                      return (
+                        <div key={expectedResult.id} className={(expectedResult.type === 'micrography' || expectedResult.type === 'vertical_table') ? 'sm:col-span-2' : ''}>
+                          <div className="flex flex-wrap items-center justify-between gap-1">
+                            <label className="text-xs font-semibold text-slate-700">
+                              {expectedResult.name} {expectedResult.required && <span className="text-red-500">*</span>}
+                              {expectedResult.uncertainty !== undefined && (
+                                <span className="ml-1 text-[10px] font-mono text-slate-400">(± {expectedResult.uncertainty}{expectedResult.unit ? ` ${expectedResult.unit}` : ''})</span>
+                              )}
+                            </label>
+                            {hasSpec && (
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                isCompliant === null ? 'bg-slate-100 text-slate-500' :
+                                isCompliant ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
+                              }`}>
+                                {isCompliant === null
+                                  ? `Spéc: [${expectedResult.minSpec ?? '-∞'} ; ${expectedResult.maxSpec ?? '+∞'}]`
+                                  : isCompliant ? '✓ Conforme' : '✗ Hors spéc.'}
+                              </span>
+                            )}
+                          </div>
+                          {renderInputForResult(analysis.id, expectedResult, analysis.results[expectedResult.id], analysis.status)}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {analysis.images.length > 0 && (
+                    <div className="mt-4 pt-3 border-t border-slate-200">
+                      <h4 className="text-xs font-semibold text-slate-500 mb-2">Micrographies jointes :</h4>
+                      <div className="flex gap-2 overflow-x-auto">
+                        {analysis.images.map((img, i) => (
+                          <img key={i} src={img} alt="micrographie" className="h-16 w-16 object-cover rounded border border-slate-300" />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex-1 bg-slate-50/50 rounded-lg border border-dashed border-slate-200 p-6 flex flex-col items-center justify-center text-center">
+                  <p className="text-xs text-slate-400 italic">
+                    La saisie des résultats sera disponible une fois que l'essai aura été démarré.
+                  </p>
+                </div>
+              )}
 
               {/* Boutons d'avancement du cycle d'approbation */}
-              <div className="flex flex-col items-end gap-2 sm:w-40 sm:border-l sm:border-slate-200 sm:pl-6 justify-center">
+              <div className="flex flex-col items-end gap-2 sm:w-44 sm:border-l sm:border-slate-200 sm:pl-6 justify-center">
                 {analysis.status === 'planifie' && (
-                  <button 
-                    onClick={() => updateAnalysisStatus(analysis.id, 'en_cours')}
+                  <button
+                    onClick={() => updateAnalysisStatus(analysis.id, 'En Cours')}
                     className="w-full text-xs px-3 py-2 bg-blue-50 text-blue-700 rounded-md font-medium hover:bg-blue-100 transition-colors text-center"
                   >
                     Démarrer l'essai
                   </button>
                 )}
-                {analysis.status === 'en_cours' && (
-                  <button 
-                    onClick={() => updateAnalysisStatus(analysis.id, 'a_valider')}
-                    className="w-full text-xs px-3 py-2 bg-amber-50 text-amber-700 rounded-md font-medium hover:bg-amber-100 transition-colors text-center"
+
+                {/* L'analyste peut soumettre ou resoumettre si l'essai est 'En Cours' OU 'rejete' */}
+                {(analysis.status === 'En Cours' || analysis.status === 'rejete') && (
+                  <button
+                    onClick={() => submitForValidation(analysis)}
+                    className="w-full text-xs px-3 py-2 bg-amber-500 text-white rounded-md font-medium hover:bg-amber-600 transition-colors text-center shadow-xs"
                   >
-                    Soumettre résultats
+                    {analysis.status === 'rejete' ? 'Corriger & Resoumettre' : 'Soumettre résultats'}
                   </button>
                 )}
+
                 {analysis.status === 'a_valider' && isManager && (
                   <>
-                    <button 
+                    <button
                       onClick={() => updateAnalysisStatus(analysis.id, 'valide')}
                       className="w-full text-xs px-3 py-2 bg-emerald-500 text-white rounded-md font-medium hover:bg-emerald-600 transition-colors flex justify-center items-center"
                     >
                       <Check className="w-4 h-4 mr-1" />
                       Valider
                     </button>
-                    <button 
-                      onClick={() => updateAnalysisStatus(analysis.id, 'rejete')}
-                      className="w-full text-xs px-3 py-2 bg-red-50 text-red-700 rounded-md font-medium hover:bg-red-100 transition-colors text-center mt-1"
+                    <button
+                      onClick={() => {
+                        const reason = window.prompt('Motif du rejet de cet essai (sera visible par l’analyste) :', 'Valeurs aberrantes / Essai à reprendre');
+                        if (reason !== null) {
+                          updateAnalysisStatus(analysis.id, 'rejete', reason.trim() || 'Essai à reprendre');
+                        }
+                      }}
+                      className="w-full text-xs px-3 py-2 bg-red-50 text-red-700 border border-red-200 rounded-md font-medium hover:bg-red-100 transition-colors text-center mt-1"
                     >
-                      Rejeter
+                      Rejeter à l'analyste
                     </button>
                   </>
                 )}
+
+                {/* Permet au manager de déverrouiller un essai déjà validé si besoin */}
+                {(analysis.status === 'valide' || analysis.status === 'termine') && isManager && (
+                  <button
+                    onClick={() => updateAnalysisStatus(analysis.id, 'En Cours', 'Réouverture de l’essai par le manager')}
+                    className="w-full text-xs px-3 py-2 bg-slate-100 text-slate-700 rounded-md font-medium hover:bg-slate-200 transition-colors text-center"
+                  >
+                    Réouvrir l'essai
+                  </button>
+                )}
                 {analysis.auditTrail && analysis.auditTrail.length > 0 && (
-                  <button 
+                  <button
                     onClick={() => setShowAuditFor(showAuditFor === analysis.id ? null : analysis.id)}
                     className="text-xs text-slate-500 underline hover:text-slate-800 mt-2"
                   >
@@ -409,7 +1220,7 @@ export function Analyses() {
               </div>
             </div>
 
-            {/* Volet déroulant d'audit trail individuel */}
+            {/* Panneau dépliable de traçabilité (Audit Trail ISO 17025) */}
             {showAuditFor === analysis.id && analysis.auditTrail && (
               <div className="mt-4 p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs text-slate-600 w-full xl:w-3/5 xl:ml-auto">
                 <h5 className="font-bold mb-2">Historique des modifications</h5>
@@ -434,8 +1245,7 @@ export function Analyses() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h2 className="text-2xl font-display font-bold text-slate-900">Suivi des Analyses & Essais</h2>
-        
-        {/* Sélecteur d'onglet d'état */}
+
         <div className="flex bg-white rounded-lg p-1 border border-slate-200 shrink-0">
           <button
             onClick={() => setFilterMode('actives')}
@@ -452,8 +1262,21 @@ export function Analyses() {
         </div>
       </div>
 
+      {globalSearchQuery && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5 flex items-center justify-between text-xs text-blue-800">
+          <span>
+            Filtre actif sur : <strong className="font-mono">{globalSearchQuery}</strong>
+          </span>
+          <button
+            onClick={() => setGlobalSearchQuery('')}
+            className="font-semibold text-blue-700 hover:underline"
+          >
+            Afficher toutes les analyses
+          </button>
+        </div>
+      )}
+
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
-        {/* Barre d'outils et sélecteur de regroupement */}
         <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row gap-4 justify-between items-center bg-slate-50/50">
           <div className="relative w-full sm:max-w-md">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -480,7 +1303,6 @@ export function Analyses() {
           </div>
         </div>
 
-        {/* Affichage des essais selon le mode de groupement sélectionné */}
         {groupBy === 'none' ? (
           <ul className="divide-y divide-slate-200">
             {filteredAnalyses.length === 0 ? (
@@ -499,11 +1321,11 @@ export function Analyses() {
                 acc[reqId].push(analysis);
                 return acc;
               }, {} as Record<string, typeof analyses>);
-              
+
               if (Object.keys(grouped).length === 0) {
-                 return <div className="text-center py-10 text-sm text-slate-500">Aucun essai trouvé.</div>;
+                return <div className="text-center py-10 text-sm text-slate-500">Aucun essai trouvé.</div>;
               }
-              
+
               return (Object.entries(grouped) as [string, typeof analyses][]).map(([reqId, reqAnalyses]) => {
                 const req = requests.find(r => r.id === reqId);
                 return (
@@ -514,6 +1336,7 @@ export function Analyses() {
                           {reqId === 'unknown' ? 'SANS DEMANDE' : reqId}
                         </span>
                         <span>{req ? req.title : 'Demande inconnue / Création manuelle'}</span>
+                        {getPriorityBadge(req?.priority || samples.find(s => s.requestId === reqId)?.priority)}
                       </div>
                       <span className="text-xs text-slate-500 font-medium bg-slate-100 px-2 py-1 rounded">
                         {reqAnalyses.length} essai(s)

@@ -2,46 +2,95 @@
  * Vue Paramètres Généraux & Administration Système (Settings)
  * 
  * Cette vue centralise la gouvernance et le paramétrage du laboratoire :
- * 1. Sécurité du profil utilisateur :
- *    - Modification sécurisée du mot de passe avec contrôle de l'ancien mot de passe
- * 2. Gestion des utilisateurs & habilitations (Manager uniquement) :
- *    - Approbation ou rejet des demandes d'accès formulées depuis le portail client
- *    - Création d'utilisateurs avec attribution de rôle (Demandeur, Analyste, Manager) et génération de mot de passe provisoire
- *    - Liste d'audit des comptes existants
- * 3. Configuration et identité du laboratoire :
- *    - Raison sociale, logo institutionnel, coordonnées géographiques et contacts publics
- *    - Accréditations et certifications normatives (ISO 9001, ISO 17025)
- *    - Préfixes de numérotation pour la traçabilité (Demandes, Échantillons, Enrobages découpés)
- *    - Personnalisation du style visuel des tableaux XML générés dans les rapports Word/PDF
- * 4. Sauvegarde, Patchs & Déploiement à chaud :
- *    - Export de la configuration structurelle (templates de matériaux, essais, rapports)
- *    - Import / application à chaud d'un patch de configuration sans régression de la base de données
- * 5. Maintenance et purge contrôlée (Zone de danger avec double confirmation)
+ * 1. Sécurité du profil utilisateur
+ * 2. Gestion des utilisateurs & habilitations (Manager & Admin)
+ * 3. Configuration et identité du laboratoire
+ * 4. Sauvegarde, Patchs & Déploiement à chaud
+ * 5. Configuration du Serveur Mail SMTP (Admin uniquement)
+ * 6. Console de Diagnostic & Logs (Admin uniquement)
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useLims } from '../store';
-import { Building, Phone, Mail, Award, Save, Image as ImageIcon, Key, UserPlus, Users, Shield, Clock, Check, X, ArrowLeft, AlertTriangle, Download, Upload, Settings2 } from 'lucide-react';
+import { BatchGroupRule, LabSchedulingConfig, PreparationStepTemplate } from '../types';
+import { getDefaultLabSchedulingConfig } from '../utils/smartScheduler';
+import {
+  Building,
+  Phone,
+  Mail,
+  Award,
+  Save,
+  Key,
+  UserPlus,
+  Users,
+  Shield,
+  Clock,
+  Check,
+  X,
+  ArrowLeft,
+  AlertTriangle,
+  Download,
+  Upload,
+  Settings2,
+  Trash2,
+  Plus,
+  Terminal,
+  RefreshCw,
+  Search,
+  Bug,
+  Server,
+  Send,
+  Edit2
+} from 'lucide-react';
+import {
+  LogEntry,
+  getFrontendLogs,
+  clearFrontendLogs,
+  subscribeFrontendLogs
+} from '../utils/logger';
 
+/**
+ * Composant principal de la vue Paramètres & Administration Système.
+ *
+ * @param props.onBack - Callback optionnel permettant aux demandeurs (clients) de revenir à leur portail
+ */
 export function Settings({ onBack }: { onBack?: () => void }) {
-  const { 
-    labSettings, 
-    updateLabSettings, 
-    currentUser, 
-    users, 
-    fetchUsers, 
-    purgeData, 
-    applyPatch, 
-    materialTemplates, 
-    analysisTemplates, 
-    requestTemplates, 
-    reportTemplates 
+  // Extraction de l'état global et des actions d'administration depuis le store LIMS
+  const {
+    labSettings,
+    updateLabSettings,
+    currentUser,
+    users,
+    fetchUsers,
+    purgeData,
+    applyPatch,
+    materialTemplates,
+    analysisTemplates,
+    allMaterialTemplates,
+    allAnalysisTemplates,
+    requestTemplates,
+    allRequestTemplates,
+    reportTemplates,
+    allReportTemplates,
+    allAnalysisPacks,
+    allEquipments,
+    allControlCharts,
+    laboratories,
+    activeLabId,
+    addLaboratory,
+    updateLaboratory,
+    deleteLaboratory,
+    updateUserQualifications
   } = useLims();
 
-  // Navigation par onglets
-  const [activeTab, setActiveTab] = useState<'profile' | 'lab' | 'users' | 'system'>('profile');
-  
-  // Options de la zone de purge
+  // États de gestion de la modale de création/édition de laboratoire (architecture multi-laboratoires)
+  const [labModalOpen, setLabModalOpen] = useState(false);
+  const [editingLabData, setEditingLabData] = useState<any>({});
+
+  // Navigation par onglets ('smtp' et 'logs' sont réservés aux admins)
+  const [activeTab, setActiveTab] = useState<'profile' | 'lab' | 'users' | 'system' | 'smtp' | 'logs'>('profile');
+
+  // Options de la zone de purge (sélection granulaire des entités métier à réinitialiser)
   const [purgeOptions, setPurgeOptions] = useState({
     requests: false,
     samples: false,
@@ -51,30 +100,282 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     consumables: false
   });
   const [purgeMsg, setPurgeMsg] = useState({ type: '', text: '' });
+  // Double confirmation requise avant l'exécution irréversible de la purge
   const [confirmPurge, setConfirmPurge] = useState(false);
 
-  // Écoute de l'événement d'ouverture directe de l'onglet utilisateurs
+  // États pour les sauvegardes automatiques SQLite (onglet Système)
+  const [backupsList, setBackupsList] = useState<{ name: string; createdAt: string; files: { name: string; sizeBytes: number }[] }[]>([]);
+  const [backupRetentionDays, setBackupRetentionDays] = useState(30);
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [backupMsg, setBackupMsg] = useState<string | null>(null);
+
+  const loadBackups = async () => {
+    try {
+      const res = await fetch('/api/system/backups');
+      if (res.ok) {
+        const data = await res.json();
+        setBackupsList(data.backups || []);
+        if (data.retentionDays) setBackupRetentionDays(data.retentionDays);
+      }
+    } catch {
+      // Ignore si route non encore disponible
+    }
+  };
+
   useEffect(() => {
-    const handleOpenUsers = () => setActiveTab('users');
+    if (activeTab === 'system' && (currentUser?.role === 'admin' || currentUser?.role === 'manager')) {
+      loadBackups();
+    }
+  }, [activeTab, currentUser]);
+
+  // Écoute de l'événement d'ouverture directe de l'onglet utilisateurs (réservé manager/admin)
+  useEffect(() => {
+    const handleOpenUsers = () => {
+      if (currentUser?.role === 'manager' || currentUser?.role === 'admin') {
+        setActiveTab('users');
+      }
+    };
     window.addEventListener('open-users-tab', handleOpenUsers);
     return () => window.removeEventListener('open-users-tab', handleOpenUsers);
-  }, []);
-  
-  // États de mise à jour du mot de passe
+  }, [currentUser]);
+
+  // États de mise à jour du mot de passe de l'utilisateur connecté
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [pwdMsg, setPwdMsg] = useState({ type: '', text: '' });
-  
-  // États de création d'utilisateurs et approbation
-  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'demandeur', company: '' });
+
+  // États de création d'utilisateurs et approbation des demandes d'accès externes
+  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'demandeur', company: '', labId: '' });
   const [userMsg, setUserMsg] = useState({ type: '', text: '' });
   const [accountRequests, setAccountRequests] = useState<any[]>([]);
 
+  // ==========================================
+  // États Configuration Serveur Mail SMTP (Admin uniquement)
+  // ==========================================
+  const [smtpConfig, setSmtpConfig] = useState({
+    enabled: false,
+    host: '',
+    port: 587,
+    secure: false,
+    user: '',
+    pass: '',
+    fromName: 'LIMS Laboratoire',
+    fromEmail: ''
+  });
+  const [smtpMsg, setSmtpMsg] = useState({ type: '', text: '' });
+  const [isSavingSmtp, setIsSavingSmtp] = useState(false);
+  const [testEmailAddress, setTestEmailAddress] = useState('');
+  const [isTestingSmtp, setIsTestingSmtp] = useState(false);
+
   /**
-   * Récupération des demandes de création de compte en attente
+   * Charge la configuration SMTP actuelle depuis le serveur API (`/api/admin/smtp`).
+   * Accessible uniquement aux utilisateurs ayant le rôle `admin`.
+   */
+  const fetchSmtpConfig = async () => {
+    if (currentUser?.role !== 'admin') return;
+    try {
+      const res = await fetch('/api/admin/smtp');
+      if (res.ok) {
+        const data = await res.json();
+        setSmtpConfig({
+          enabled: Boolean(data.enabled),
+          host: data.host || '',
+          port: data.port || 587,
+          secure: Boolean(data.secure),
+          user: data.user || '',
+          pass: data.pass || '',
+          fromName: data.fromName || 'LIMS Laboratoire',
+          fromEmail: data.fromEmail || ''
+        });
+        if (!testEmailAddress && currentUser?.email) {
+          setTestEmailAddress(currentUser.email);
+        }
+      }
+    } catch (e) {
+      console.error('Erreur lors du chargement de la configuration SMTP :', e);
+    }
+  };
+
+  // Chargement automatique de la configuration SMTP à l'ouverture de l'onglet dédié
+  useEffect(() => {
+    if (activeTab === 'smtp' && currentUser?.role === 'admin') {
+      fetchSmtpConfig();
+    }
+  }, [activeTab, currentUser]);
+
+  /**
+   * Enregistre les paramètres du serveur SMTP sur le backend (`/api/admin/smtp`).
+   *
+   * @param e - Événement de soumission du formulaire SMTP
+   */
+  const handleSaveSmtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSmtpMsg({ type: '', text: '' });
+    setIsSavingSmtp(true);
+    try {
+      const res = await fetch('/api/admin/smtp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(smtpConfig)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erreur de sauvegarde');
+      setSmtpMsg({ type: 'success', text: 'Paramètres du serveur mail enregistrés avec succès.' });
+      fetchSmtpConfig();
+    } catch (err: any) {
+      setSmtpMsg({ type: 'error', text: err.message });
+    } finally {
+      setIsSavingSmtp(false);
+    }
+  };
+
+  /**
+   * Sauvegarde la configuration SMTP courante puis déclenche l'envoi d'un e-mail de test
+   * via `/api/admin/smtp/test` afin de vérifier la connectivité et l'authentification du serveur mail.
+   */
+  const handleTestSmtp = async () => {
+    setSmtpMsg({ type: '', text: '' });
+    setIsTestingSmtp(true);
+    try {
+      // On sauvegarde d'abord la configuration courante avant de lancer le test
+      await fetch('/api/admin/smtp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(smtpConfig)
+      });
+
+      const res = await fetch('/api/admin/smtp/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ testEmail: testEmailAddress || currentUser?.email })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Échec du test SMTP');
+      setSmtpMsg({ type: 'success', text: data.message });
+    } catch (err: any) {
+      setSmtpMsg({ type: 'error', text: err.message });
+    } finally {
+      setIsTestingSmtp(false);
+    }
+  };
+
+  // ==========================================
+  // États de la Console de Logs (Admin uniquement)
+  // ==========================================
+  const [frontendLogs, setFrontendLogs] = useState<LogEntry[]>(() => getFrontendLogs());
+  const [backendLogs, setBackendLogs] = useState<LogEntry[]>([]);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+  const [autoRefreshLogs, setAutoRefreshLogs] = useState(true);
+  const [logLevelFilter, setLogLevelFilter] = useState<'all' | 'info' | 'warn' | 'error'>('all');
+  const [logSourceFilter, setLogSourceFilter] = useState<'all' | 'frontend' | 'backend'>('all');
+  const [logSearchQuery, setLogSearchQuery] = useState('');
+
+  // Abonnement réactif aux nouveaux logs capturés côté navigateur (UI)
+  useEffect(() => {
+    return subscribeFrontendLogs(() => {
+      setFrontendLogs([...getFrontendLogs()]);
+    });
+  }, []);
+
+  /**
+   * Récupère les journaux d'événements du serveur backend (`/api/admin/logs`).
+   */
+  const fetchBackendLogs = async () => {
+    if (currentUser?.role !== 'admin') return;
+    setIsLoadingLogs(true);
+    try {
+      const res = await fetch('/api/admin/logs');
+      if (res.ok) {
+        const data = await res.json();
+        setBackendLogs(data.logs || []);
+      }
+    } catch {
+      // Silencieux si l'API n'est pas joignable momentanément
+    } finally {
+      setIsLoadingLogs(false);
+    }
+  };
+
+  // Rafraîchissement automatique (polling toutes les 4s) des logs serveur lorsque la console est ouverte
+  useEffect(() => {
+    if (activeTab === 'logs' && currentUser?.role === 'admin') {
+      fetchBackendLogs();
+      if (autoRefreshLogs) {
+        const interval = setInterval(fetchBackendLogs, 4000);
+        return () => clearInterval(interval);
+      }
+    }
+  }, [activeTab, currentUser, autoRefreshLogs]);
+
+  /**
+   * Vide simultanément les logs mémoire du frontend et les logs du serveur backend (`DELETE /api/admin/logs`).
+   */
+  const handleClearAllLogs = async () => {
+    clearFrontendLogs();
+    if (currentUser?.role === 'admin') {
+      try {
+        await fetch('/api/admin/logs', { method: 'DELETE' });
+        await fetchBackendLogs();
+      } catch (e) {
+        console.error('Erreur lors de la purge des logs serveur:', e);
+      }
+    }
+  };
+
+  /**
+   * Exporte l'intégralité des logs (frontend + backend fusionnés et triés par date décroissante)
+   * dans un fichier JSON horodaté téléchargeable pour diagnostic technique.
+   */
+  const exportLogsJson = () => {
+    const combined = [...frontendLogs, ...backendLogs].sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+    const blob = new Blob([JSON.stringify(combined, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `lims_diagnostics_logs_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Fusion, tri chronologique inversé et filtrage multi-critères (niveau, source, recherche texte) des logs
+  const filteredLogs = useMemo(() => {
+    const merged = [...frontendLogs, ...backendLogs].sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+
+    return merged.filter((log) => {
+      if (logLevelFilter !== 'all' && log.level !== logLevelFilter) return false;
+      if (logSourceFilter !== 'all' && log.source !== logSourceFilter) return false;
+      if (logSearchQuery.trim() !== '') {
+        const q = logSearchQuery.toLowerCase();
+        const matchMsg = log.message.toLowerCase().includes(q);
+        const matchDetails = log.details?.toLowerCase().includes(q) || false;
+        if (!matchMsg && !matchDetails) return false;
+      }
+      return true;
+    });
+  }, [frontendLogs, backendLogs, logLevelFilter, logSourceFilter, logSearchQuery]);
+
+  // Compteurs mémorisés d'erreurs et d'avertissements pour les badges d'alerte
+  const errorCount = useMemo(
+    () => [...frontendLogs, ...backendLogs].filter((l) => l.level === 'error').length,
+    [frontendLogs, backendLogs]
+  );
+
+  const warnCount = useMemo(
+    () => [...frontendLogs, ...backendLogs].filter((l) => l.level === 'warn').length,
+    [frontendLogs, backendLogs]
+  );
+
+  /**
+   * Récupération des demandes de création de compte en attente (`/api/users/requests`)
    */
   const fetchRequests = async () => {
-    if (currentUser?.role === 'manager') {
+    if (currentUser?.role === 'manager' || currentUser?.role === 'admin') {
       try {
         const res = await fetch('/api/users/requests');
         if (res.ok) setAccountRequests(await res.json());
@@ -84,6 +385,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
+  // Chargement de la liste des utilisateurs et des demandes d'accès à l'ouverture de l'onglet 'users'
   useEffect(() => {
     if (activeTab === 'users') {
       fetchRequests();
@@ -92,11 +394,19 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   }, [activeTab, currentUser]);
 
   /**
-   * Approbation d'une demande de compte externe avec génération d'un mot de passe temporaire
+   * Approuve une demande d'ouverture de compte client :
+   * génère un mot de passe temporaire aléatoire, crée l'utilisateur avec le rôle `demandeur`,
+   * puis supprime la demande en attente et affiche le mot de passe généré.
+   *
+   * @param req - Objet représentant la demande de compte à approuver
    */
   const handleApproveRequest = async (req: any) => {
     try {
-      const tempPassword = Math.random().toString(36).slice(-8);
+      // Génération cryptographiquement sûre d'un mot de passe temporaire de 12 caractères
+      const charset = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$';
+      const randBytes = new Uint32Array(12);
+      crypto.getRandomValues(randBytes);
+      const tempPassword = Array.from(randBytes, b => charset[b % charset.length]).join('');
       const res = await fetch('/api/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -110,7 +420,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      
+
       await fetch(`/api/users/requests/${req.id}`, { method: 'DELETE' });
       fetchRequests();
       fetchUsers();
@@ -121,7 +431,29 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   };
 
   /**
-   * Rejet / suppression d'une demande de compte
+   * Supprime définitivement un compte utilisateur après confirmation.
+   *
+   * @param id - Identifiant de l'utilisateur à supprimer
+   */
+  const handleDeleteUser = async (id: string) => {
+    if (!window.confirm("Êtes-vous sûr de vouloir supprimer cet utilisateur ? Cette action est irréversible.")) return;
+
+    try {
+      const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      setUserMsg({ type: 'success', text: 'Utilisateur supprimé avec succès.' });
+      fetchUsers();
+    } catch (err: any) {
+      setUserMsg({ type: 'error', text: err.message });
+    }
+  };
+
+  /**
+   * Refuse et supprime une demande de création de compte en attente.
+   *
+   * @param id - Identifiant de la demande à supprimer
    */
   const deleteRequest = async (id: string) => {
     try {
@@ -132,11 +464,11 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     }
   };
 
-  // États pour les patchs de configuration
   const [patchMsg, setPatchMsg] = useState({ type: '', text: '' });
 
   /**
-   * Exporte un fichier de configuration JSON sans inclure les données métier
+   * Exporte la configuration structurelle du laboratoire (modèles de matériaux, d'analyses,
+   * de formulaires, de rapports et paramètres du laboratoire) sous forme de fichier JSON téléchargeable.
    */
   const exportPatch = () => {
     const patchData = {
@@ -160,42 +492,56 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   };
 
   /**
-   * Importe et applique à chaud un fichier de configuration JSON
+   * Lit un fichier JSON de configuration (issu d'un sélecteur ou d'un glisser-déposer)
+   * et applique le patch à chaud sans altérer les données opérationnelles.
    */
-  const importPatch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const processPatchFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
         const content = event.target?.result as string;
         const patchData = JSON.parse(content);
-        
+
         if (!patchData.materialTemplates || !patchData.analysisTemplates) {
           throw new Error("Le fichier ne semble pas être un patch valide.");
         }
-        
+
         applyPatch(patchData);
         setPatchMsg({ type: 'success', text: "Configuration appliquée avec succès. L'application a été mise à jour sans corrompre les données existantes." });
       } catch (err: any) {
         setPatchMsg({ type: 'error', text: 'Erreur lors de la lecture de la configuration: ' + err.message });
       }
-      e.target.value = '';
     };
     reader.readAsText(file);
   };
-  
-  // Formulaire des paramètres du laboratoire
+
+  /**
+   * Importe et applique à chaud un fichier JSON de configuration (`applyPatch`)
+   * sans altérer les données opérationnelles existantes (demandes, échantillons, analyses).
+   *
+   * @param e - Événement de sélection du fichier JSON
+   */
+  const importPatch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    processPatchFile(file);
+    e.target.value = '';
+  };
+
+  // État local du formulaire d'identité et de paramétrage du laboratoire actif
   const [formData, setFormData] = useState(labSettings);
+  // Chaîne brute de saisie des certifications ISO (évite de manger les espaces après virgule pendant la frappe)
+  const [isoInputText, setIsoInputText] = useState((labSettings?.isoCertifications || []).join(', '));
   const [saved, setSaved] = useState(false);
 
+  // Synchronisation du formulaire lorsque les paramètres du laboratoire actif changent dans le store
   useEffect(() => {
     setFormData(labSettings);
+    setIsoInputText((labSettings?.isoCertifications || []).join(', '));
   }, [labSettings]);
 
   /**
-   * Traitement de la modification du mot de passe
+   * Soumet le changement de mot de passe de l'utilisateur courant à l'API (`/api/auth/change-password`).
    */
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -217,7 +563,8 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   };
 
   /**
-   * Création manuelle d'un utilisateur par un manager
+   * Crée manuellement un nouvel utilisateur (Demandeur, Analyste, Manager ou Admin)
+   * avec son rattachement éventuel à une entreprise et à un laboratoire (`labId`).
    */
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -231,7 +578,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setUserMsg({ type: 'success', text: 'Utilisateur créé avec succès.' });
-      setNewUser({ name: '', email: '', password: '', role: 'demandeur', company: '' });
+      setNewUser({ name: '', email: '', password: '', role: 'demandeur', company: '', labId: '' });
       fetchUsers();
     } catch (err: any) {
       setUserMsg({ type: 'error', text: err.message });
@@ -239,33 +586,41 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   };
 
   /**
-   * Gestion de la saisie des accréditations ISO
+   * Met à jour la liste des certifications ISO (séparées par des virgules) dans l'état local du formulaire
+   * tout en conservant le texte brut pendant la frappe (évite la suppression des espaces après virgule).
    */
   const handleIsoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const certs = e.target.value.split(',').map(s => s.trim());
+    const raw = e.target.value;
+    setIsoInputText(raw);
+    const certs = raw.split(',').map(s => s.trim()).filter(Boolean);
     setFormData({ ...formData, isoCertifications: certs });
     setSaved(false);
   };
 
   /**
-   * Gestion standard des champs de formulaire
+   * Gestionnaire générique de modification des champs texte de l'identité du laboratoire.
    */
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData({ ...formData, [name]: value });
     setSaved(false);
   };
-  
+
   /**
-   * Mise à jour des styles visuels des tableaux de rapports générés
+   * Met à jour et sauvegarde immédiatement le style visuel des tableaux générés dans les rapports Word/PDF
+   * (couleur d'en-tête Hex, couleur et épaisseur des bordures).
    */
   const handleTableStyleChange = (field: string, value: string | number) => {
-    const newSettings = { 
-      ...formData, 
-      tableStyles: { 
-        ...formData.tableStyles, 
-        [field]: value 
-      } as any 
+    // Nettoie tout '#' éventuel sur les couleurs hexadécimales pour compatibilité OpenXML Word
+    const cleanValue = (field === 'headerBgColor' || field === 'borderColor') && typeof value === 'string'
+      ? value.replace(/^#/, '').toUpperCase()
+      : value;
+    const newSettings = {
+      ...formData,
+      tableStyles: {
+        ...formData.tableStyles,
+        [field]: cleanValue
+      } as any
     };
     setFormData(newSettings);
     updateLabSettings(newSettings);
@@ -274,7 +629,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   };
 
   /**
-   * Enregistrement des paramètres généraux du laboratoire
+   * Enregistre les modifications des paramètres généraux du laboratoire actif dans le store.
    */
   const handleSave = () => {
     updateLabSettings(formData);
@@ -283,7 +638,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   };
 
   return (
-    <div className="p-8 max-w-4xl mx-auto space-y-6">
+    <div className="p-8 max-w-5xl mx-auto space-y-6">
       {onBack && (
         <button onClick={onBack} className="flex items-center text-sm font-medium text-slate-500 hover:text-slate-800 transition-colors mb-2">
           <ArrowLeft className="w-4 h-4 mr-1" /> Retour à l'espace client
@@ -292,7 +647,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
       <div className="flex justify-between items-center mb-4">
         <div>
           <h2 className="text-2xl font-display font-bold text-slate-900">Paramètres</h2>
-          <p className="text-sm text-slate-500 mt-1">Gérez votre profil, le laboratoire et les utilisateurs.</p>
+          <p className="text-sm text-slate-500 mt-1">Gérez votre profil, le laboratoire et les paramètres système.</p>
         </div>
         {activeTab === 'lab' && (
           <button
@@ -306,7 +661,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
       </div>
 
       {/* Onglets de configuration */}
-      <div className="flex space-x-1 border-b border-slate-200 mb-6">
+      <div className="flex flex-wrap space-x-1 border-b border-slate-200 mb-6">
         <button
           onClick={() => setActiveTab('profile')}
           className={`py-2 px-4 text-sm font-medium border-b-2 outline-none transition-colors ${activeTab === 'profile' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
@@ -314,7 +669,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
           <Shield className="w-4 h-4 inline mr-2" />
           Sécurité du profil
         </button>
-        {currentUser?.role === 'manager' && (
+        {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
           <>
             <button
               onClick={() => setActiveTab('lab')}
@@ -336,6 +691,30 @@ export function Settings({ onBack }: { onBack?: () => void }) {
             >
               <Settings2 className="w-4 h-4 inline mr-2" />
               Sauvegarde Config.
+            </button>
+          </>
+        )}
+        {/* Onglets strictement réservés aux Administrateurs */}
+        {currentUser?.role === 'admin' && (
+          <>
+            <button
+              onClick={() => setActiveTab('smtp')}
+              className={`py-2 px-4 text-sm font-medium border-b-2 outline-none transition-colors flex items-center ${activeTab === 'smtp' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            >
+              <Mail className="w-4 h-4 inline mr-2" />
+              Serveur Mail (SMTP)
+            </button>
+            <button
+              onClick={() => setActiveTab('logs')}
+              className={`py-2 px-4 text-sm font-medium border-b-2 outline-none transition-colors flex items-center ${activeTab === 'logs' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+            >
+              <Terminal className="w-4 h-4 inline mr-2" />
+              Console Logs
+              {errorCount > 0 && (
+                <span className="ml-2 px-1.5 py-0.5 text-[10px] font-bold bg-red-100 text-red-700 rounded-full">
+                  {errorCount}
+                </span>
+              )}
             </button>
           </>
         )}
@@ -390,7 +769,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
       )}
 
       {/* Onglet 2 : Gestion des utilisateurs */}
-      {activeTab === 'users' && currentUser?.role === 'manager' && (
+      {activeTab === 'users' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
         <div className="space-y-6">
           {accountRequests.length > 0 && (
             <div className="bg-amber-50 rounded-xl shadow-sm border border-amber-200 overflow-hidden">
@@ -438,28 +817,45 @@ export function Settings({ onBack }: { onBack?: () => void }) {
               <form onSubmit={handleCreateUser} className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Nom complet</label>
-                  <input type="text" required value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                  <input type="text" required value={newUser.name} onChange={e => setNewUser({ ...newUser, name: e.target.value })} className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
-                  <input type="email" required value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                  <input type="email" required value={newUser.email} onChange={e => setNewUser({ ...newUser, email: e.target.value })} className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Mot de passe temporaire</label>
-                  <input type="text" required value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                  <input type="text" required value={newUser.password} onChange={e => setNewUser({ ...newUser, password: e.target.value })} className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Rôle</label>
-                  <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})} className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                  <select value={newUser.role} onChange={e => setNewUser({ ...newUser, role: e.target.value })} className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500">
                     <option value="demandeur">Demandeur (Client)</option>
                     <option value="analyste">Analyste (Labo)</option>
-                    <option value="manager">Manager (Admin)</option>
+                    <option value="manager">Manager</option>
+                    {currentUser?.role === 'admin' && (<option value="admin">Admin</option>)}
                   </select>
                 </div>
-                {newUser.role === 'demandeur' && (
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Entreprise (optionnel)</label>
-                    <input type="text" value={newUser.company} onChange={e => setNewUser({...newUser, company: e.target.value})} className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                {(newUser.role === 'demandeur' || newUser.role === 'manager' || newUser.role === 'analyste') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Entreprise / Laboratoire</label>
+                    <input type="text" value={newUser.company} onChange={e => setNewUser({ ...newUser, company: e.target.value })} className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500" />
+                  </div>
+                )}
+                {(newUser.role === 'manager' || newUser.role === 'analyste') && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Laboratoire assigné</label>
+                    <select
+                      value={newUser.labId || ''}
+                      onChange={e => setNewUser({ ...newUser, labId: e.target.value })}
+                      className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    >
+                      <option value="">Aucun (Accès global)</option>
+                      <option value="all">Tous les laboratoires (all)</option>
+                      {laboratories.map(lab => (
+                        <option key={lab.id} value={lab.id}>{lab.name}</option>
+                      ))}
+                    </select>
                   </div>
                 )}
                 <div className="md:col-span-2 mt-2">
@@ -471,32 +867,163 @@ export function Settings({ onBack }: { onBack?: () => void }) {
             </div>
           </div>
 
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-6 border-b border-slate-200">
-              <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-                <Users className="w-5 h-5 mr-2 text-slate-400" />
-                Utilisateurs existants ({users.length})
-              </h3>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {users.map(u => (
-                <div key={u.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                  <div>
-                    <div className="font-semibold text-slate-900">{u.name}</div>
-                    <div className="text-sm text-slate-500">{u.email} {u.company && `- ${u.company}`}</div>
-                  </div>
-                  <div className={`text-xs px-2 py-1 rounded-full ${u.role === 'manager' ? 'bg-purple-100 text-purple-700' : u.role === 'analyste' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                    {u.role.toUpperCase()}
-                  </div>
+          {(() => {
+            // Pour un manager : filtrage strict sur le personnel (analystes/managers) et les méthodes de son propre laboratoire
+            const isManagerScoped = currentUser?.role === 'manager';
+            const managerLabId = isManagerScoped
+              ? (currentUser?.labId && currentUser.labId !== 'all' ? currentUser.labId : activeLabId)
+              : null;
+            const managerLabName = managerLabId
+              ? laboratories.find(l => l.id === managerLabId)?.name || managerLabId
+              : null;
+            const displayedUsers = isManagerScoped
+              ? users.filter(u => (u.role === 'analyste' || u.role === 'manager') && u.labId === managerLabId)
+              : users;
+
+            return (
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-6 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-lg font-semibold text-slate-800 flex items-center">
+                    <Users className="w-5 h-5 mr-2 text-slate-400" />
+                    {isManagerScoped
+                      ? `Personnel & Habilitations du laboratoire (${displayedUsers.length})`
+                      : `Utilisateurs existants (${displayedUsers.length})`}
+                  </h3>
+                  {isManagerScoped && managerLabName && (
+                    <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                      Périmètre : {managerLabName}
+                    </span>
+                  )}
                 </div>
-              ))}
-            </div>
-          </div>
+                <div className="divide-y divide-slate-100">
+                  {displayedUsers.map(u => {
+                    const userQuals: string[] = u.qualifiedTemplateIds || [];
+                    const canHaveQuals = u.role === 'analyste' || u.role === 'manager';
+                    const availableTemplates = isManagerScoped
+                      ? allAnalysisTemplates.filter(t => t.labId === managerLabId)
+                      : allAnalysisTemplates.filter(t => !u.labId || u.labId === 'all' || t.labId === u.labId);
+                    const labLabel = u.labId && u.labId !== 'all'
+                      ? laboratories.find(l => l.id === u.labId)?.shortName || u.labId
+                      : (u.labId === 'all' ? 'Tous les labos' : null);
+
+                    return (
+                      <div key={u.id} className="p-4 hover:bg-slate-50 transition-colors space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="font-semibold text-slate-900 flex items-center gap-2">
+                              <span>{u.name}</span>
+                              {labLabel && (
+                                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                                  {labLabel}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-sm text-slate-500">{u.email} {u.company && `- ${u.company}`}</div>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <div className={`text-xs px-2 py-1 rounded-full ${(u.role === 'manager' || u.role === 'admin') ? 'bg-purple-100 text-purple-700' : u.role === 'analyste' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                              {u.role.toUpperCase()}
+                            </div>
+                            {currentUser?.role === 'admin' && currentUser.id !== u.id && (
+                              <button
+                                onClick={() => handleDeleteUser(u.id)}
+                                className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded"
+                                title="Supprimer l'utilisateur"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        {/* Matrice d'habilitations opérateurs (ISO 17025 §6.2) */}
+                        {canHaveQuals && availableTemplates.length > 0 && (
+                          <div className="pt-2 border-t border-slate-100">
+                            <span className="block text-[10px] font-bold uppercase text-slate-400 mb-1.5">
+                              Habilitations essais ({userQuals.filter(id => availableTemplates.some(t => t.id === id)).length} méthode(s))
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {availableTemplates.map(tpl => {
+                                const active = userQuals.includes(tpl.id);
+                                const userExpiries: Record<string, string> = u.qualificationExpiries || {};
+                                const expDate = userExpiries[tpl.id] || '';
+                                const daysUntilExp = expDate
+                                  ? Math.ceil((new Date(expDate).getTime() - new Date().setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24))
+                                  : null;
+                                const isExpired = daysUntilExp !== null && daysUntilExp < 0;
+                                const isSoon = daysUntilExp !== null && daysUntilExp >= 0 && daysUntilExp <= 30;
+                                return (
+                                  <div
+                                    key={tpl.id}
+                                    className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                                      active
+                                        ? isExpired
+                                          ? 'bg-red-50 text-red-800 border-red-300'
+                                          : isSoon
+                                            ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                            : 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                        : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        const next = active
+                                          ? userQuals.filter(id => id !== tpl.id)
+                                          : [...userQuals, tpl.id];
+                                        const ok = await updateUserQualifications(u.id, next, userExpiries);
+                                        if (!ok) {
+                                          setUserMsg({
+                                            type: 'error',
+                                            text: "Impossible d'enregistrer l'habilitation. Redémarrez le serveur backend (npm run dev / npm run start) pour activer les nouvelles routes API."
+                                          });
+                                        } else {
+                                          setUserMsg({ type: 'success', text: `Habilitations mises à jour pour ${u.name}.` });
+                                        }
+                                      }}
+                                      className="font-medium"
+                                    >
+                                      {active ? (isExpired ? '⚠ ' : '✓ ') : '+ '}{tpl.name}
+                                    </button>
+                                    {active && (
+                                      <input
+                                        type="date"
+                                        value={expDate}
+                                        title="Date d'expiration de l'habilitation (optionnelle, ISO 17025 §6.2)"
+                                        onChange={async e => {
+                                          const nextExpiries = { ...userExpiries };
+                                          if (e.target.value) nextExpiries[tpl.id] = e.target.value;
+                                          else delete nextExpiries[tpl.id];
+                                          const ok = await updateUserQualifications(u.id, userQuals, nextExpiries);
+                                          if (ok) {
+                                            setUserMsg({ type: 'success', text: `Date de validité enregistrée pour ${u.name}.` });
+                                          }
+                                        }}
+                                        className="text-[10px] bg-white/80 border border-slate-300/70 rounded px-1 py-0 text-slate-700 w-[104px]"
+                                      />
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {displayedUsers.length === 0 && (
+                    <div className="p-8 text-center text-sm text-slate-400 italic">
+                      Aucun personnel rattaché à votre laboratoire.
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
       {/* Onglet 3 : Paramètres du laboratoire */}
-      {activeTab === 'lab' && currentUser?.role === 'manager' && (
+      {activeTab === 'lab' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
         <div className="space-y-6">
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="p-6 border-b border-slate-200">
@@ -592,8 +1119,9 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                 <input
                   type="text"
                   name="isoCertifications"
-                  value={formData.isoCertifications.join(', ')}
+                  value={isoInputText}
                   onChange={handleIsoChange}
+                  onBlur={() => setIsoInputText((formData.isoCertifications || []).join(', '))}
                   placeholder="ISO 9001:2015, ISO 17025:2017"
                   className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
                 />
@@ -654,10 +1182,213 @@ export function Settings({ onBack }: { onBack?: () => void }) {
             </div>
           </div>
 
+          {/* Option Module Devis PDF Commercial (activable par laboratoire) */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mt-6 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="text-base font-semibold text-slate-800">Option : Génération de Devis PDF avant validation</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Active le bouton « Générer Devis PDF » ainsi que le suivi commercial (Devis envoyé / Approuvé / N° Bon de commande) dans les dossiers de demandes de ce laboratoire.
+              </p>
+            </div>
+            <label className="inline-flex items-center gap-2.5 text-sm font-semibold text-slate-800 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={Boolean(formData.enableQuotes)}
+                onChange={e => {
+                  const next = { ...formData, enableQuotes: e.target.checked };
+                  setFormData(next);
+                  updateLabSettings(next);
+                  setSaved(true);
+                  setTimeout(() => setSaved(false), 2000);
+                }}
+                className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+              {formData.enableQuotes ? 'Activé' : 'Désactivé'}
+            </label>
+          </div>
+
+          {/* Règles de Planification Intelligente & Étapes de Préparation (100 % spécifique par laboratoire) */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mt-8">
+            <div className="p-6 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-800 flex items-center">
+                  <Clock className="w-5 h-5 mr-2 text-indigo-500" />
+                  Planification Intelligente & Étapes de Préparation
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Paramétrez la capacité horaire et les règles de regroupement en lots propres à ce laboratoire (ex : Enrobage 1 à la fois vs Polissage 6 enrobages d'un même alliage).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleSave}
+                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5"
+              >
+                <Save className="w-3.5 h-3.5" /> Enregistrer les règles
+              </button>
+            </div>
+            {(() => {
+              const schedCfg: LabSchedulingConfig = formData.schedulingConfig || getDefaultLabSchedulingConfig();
+              const updateSched = (patch: Partial<LabSchedulingConfig>) => {
+                setFormData({ ...formData, schedulingConfig: { ...schedCfg, ...patch } });
+                setSaved(false);
+              };
+              const updateStep = (stepId: string, patch: Partial<PreparationStepTemplate>) => {
+                const nextSteps = schedCfg.preparationSteps.map(s => (s.id === stepId ? { ...s, ...patch } : s));
+                updateSched({ preparationSteps: nextSteps });
+              };
+              const removeStep = (stepId: string) => {
+                updateSched({ preparationSteps: schedCfg.preparationSteps.filter(s => s.id !== stepId) });
+              };
+              const addStep = () => {
+                const newStep: PreparationStepTemplate = {
+                  id: `PREP-${Date.now()}`,
+                  name: 'Nouvelle étape de préparation',
+                  durationMinutes: 20,
+                  batchCapacity: 1,
+                  batchGroupBy: 'none'
+                };
+                updateSched({ preparationSteps: [...schedCfg.preparationSteps, newStep] });
+              };
+              const dayLabels = [
+                { d: 1, l: 'Lun' }, { d: 2, l: 'Mar' }, { d: 3, l: 'Mer' },
+                { d: 4, l: 'Jeu' }, { d: 5, l: 'Ven' }, { d: 6, l: 'Sam' }, { d: 0, l: 'Dim' }
+              ];
+
+              return (
+                <div className="p-6 space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Capacité journalière (heures/jour)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={24}
+                        step={0.5}
+                        value={schedCfg.dailyCapacityHours}
+                        onChange={e => updateSched({ dailyCapacityHours: Math.max(1, Number(e.target.value) || 7) })}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">Jours ouvrés du laboratoire</label>
+                      <div className="flex flex-wrap gap-1 pt-1">
+                        {dayLabels.map(({ d, l }) => {
+                          const active = (schedCfg.workingDays || [1, 2, 3, 4, 5]).includes(d);
+                          return (
+                            <button
+                              key={d}
+                              type="button"
+                              onClick={() => {
+                                const cur = schedCfg.workingDays || [1, 2, 3, 4, 5];
+                                const next = active ? cur.filter(x => x !== d) : [...cur, d];
+                                updateSched({ workingDays: next.length ? next : [1] });
+                              }}
+                              className={`px-2 py-1 rounded text-xs font-semibold border ${active ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-300'}`}
+                            >
+                              {l}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="flex items-center pt-5">
+                      <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={schedCfg.allowUrgentPreemption !== false}
+                          onChange={e => updateSched({ allowUrgentPreemption: e.target.checked })}
+                          className="rounded border-slate-300 text-indigo-600"
+                        />
+                        Autoriser les urgences à décaler les essais non commencés
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Catalogue dynamique des étapes de préparation */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                        Catalogue des étapes de préparation ({schedCfg.preparationSteps.length})
+                      </h4>
+                      <button
+                        type="button"
+                        onClick={addStep}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> Ajouter une étape
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {schedCfg.preparationSteps.map(step => (
+                        <div key={step.id} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center p-3 rounded-lg bg-slate-50 border border-slate-200">
+                          <div className="sm:col-span-4">
+                            <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Nom de l'étape</label>
+                            <input
+                              type="text"
+                              value={step.name}
+                              onChange={e => updateStep(step.id, { name: e.target.value })}
+                              className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded bg-white"
+                            />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Durée (min)</label>
+                            <input
+                              type="number"
+                              min={1}
+                              value={step.durationMinutes}
+                              onChange={e => updateStep(step.id, { durationMinutes: Math.max(1, Number(e.target.value) || 1) })}
+                              className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded bg-white font-mono"
+                            />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Capacité / lot</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={100}
+                              value={step.batchCapacity}
+                              onChange={e => updateStep(step.id, { batchCapacity: Math.max(1, Number(e.target.value) || 1) })}
+                              className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded bg-white font-mono"
+                            />
+                          </div>
+                          <div className="sm:col-span-3">
+                            <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Regroupement autorisé</label>
+                            <select
+                              value={step.batchGroupBy}
+                              onChange={e => updateStep(step.id, { batchGroupBy: e.target.value as BatchGroupRule })}
+                              className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded bg-white"
+                            >
+                              <option value="none">Aucun (1 à la fois)</option>
+                              <option value="same_material">Même alliage / matériau</option>
+                              <option value="same_template">Même méthode d'essai</option>
+                              <option value="any">Libre (tous échantillons)</option>
+                            </select>
+                          </div>
+                          <div className="sm:col-span-1 flex justify-end pt-3 sm:pt-4">
+                            <button
+                              type="button"
+                              onClick={() => removeStep(step.id)}
+                              className="p-1.5 text-slate-400 hover:text-red-600 rounded"
+                              title="Supprimer cette étape"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mt-8">
             <div className="p-6 border-b border-slate-200">
               <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 mr-2 text-slate-400"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><path d="M21 9H3"/><path d="M21 15H3"/><path d="M12 3v18"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 mr-2 text-slate-400"><rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><path d="M21 9H3" /><path d="M21 15H3" /><path d="M12 3v18" /></svg>
                 Design des tableaux générés (Rapports)
               </h3>
             </div>
@@ -715,27 +1446,28 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                   </select>
                 </div>
               </div>
-              
+
               <div className="mt-6 border rounded-lg p-4 bg-slate-50">
-                 <h4 className="text-sm font-medium text-slate-700 mb-2">Aperçu du rendu</h4>
-                 <table className="w-full text-sm bg-white" style={{ borderCollapse: 'collapse' }}>
-                   <thead>
-                     <tr>
-                       <th style={{ backgroundColor: "#" + (formData.tableStyles?.headerBgColor || "E2E8F0"), border: `${(formData.tableStyles?.borderSize || 4) / 8}px solid #${formData.tableStyles?.borderColor || "000000"}`, padding: '8px' }}>En-tête 1</th>
-                       <th style={{ backgroundColor: "#" + (formData.tableStyles?.headerBgColor || "E2E8F0"), border: `${(formData.tableStyles?.borderSize || 4) / 8}px solid #${formData.tableStyles?.borderColor || "000000"}`, padding: '8px' }}>En-tête 2</th>
-                     </tr>
-                   </thead>
-                   <tbody>
-                     <tr>
-                       <td style={{ border: `${(formData.tableStyles?.borderSize || 4) / 8}px solid #${formData.tableStyles?.borderColor || "000000"}`, padding: '8px' }}>Donnée 1</td>
-                       <td style={{ border: `${(formData.tableStyles?.borderSize || 4) / 8}px solid #${formData.tableStyles?.borderColor || "000000"}`, padding: '8px' }}>Donnée 2</td>
-                     </tr>
-                   </tbody>
-                 </table>
+                <h4 className="text-sm font-medium text-slate-700 mb-2">Aperçu du rendu</h4>
+                <table className="w-full text-sm bg-white" style={{ borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ backgroundColor: "#" + (formData.tableStyles?.headerBgColor || "E2E8F0"), border: `${(formData.tableStyles?.borderSize || 4) / 8}px solid #${formData.tableStyles?.borderColor || "000000"}`, padding: '8px' }}>En-tête 1</th>
+                      <th style={{ backgroundColor: "#" + (formData.tableStyles?.headerBgColor || "E2E8F0"), border: `${(formData.tableStyles?.borderSize || 4) / 8}px solid #${formData.tableStyles?.borderColor || "000000"}`, padding: '8px' }}>En-tête 2</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td style={{ border: `${(formData.tableStyles?.borderSize || 4) / 8}px solid #${formData.tableStyles?.borderColor || "000000"}`, padding: '8px' }}>Donnée 1</td>
+                      <td style={{ border: `${(formData.tableStyles?.borderSize || 4) / 8}px solid #${formData.tableStyles?.borderColor || "000000"}`, padding: '8px' }}>Donnée 2</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
 
+          {/* Zone de danger : Purge sélective et irréversible des données opérationnelles */}
           <div className="bg-red-50 rounded-xl shadow-sm border border-red-200 overflow-hidden mt-8">
             <div className="p-6 border-b border-red-200">
               <h3 className="text-lg font-semibold text-red-800 flex items-center">
@@ -747,7 +1479,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
               <p className="text-sm text-red-700 mb-4">
                 Sélectionnez les données à purger du système. Cette action est irréversible.
               </p>
-              
+
               <div className="space-y-3 mb-6 bg-white/50 p-4 rounded-lg border border-red-100">
                 {Object.keys(purgeOptions).map((key) => {
                   const labels: Record<string, string> = {
@@ -763,7 +1495,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                       <input
                         type="checkbox"
                         checked={(purgeOptions as any)[key]}
-                        onChange={(e) => { setPurgeOptions({...purgeOptions, [key]: e.target.checked}); setConfirmPurge(false); setPurgeMsg({ type: '', text: '' }); }}
+                        onChange={(e) => { setPurgeOptions({ ...purgeOptions, [key]: e.target.checked }); setConfirmPurge(false); setPurgeMsg({ type: '', text: '' }); }}
                         className="rounded border-red-300 text-red-600 focus:ring-red-500"
                       />
                       <span>{labels[key]}</span>
@@ -786,7 +1518,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                     setConfirmPurge(false);
                     return;
                   }
-                  
+
                   if (!confirmPurge) {
                     setConfirmPurge(true);
                     setPurgeMsg({ type: 'error', text: 'Êtes-vous sûr ? Cliquez à nouveau pour confirmer la suppression définitive.' });
@@ -803,7 +1535,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                 {confirmPurge ? 'Oui, confirmer la suppression' : 'Supprimer les données sélectionnées'}
               </button>
               {confirmPurge && (
-                <button
+                  <button
                   onClick={() => {
                     setConfirmPurge(false);
                     setPurgeMsg({ type: '', text: '' });
@@ -815,66 +1547,742 @@ export function Settings({ onBack }: { onBack?: () => void }) {
               )}
             </div>
           </div>
-        </div>
-      )}
 
-      {/* Onglet 4 : Sauvegarde et Patchs de configuration */}
-      {activeTab === 'system' && currentUser?.role === 'manager' && (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-6 border-b border-slate-200">
-              <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-                <Download className="w-5 h-5 mr-2 text-blue-500" />
-                Exporter la Configuration (Templates)
-              </h3>
-              <p className="text-sm text-slate-500 mt-1">
-                Générez un fichier JSON contenant toute la configuration structurelle de l'application (Templates d'analyses, modèles de matériaux, modèles de rapports, et paramètres du laboratoire). Les données métier (échantillons, demandes, etc.) ne sont pas exportées afin de préserver la traçabilité.
-              </p>
-            </div>
-            <div className="p-6 bg-slate-50 flex items-center justify-between">
-              <div className="text-sm text-slate-600">
-                Ceci est particulièrement utile avant une mise à jour majeure.
+          {/* Sauvegardes Automatiques SQLite & Configurations par Laboratoire */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mt-6">
+            <div className="p-6 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+                  <Database className="w-5 h-5 text-emerald-600" />
+                  Sauvegardes SQLite & Configurations par Laboratoire (Rétention {backupRetentionDays}j)
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Chaque sauvegarde quotidienne copie la base SQLite et génère un fichier JSON de configuration par laboratoire dans <code className="font-mono">storage/backups/</code>.
+                </p>
               </div>
               <button
-                onClick={exportPatch}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-sm transition-colors flex items-center"
+                type="button"
+                disabled={backupLoading}
+                onClick={async () => {
+                  setBackupLoading(true);
+                  setBackupMsg(null);
+                  try {
+                    const res = await fetch('/api/system/backups', { method: 'POST' });
+                    if (res.ok) {
+                      setBackupMsg('Sauvegarde manuelle (SQLite + configurations de chaque laboratoire) créée avec succès.');
+                      await loadBackups();
+                    } else {
+                      setBackupMsg('Erreur lors de la sauvegarde (vérifiez que le serveur backend est redémarré).');
+                    }
+                  } catch {
+                    setBackupMsg('Erreur réseau lors de la sauvegarde.');
+                  } finally {
+                    setBackupLoading(false);
+                  }
+                }}
+                className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold disabled:opacity-50"
               >
-                <Download className="w-4 h-4 mr-2" />
-                Télécharger lims_config.json
+                {backupLoading ? 'Sauvegarde...' : 'Sauvegarder maintenant'}
               </button>
             </div>
-          </div>
+            <div className="p-6 space-y-5">
+              {/* Export / Restauration directe de la configuration de chaque laboratoire */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                      Export / Restauration manuelle par Laboratoire (.json)
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Inclut les paramètres du laboratoire, règles de planification & préparation, option devis, modèles CMS, packs, équipements et cartes CQ.
+                    </p>
+                  </div>
+                  <label className="inline-flex items-center px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer">
+                    Importer une config (.json)
+                    <input
+                      type="file"
+                      accept=".json"
+                      className="hidden"
+                      onChange={e => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          try {
+                            const parsed = JSON.parse(String(reader.result || '{}'));
+                            if (parsed.laboratory && parsed.laboratory.id) {
+                              updateLaboratory(parsed.laboratory.id, parsed.laboratory);
+                            }
+                            applyPatch({
+                              materialTemplates: parsed.materialTemplates,
+                              analysisTemplates: parsed.analysisTemplates,
+                              requestTemplates: parsed.requestTemplates,
+                              reportTemplates: parsed.reportTemplates,
+                              labSettings: parsed.laboratory?.settings
+                            });
+                            setBackupMsg(`Configuration restaurée avec succès pour ${parsed.laboratory?.name || parsed.labId || 'le laboratoire'}.`);
+                          } catch {
+                            setBackupMsg('Fichier JSON invalide : impossible de restaurer la configuration.');
+                          }
+                        };
+                        reader.readAsText(file);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {laboratories
+                    .filter(l => currentUser?.role === 'admin' || !currentUser?.labId || currentUser.labId === 'all' || l.id === currentUser.labId)
+                    .map(lab => (
+                      <div key={lab.id} className="flex items-center justify-between gap-2 p-2.5 bg-white rounded-lg border border-slate-200 text-xs">
+                        <div className="truncate">
+                          <div className="font-semibold text-slate-900 truncate">{lab.name}</div>
+                          <div className="text-[10px] font-mono text-slate-500">{lab.code} • {lab.id}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const payload = {
+                              exportedAt: new Date().toISOString(),
+                              backupVersion: 2,
+                              labId: lab.id,
+                              laboratory: lab,
+                              materialTemplates: allMaterialTemplates.filter(x => x.labId === lab.id),
+                              analysisTemplates: allAnalysisTemplates.filter(x => x.labId === lab.id),
+                              requestTemplates: allRequestTemplates.filter(x => x.labId === lab.id),
+                              reportTemplates: allReportTemplates.filter(x => x.labId === lab.id),
+                              analysisPacks: allAnalysisPacks.filter(x => x.labId === lab.id),
+                              equipments: allEquipments.filter(x => x.labId === lab.id),
+                              controlCharts: allControlCharts.filter(x => x.labId === lab.id)
+                            };
+                            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `config-lab-${lab.code || lab.id}-${new Date().toISOString().slice(0, 10)}.json`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                          className="px-2.5 py-1 rounded bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 border border-slate-200 font-semibold shrink-0"
+                        >
+                          ↓ Exporter
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              </div>
 
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-6 border-b border-slate-200">
-              <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-                <Upload className="w-5 h-5 mr-2 text-emerald-500" />
-                Importer une Configuration
-              </h3>
-              <p className="text-sm text-slate-500 mt-1">
-                Importez un fichier JSON contenant de nouveaux paramètres ou de nouveaux modèles d'analyses/matériaux. Le déploiement s'effectuera à chaud et <strong>mettra à jour la structure sans effacer vos échantillons ou demandes en cours</strong>.
-              </p>
-            </div>
-            <div className="p-6">
-              {patchMsg.text && (
-                <div className={`mb-4 p-4 rounded-md text-sm border ${patchMsg.type === 'error' ? 'bg-red-50 text-red-600 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'} flex items-center`}>
-                  {patchMsg.type === 'success' ? <Check className="w-5 h-5 mr-2" /> : <AlertTriangle className="w-5 h-5 mr-2" />}
-                  {patchMsg.text}
+              {backupMsg && (
+                <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 font-medium">
+                  {backupMsg}
                 </div>
               )}
-              <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-10 hover:bg-slate-50 transition-colors">
-                <Upload className="w-10 h-10 text-slate-300 mb-3" />
-                <div className="text-slate-600 font-medium mb-1">Glissez-déposez un patch JSON ou cliquez pour parcourir</div>
-                <div className="text-slate-400 text-xs mb-4">Seuls les fichiers lims_config_*.json sont acceptés</div>
-                <label className="cursor-pointer bg-slate-800 hover:bg-slate-900 text-white px-6 py-2.5 rounded-lg font-medium shadow-sm transition-colors">
-                  Parcourir les fichiers
-                  <input type="file" accept=".json" className="hidden" onChange={importPatch} />
-                </label>
-              </div>
+              {backupsList.length === 0 ? (
+                <p className="text-xs text-slate-400 italic">Aucune sauvegarde serveur disponible pour le moment.</p>
+              ) : (
+                <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+                  {backupsList.slice(0, 10).map(bk => (
+                    <div key={bk.name} className="p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <div>
+                        <div className="font-mono font-bold text-slate-800">{bk.name}</div>
+                        <div className="text-slate-500">
+                          {new Date(bk.createdAt).toLocaleString('fr-FR')} • {bk.files.length} fichier(s)
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {bk.files.map(f => {
+                          const canDownload =
+                            currentUser?.role === 'admin' ||
+                            (currentUser?.role === 'manager' && f.name.startsWith('config-lab-') && f.name.endsWith('.json'));
+                          return canDownload ? (
+                            <a
+                              key={f.name}
+                              href={`/api/system/backups/${encodeURIComponent(bk.name)}/${encodeURIComponent(f.name)}`}
+                              className={`px-2.5 py-1 rounded border font-mono text-[11px] ${
+                                f.name.startsWith('config-lab-')
+                                  ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border-indigo-200'
+                                  : 'bg-slate-100 hover:bg-blue-50 hover:text-blue-700 border-slate-200'
+                              }`}
+                            >
+                              ↓ {f.name} ({Math.max(1, Math.round(f.sizeBytes / 1024))} Ko)
+                            </a>
+                          ) : (
+                            <span key={f.name} className="px-2 py-1 rounded bg-slate-50 border border-slate-200 font-mono text-[11px] text-slate-500">
+                              {f.name} ({Math.max(1, Math.round(f.sizeBytes / 1024))} Ko)
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
       )}
-    </div>
-  );
+
+      {/* SECTION ADMIN : GESTION MULTI-LABORATOIRES (Création, édition et suppression d'entités labo) */}
+      {activeTab === 'lab' && currentUser?.role === 'admin' && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mt-6">
+          <div className="p-6 border-b border-slate-200">
+            <h3 className="text-lg font-semibold text-slate-800 flex items-center">
+              <Building className="w-5 h-5 mr-2 text-slate-400" />
+              Gestion des Laboratoires
+            </h3>
+          </div>
+          <div className="p-6 space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {laboratories?.map(lab => (
+                <div key={lab.id} className="p-4 border rounded-lg flex justify-between items-center">
+                  <div>
+                    <div className="font-bold">{lab.name}</div>
+                    <div className="text-sm text-gray-500">{lab.code}</div>
+                  </div>
+                  <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setEditingLabData(lab);
+                          setLabModalOpen(true);
+                        }}
+                        className="text-slate-600 hover:bg-slate-100 p-2 rounded"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                  <button
+                    onClick={() => {
+                      if (confirm('Voulez-vous vraiment supprimer ce laboratoire ?')) {
+                        deleteLaboratory(lab.id);
+                      }
+                    }}
+                    className="text-red-600 hover:bg-red-50 p-2 rounded"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={() => {
+                setEditingLabData({ name: '', code: '', description: '' });
+                setLabModalOpen(true);
+              }}
+              className="mt-4 flex items-center justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
+            >
+              <Plus className="w-4 h-4 mr-2" /> Créer un laboratoire
+            </button>
+
+            {/* Modale de création / édition d'un laboratoire (Multi-Tenant) */}
+            {labModalOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+                <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+                  <h2 className="text-xl font-bold mb-4">{editingLabData.id ? 'Éditer le laboratoire' : 'Nouveau laboratoire'}</h2>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Nom complet</label>
+                      <input 
+                        type="text" 
+                        value={editingLabData.name || ''} 
+                        onChange={e => setEditingLabData({...editingLabData, name: e.target.value})} 
+                        className="w-full border-slate-300 rounded-lg text-sm" 
+                        placeholder="Ex: Laboratoire de Métallurgie"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Code court</label>
+                      <input 
+                        type="text" 
+                        value={editingLabData.code || ''} 
+                        onChange={e => setEditingLabData({...editingLabData, code: e.target.value})} 
+                        className="w-full border-slate-300 rounded-lg text-sm" 
+                        placeholder="Ex: MET"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Description</label>
+                      <textarea 
+                        value={editingLabData.description || ''} 
+                        onChange={e => setEditingLabData({...editingLabData, description: e.target.value})} 
+                        className="w-full border-slate-300 rounded-lg text-sm" 
+                        rows={3}
+                        placeholder="Description des activités du laboratoire..."
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-3 mt-6">
+                    <button 
+                      onClick={() => setLabModalOpen(false)} 
+                      className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
+                    >
+                      Annuler
+                    </button>
+                    <button 
+                      onClick={() => {
+                        if (!editingLabData.name || !editingLabData.code) return;
+                        if (editingLabData.id) {
+                          updateLaboratory(editingLabData.id, {
+                            name: editingLabData.name,
+                            shortName: editingLabData.shortName || editingLabData.name,
+                            code: editingLabData.code,
+                            description: editingLabData.description
+                          });
+                        } else {
+                          addLaboratory({
+                            id: `lab-${Date.now()}`,
+                            name: editingLabData.name,
+                            shortName: editingLabData.name,
+                            code: editingLabData.code,
+                            description: editingLabData.description || '',
+                            themeColor: 'blue',
+                            badgeBg: 'bg-blue-50 text-blue-700 border-blue-200',
+                            badgeText: `${editingLabData.name} (${editingLabData.code})`,
+                            settings: {
+                              labName: editingLabData.name,
+                              labAddress: '',
+                              contactEmail: '',
+                              phone: '',
+                              isoCertifications: [],
+                              logoUrl: '',
+                              tableStyles: { headerBgColor: 'F8FAFC', borderColor: 'E2E8F0', borderSize: 2 }
+                            }
+                          });
+                        }
+                    setLabModalOpen(false);
+              }}
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg"
+                    >
+                                    Enregistrer
+                    </button>
+                  </div>
+                </div>
+                </div>
+            )}
+          </div>
+        </div>
+      )}
+
+          {/* Onglet 4 : Sauvegarde et Patchs de configuration */}
+          {activeTab === 'system' && (currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-6 border-b border-slate-200">
+                  <h3 className="text-lg font-semibold text-slate-800 flex items-center">
+                    <Download className="w-5 h-5 mr-2 text-blue-500" />
+                    Exporter la Configuration (Templates)
+                  </h3>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Générez un fichier JSON contenant toute la configuration structurelle de l'application (Templates d'analyses, modèles de matériaux, modèles de rapports, et paramètres du laboratoire). Les données métier (échantillons, demandes, etc.) ne sont pas exportées afin de préserver la traçabilité.
+                  </p>
+                </div>
+                <div className="p-6 bg-slate-50 flex items-center justify-between">
+                  <div className="text-sm text-slate-600">
+                    Ceci est particulièrement utile avant une mise à jour majeure.
+                  </div>
+                  <button
+                    onClick={exportPatch}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-sm transition-colors flex items-center"
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    Télécharger lims_config.json
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-6 border-b border-slate-200">
+                  <h3 className="text-lg font-semibold text-slate-800 flex items-center">
+                    <Upload className="w-5 h-5 mr-2 text-emerald-500" />
+                    Importer une Configuration
+                  </h3>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Importez un fichier JSON contenant de nouveaux paramètres ou de nouveaux modèles d'analyses/matériaux. Le déploiement s'effectuera à chaud et <strong>mettra à jour la structure sans effacer vos échantillons ou demandes en cours</strong>.
+                  </p>
+                </div>
+                <div className="p-6">
+                  {patchMsg.text && (
+                    <div className={`mb-4 p-4 rounded-md text-sm border ${patchMsg.type === 'error' ? 'bg-red-50 text-red-600 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'} flex items-center`}>
+                      {patchMsg.type === 'success' ? <Check className="w-5 h-5 mr-2" /> : <AlertTriangle className="w-5 h-5 mr-2" />}
+                      {patchMsg.text}
+                    </div>
+                  )}
+                  <div
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const droppedFile = e.dataTransfer.files?.[0];
+                      if (droppedFile) processPatchFile(droppedFile);
+                    }}
+                    className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-10 hover:bg-slate-50 transition-colors"
+                  >
+                    <Upload className="w-10 h-10 text-slate-300 mb-3" />
+                    <div className="text-slate-600 font-medium mb-1">Glissez-déposez un patch JSON ou cliquez pour parcourir</div>
+                    <div className="text-slate-400 text-xs mb-4">Seuls les fichiers lims_config_*.json sont acceptés</div>
+                    <label className="cursor-pointer bg-slate-800 hover:bg-slate-900 text-white px-6 py-2.5 rounded-lg font-medium shadow-sm transition-colors">
+                      Parcourir les fichiers
+                      <input type="file" accept=".json" className="hidden" onChange={importPatch} />
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Onglet 5 : Serveur Mail SMTP (Uniquement visible pour les Admins) */}
+          {activeTab === 'smtp' && currentUser?.role === 'admin' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-6 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-800 flex items-center">
+                      <Server className="w-5 h-5 mr-2 text-blue-600" />
+                      Configuration du Serveur Mail (SMTP)
+                    </h3>
+                    <p className="text-sm text-slate-500 mt-1">
+                      Paramétrez le serveur SMTP utilisé pour envoyer automatiquement toutes les notifications de l'application par e-mail (nouvelles demandes, validations, assignations, rapports publiés, alertes de stock).
+                    </p>
+                  </div>
+                  <label className="flex items-center space-x-3 bg-slate-100 px-4 py-2.5 rounded-lg border border-slate-200 cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={smtpConfig.enabled}
+                      onChange={(e) => setSmtpConfig({ ...smtpConfig, enabled: e.target.checked })}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className={`text-sm font-semibold ${smtpConfig.enabled ? 'text-emerald-700' : 'text-slate-600'}`}>
+                      {smtpConfig.enabled ? 'Envoi Mail Activé' : 'Envoi Mail Désactivé'}
+                    </span>
+                  </label>
+                </div>
+
+                <form onSubmit={handleSaveSmtp} className="p-6 space-y-6">
+                  {smtpMsg.text && (
+                    <div className={`p-4 rounded-lg text-sm border flex items-center ${smtpMsg.type === 'error' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                      {smtpMsg.type === 'error' ? <AlertTriangle className="w-5 h-5 mr-2 shrink-0" /> : <Check className="w-5 h-5 mr-2 shrink-0" />}
+                      <span>{smtpMsg.text}</span>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Serveur Hôte SMTP</label>
+                      <input
+                        type="text"
+                        placeholder="ex: smtp.office365.com, smtp.gmail.com, mail.domaine.fr"
+                        value={smtpConfig.host}
+                        onChange={(e) => setSmtpConfig({ ...smtpConfig, host: e.target.value })}
+                        className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Port SMTP</label>
+                      <input
+                        type="number"
+                        placeholder="587"
+                        value={smtpConfig.port}
+                        onChange={(e) => setSmtpConfig({ ...smtpConfig, port: parseInt(e.target.value, 10) || 587 })}
+                        className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Utilisateur / Identifiant SMTP</label>
+                      <input
+                        type="text"
+                        placeholder="ex: notifications@laboratoire.fr"
+                        value={smtpConfig.user}
+                        onChange={(e) => setSmtpConfig({ ...smtpConfig, user: e.target.value })}
+                        className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Mot de passe SMTP / Clé d'application</label>
+                      <input
+                        type="password"
+                        placeholder="••••••••"
+                        value={smtpConfig.pass}
+                        onChange={(e) => setSmtpConfig({ ...smtpConfig, pass: e.target.value })}
+                        className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-slate-100">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Nom d'expéditeur affiché</label>
+                      <input
+                        type="text"
+                        placeholder="ex: LIMS MaterioLab"
+                        value={smtpConfig.fromName}
+                        onChange={(e) => setSmtpConfig({ ...smtpConfig, fromName: e.target.value })}
+                        className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Adresse e-mail d'expéditeur (From)</label>
+                      <input
+                        type="email"
+                        placeholder="ex: noreply@materiolab.fr"
+                        value={smtpConfig.fromEmail}
+                        onChange={(e) => setSmtpConfig({ ...smtpConfig, fromEmail: e.target.value })}
+                        className="w-full border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-3 pt-2">
+                    <input
+                      type="checkbox"
+                      id="smtp-secure"
+                      checked={smtpConfig.secure}
+                      onChange={(e) => setSmtpConfig({ ...smtpConfig, secure: e.target.checked })}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <label htmlFor="smtp-secure" className="text-sm text-slate-700 cursor-pointer">
+                      Utiliser une connexion SSL/TLS directe (cocher uniquement pour le port <strong>465</strong> ; laisser décoché pour STARTTLS sur le port <strong>587</strong> ou <strong>25</strong>)
+                    </label>
+                  </div>
+
+                  <div className="flex justify-end pt-4 border-t border-slate-200">
+                    <button
+                      type="submit"
+                      disabled={isSavingSmtp}
+                      className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-sm transition-colors flex items-center disabled:opacity-50"
+                    >
+                      <Save className="w-4 h-4 mr-2" />
+                      {isSavingSmtp ? 'Enregistrement...' : 'Enregistrer la configuration SMTP'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              {/* Carte de test d'envoi d'e-mail */}
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-6 border-b border-slate-200">
+                  <h3 className="text-lg font-semibold text-slate-800 flex items-center">
+                    <Send className="w-5 h-5 mr-2 text-emerald-600" />
+                    Tester l'envoi d'e-mail
+                  </h3>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Vérifiez immédiatement la connexion à votre serveur SMTP en envoyant un e-mail de test.
+                  </p>
+                </div>
+                <div className="p-6 bg-slate-50 flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
+                  <input
+                    type="email"
+                    placeholder="Adresse e-mail de réception du test..."
+                    value={testEmailAddress}
+                    onChange={(e) => setTestEmailAddress(e.target.value)}
+                    className="flex-1 border-slate-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500 bg-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleTestSmtp}
+                    disabled={isTestingSmtp || !smtpConfig.host}
+                    className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-medium rounded-lg shadow-sm transition-colors flex items-center justify-center disabled:opacity-50 shrink-0"
+                  >
+                    <Send className="w-4 h-4 mr-2" />
+                    {isTestingSmtp ? 'Envoi en cours...' : 'Envoyer un mail de test'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Onglet 6 : Console de Logs Applicatifs (Uniquement visible pour les Admins) */}
+          {activeTab === 'logs' && currentUser?.role === 'admin' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+              {/* Bandeau de synthèse des anomalies */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Événements</div>
+                    <div className="text-2xl font-bold text-slate-900 mt-1">{frontendLogs.length + backendLogs.length}</div>
+                  </div>
+                  <div className="p-3 bg-slate-100 rounded-lg text-slate-600">
+                    <Terminal className="w-5 h-5" />
+                  </div>
+                </div>
+                <div className="bg-white border border-amber-200 rounded-xl p-4 shadow-sm flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wider text-amber-600">Avertissements (Warn)</div>
+                    <div className="text-2xl font-bold text-amber-700 mt-1">{warnCount}</div>
+                  </div>
+                  <div className="p-3 bg-amber-50 rounded-lg text-amber-600">
+                    <AlertTriangle className="w-5 h-5" />
+                  </div>
+                </div>
+                <div className="bg-white border border-red-200 rounded-xl p-4 shadow-sm flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wider text-red-600">Erreurs & Bugs (Error)</div>
+                    <div className="text-2xl font-bold text-red-700 mt-1">{errorCount}</div>
+                  </div>
+                  <div className="p-3 bg-red-50 rounded-lg text-red-600">
+                    <Bug className="w-5 h-5" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Console principale */}
+              <div className="bg-slate-950 rounded-xl shadow-xl border border-slate-800 overflow-hidden text-slate-100">
+                {/* Barre d'outils de la console */}
+                <div className="p-4 bg-slate-900 border-b border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                  <div className="flex items-center space-x-3">
+                    <div className="flex space-x-1.5">
+                      <span className="w-3 h-3 rounded-full bg-red-500 inline-block"></span>
+                      <span className="w-3 h-3 rounded-full bg-amber-500 inline-block"></span>
+                      <span className="w-3 h-3 rounded-full bg-emerald-500 inline-block"></span>
+                    </div>
+                    <h3 className="text-sm font-mono font-bold text-slate-200 flex items-center">
+                      <Terminal className="w-4 h-4 mr-2 text-blue-400" />
+                      Console Système (Frontend + Backend)
+                    </h3>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Recherche */}
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={logSearchQuery}
+                        onChange={(e) => setLogSearchQuery(e.target.value)}
+                        placeholder="Filtrer un message, stack..."
+                        className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg pl-8 pr-3 py-1.5 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+
+                    {/* Filtre Source */}
+                    <select
+                      value={logSourceFilter}
+                      onChange={(e) => setLogSourceFilter(e.target.value as any)}
+                      className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="all">Source : Toutes</option>
+                      <option value="frontend">Frontend (Navigateur)</option>
+                      <option value="backend">Backend (Serveur API)</option>
+                    </select>
+
+                    {/* Filtre Niveau */}
+                    <select
+                      value={logLevelFilter}
+                      onChange={(e) => setLogLevelFilter(e.target.value as any)}
+                      className="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="all">Niveau : Tous</option>
+                      <option value="info">Info</option>
+                      <option value="warn">Warn</option>
+                      <option value="error">Error (Bugs)</option>
+                    </select>
+
+                    {/* Auto-refresh */}
+                    <label className="flex items-center space-x-1.5 text-xs text-slate-300 bg-slate-800 border border-slate-700 px-2.5 py-1.5 rounded-lg cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={autoRefreshLogs}
+                        onChange={(e) => setAutoRefreshLogs(e.target.checked)}
+                        className="rounded border-slate-600 text-blue-500 focus:ring-0"
+                      />
+                      <span>Live (4s)</span>
+                    </label>
+
+                    {/* Rafraîchir manuellement */}
+                    <button
+                      onClick={fetchBackendLogs}
+                      disabled={isLoadingLogs}
+                      className="p-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-slate-200 transition-colors"
+                      title="Actualiser les logs serveur"
+                    >
+                      <RefreshCw className={`w-4 h-4 text-blue-400 ${isLoadingLogs ? 'animate-spin' : ''}`} />
+                    </button>
+
+                    {/* Exporter JSON */}
+                    <button
+                      onClick={exportLogsJson}
+                      className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg transition-colors flex items-center"
+                      title="Exporter les logs en JSON"
+                    >
+                      <Download className="w-3.5 h-3.5 mr-1" />
+                      Exporter
+                    </button>
+
+                    {/* Vider */}
+                    <button
+                      onClick={handleClearAllLogs}
+                      className="px-2.5 py-1.5 bg-red-900/60 hover:bg-red-800 text-red-200 border border-red-800 text-xs font-medium rounded-lg transition-colors flex items-center"
+                      title="Vider tous les logs"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 mr-1" />
+                      Vider
+                    </button>
+                  </div>
+                </div>
+
+                {/* Flux des logs */}
+                <div className="p-4 font-mono text-xs max-h-[560px] overflow-y-auto space-y-2 divide-y divide-slate-900">
+                  {filteredLogs.length === 0 ? (
+                    <div className="py-16 text-center text-slate-500">
+                      Aucun événement à afficher pour les filtres sélectionnés.
+                    </div>
+                  ) : (
+                    filteredLogs.map((log) => {
+                      const levelBadge =
+                        log.level === 'error'
+                          ? 'bg-red-500/20 text-red-400 border-red-500/30'
+                          : log.level === 'warn'
+                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                            : 'bg-blue-500/20 text-blue-300 border-blue-500/30';
+
+                      const sourceBadge =
+                        log.source === 'backend'
+                          ? 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+                          : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
+
+                      return (
+                        <div
+                          key={log.id}
+                          className={`pt-2 first:pt-0 rounded px-2 py-1.5 ${log.level === 'error'
+                            ? 'bg-red-950/30'
+                            : log.level === 'warn'
+                              ? 'bg-amber-950/20'
+                              : 'hover:bg-slate-900/60'
+                            }`}
+                        >
+                          <div className="flex flex-wrap items-start gap-2">
+                            <span className="text-slate-500 shrink-0">
+                              {new Date(log.timestamp).toLocaleTimeString('fr-FR', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit',
+                              })}
+                            </span>
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase border shrink-0 ${sourceBadge}`}>
+                              {log.source === 'backend' ? 'API' : 'UI'}
+                            </span>
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase border shrink-0 ${levelBadge}`}>
+                              {log.level}
+                            </span>
+                            <span className="text-slate-200 break-all whitespace-pre-wrap flex-1">
+                              {log.message}
+                            </span>
+                          </div>
+                          {log.details && (
+                            <pre className="mt-1.5 ml-14 p-2 bg-slate-900/90 border border-slate-800 rounded text-[11px] text-slate-400 overflow-x-auto whitespace-pre-wrap">
+                              {log.details}
+                            </pre>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
 }

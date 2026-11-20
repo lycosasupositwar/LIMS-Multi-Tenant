@@ -11,6 +11,14 @@
  * 
  * Les demandeurs (ex: Jean Dupont) disposent d'un portail unifié unique à partir
  * duquel ils peuvent soumettre des demandes à l'un ou l'autre laboratoire.
+ *
+ * NOTE IMPORTANTE POUR LES DÉVELOPPEURS :
+ * Ces collections (`initialLaboratories`, `initialRequestTemplates`, `initialMaterialTemplates`,
+ * `initialAnalysisTemplates`, `initialConsumables`, `initialRequests`, `initialSamples`,
+ * `initialAnalyses`, `initialReports`, `initialReportTemplates`) servent de valeurs de repli
+ * (seed initial) dans `src/store.tsx` via le hook `useSyncedState`. Dès la première connexion
+ * d'un utilisateur authentifié, si une collection est absente de la table SQLite `collections`,
+ * elle est automatiquement persistée en base de données via `POST /api/db/:collection`.
  */
 
 import { 
@@ -24,7 +32,10 @@ import {
   RequestTemplate, 
   AnalysisRequest, 
   Consumable, 
-  ReportTemplate 
+  ReportTemplate,
+  Equipment,
+  NonConformity,
+  AnalysisPack
 } from './types';
 
 /**
@@ -56,6 +67,18 @@ export const initialLaboratories: Laboratory[] = [
         request: 'REQ-MET',
         sample: 'ECH-MET',
         subSample: 'ENR-MET'
+      },
+      schedulingConfig: {
+        dailyCapacityHours: 7,
+        workingDays: [1, 2, 3, 4, 5],
+        allowUrgentPreemption: true,
+        batchWindowDays: 3,
+        preparationSteps: [
+          { id: 'PREP-MET-TRONC', name: 'Tronçonnage', durationMinutes: 10, batchCapacity: 1, batchGroupBy: 'none' },
+          { id: 'PREP-MET-ENROB', name: 'Enrobage à chaud', durationMinutes: 15, batchCapacity: 1, batchGroupBy: 'none' },
+          { id: 'PREP-MET-POLIS', name: 'Polissage automatique', durationMinutes: 45, batchCapacity: 6, batchGroupBy: 'same_material' },
+          { id: 'PREP-MET-ATTAQ', name: 'Attaque chimique', durationMinutes: 10, batchCapacity: 1, batchGroupBy: 'none' }
+        ]
       }
     }
   },
@@ -84,6 +107,17 @@ export const initialLaboratories: Laboratory[] = [
         request: 'REQ-MEC',
         sample: 'ECH-MEC',
         subSample: 'EPR-MEC'
+      },
+      schedulingConfig: {
+        dailyCapacityHours: 14,
+        workingDays: [1, 2, 3, 4, 5],
+        allowUrgentPreemption: true,
+        batchWindowDays: 3,
+        preparationSteps: [
+          { id: 'PREP-MEC-USIN', name: 'Usinage éprouvette', durationMinutes: 30, batchCapacity: 1, batchGroupBy: 'none' },
+          { id: 'PREP-MEC-DEGAZ', name: 'Dégazage BET', durationMinutes: 180, batchCapacity: 4, batchGroupBy: 'any' },
+          { id: 'PREP-MEC-ETUVE', name: 'Étuvage / Séchage poudres', durationMinutes: 60, batchCapacity: 10, batchGroupBy: 'same_template' }
+        ]
       }
     }
   }
@@ -92,14 +126,7 @@ export const initialLaboratories: Laboratory[] = [
 /**
  * Utilisateurs de démonstration
  */
-export const mockUsers: User[] = [
-  { id: 'usr-1', email: 'jean.dupont@entreprise.com', name: 'Jean Dupont', role: 'demandeur', company: 'AeroTech Industries' },
-  { id: 'usr-2', email: 'sophie.martin@labo.com', name: 'Sophie Martin', role: 'analyste', company: 'Laboratoire Métallographie', labId: 'lab-metallurgie' },
-  { id: 'usr-3', email: 'marc.durand@labo.com', name: 'Dr. Marc Durand', role: 'manager', company: 'Laboratoire Métallographie', labId: 'lab-metallurgie' },
-  { id: 'usr-4', email: 'claire.leroy@labo-meca.com', name: 'Claire Leroy', role: 'analyste', company: 'Laboratoire Mécanique', labId: 'lab-mecanique' },
-  { id: 'usr-5', email: 'alexandre.roux@labo-meca.com', name: 'Alexandre Roux', role: 'manager', company: 'Laboratoire Mécanique', labId: 'lab-mecanique' },
-  { id: 'usr-6', email: 'directeur@groupelabo.com', name: 'Dr. Hélène Voisin', role: 'manager', company: 'Direction des Laboratoires', labId: 'all' }
-];
+
 
 /**
  * Modèles de formulaires de demandes configurés par laboratoire
@@ -264,6 +291,9 @@ export const initialAnalysisTemplates: AnalysisTemplate[] = [
     description: 'Examen de la microstructure et détection des porosités résiduelles par analyse d\'image.',
     standardRef: 'ISO 643 / ASTM E3',
     isActive: true,
+    estimatedHours: 1,
+    requiresPreparation: true,
+    preparationStepIds: ['PREP-MET-TRONC', 'PREP-MET-ENROB', 'PREP-MET-POLIS', 'PREP-MET-ATTAQ'],
     expectedResults: [
       { id: 'porosite', name: 'Taux de porosité surfacique', type: 'number', unit: '%', required: true },
       { id: 'phases', name: 'Description des phases observées', type: 'text', required: true },
@@ -279,6 +309,9 @@ export const initialAnalysisTemplates: AnalysisTemplate[] = [
     description: 'Mesure de dureté par pénétration d\'une pyramide diamant sous charge de 0.1 à 10 kgf.',
     standardRef: 'NF EN ISO 6507-1',
     isActive: true,
+    estimatedHours: 0.75,
+    requiresPreparation: true,
+    preparationStepIds: ['PREP-MET-ENROB', 'PREP-MET-POLIS'],
     expectedResults: [
       { id: 'charge', name: 'Charge d\'essai', type: 'select', options: ['HV0.1', 'HV0.3', 'HV0.5', 'HV1', 'HV5'], required: true },
       { id: 'hv_moyen', name: 'Dureté Vickers Moyenne', type: 'number', unit: 'HV', required: true },
@@ -470,7 +503,7 @@ export const initialRequests: AnalysisRequest[] = [
     requesterId: 'usr-1',
     templateId: 'REQ-TPL-MECA',
     title: 'Essais de Traction & Granulométrie Poudre AlSi10Mg',
-    status: 'en_cours',
+    status: 'En Cours',
     createdAt: '2026-03-12T14:15:00Z',
     assignedTo: 'usr-4',
     customData: {
@@ -560,7 +593,7 @@ export const initialAnalyses: Analysis[] = [
     labId: 'lab-metallurgie',
     sampleId: 'ECH-MET-001', 
     templateId: 'ANA-METALLO', 
-    status: 'en_cours', 
+    status: 'En Cours', 
     technician: 'Sophie Martin', 
     updatedAt: '2026-03-15T11:00:00Z',
     results: { 'porosite': 0.35, 'phases': 'Matrice gamma, précipités gamma prime et carbures TiC intragranulaires.' },
@@ -638,6 +671,118 @@ export const initialReportTemplates: ReportTemplate[] = [
     name: 'Procès-Verbal d\'Essais Mécaniques & Granulométrie',
     description: 'En-tête officiel Mécanique avec courbes de traction et diagrammes granulométriques.',
     type: 'report',
+    isActive: true
+  }
+];
+
+/**
+ * Parc d'équipements de mesure et suivi métrologique initial (ISO 17025 §6.4)
+ */
+export const initialEquipments: Equipment[] = [
+  {
+    id: 'EQ-MET-001',
+    labId: 'lab-metallurgie',
+    name: 'Microscope Optique Zeiss Axio Imager M2m',
+    code: 'MIC-MET-01',
+    serialNumber: 'ZEISS-2024-8841',
+    manufacturer: 'Carl Zeiss',
+    category: 'Microstructure',
+    status: 'operationnel',
+    lastCalibrationDate: '2026-06-15',
+    nextCalibrationDate: '2027-06-15',
+    calibrationIntervalMonths: 12,
+    location: 'Salle Microscopie A1',
+    notes: 'Étalonnage micromètre objet COFRAC n°2026-412.'
+  },
+  {
+    id: 'EQ-MET-002',
+    labId: 'lab-metallurgie',
+    name: 'Microduromètre Vickers Struers Duramin-40',
+    code: 'DUR-MET-02',
+    serialNumber: 'STR-2023-1920',
+    manufacturer: 'Struers',
+    category: 'Microstructure',
+    status: 'operationnel',
+    lastCalibrationDate: '2025-12-01',
+    nextCalibrationDate: '2026-12-01',
+    calibrationIntervalMonths: 12,
+    location: 'Salle Essais Dureté A2',
+    notes: 'Vérification journalière sur cale étalon 500 HV1.'
+  },
+  {
+    id: 'EQ-MEC-001',
+    labId: 'lab-mecanique',
+    name: 'Machine de Traction Universelle Instron 5982 (100 kN)',
+    code: 'TRA-MEC-01',
+    serialNumber: 'INS-2022-5591',
+    manufacturer: 'Instron',
+    category: 'Mécanique',
+    status: 'operationnel',
+    lastCalibrationDate: '2026-04-10',
+    nextCalibrationDate: '2027-04-10',
+    calibrationIntervalMonths: 12,
+    location: 'Hall Essais Mécaniques B1',
+    notes: 'Cellule 100 kN Classe 0.5 + extensomètre vidéo.'
+  },
+  {
+    id: 'EQ-MEC-002',
+    labId: 'lab-mecanique',
+    name: 'Granulomètre Laser Malvern Mastersizer 3000',
+    code: 'GRA-MEC-02',
+    serialNumber: 'MAL-2024-3302',
+    manufacturer: 'Malvern Panalytical',
+    category: 'Poudres',
+    status: 'operationnel',
+    lastCalibrationDate: '2025-10-15',
+    nextCalibrationDate: '2026-10-15',
+    calibrationIntervalMonths: 12,
+    location: 'Laboratoire Poudres B3',
+    notes: 'Étalonnage expiré — à planifier avant prochaine série critique.'
+  }
+];
+
+/**
+ * Fiches de Non-Conformités initiales (ISO 17025 §7.10)
+ */
+export const initialNonConformities: NonConformity[] = [
+  {
+    id: 'NC-MET-26-001',
+    labId: 'lab-metallurgie',
+    title: 'Échantillon reçu sans identification gravée',
+    type: 'echantillon',
+    severity: 'mineure',
+    status: 'en_analyse',
+    linkedRequestId: 'REQ-MET-26-001',
+    linkedSampleId: 'ECH-MET-001',
+    description: 'Le sachet contenant l\'aube Inconel 718 ne comportait pas de gravure directe sur la pièce à réception.',
+    rootCause: 'Oubli d\'étiquetage lors de l\'expédition client.',
+    correctiveAction: 'Confirmation écrite du client obtenue et marquage laser interne effectué dès réception.',
+    clientNotified: true,
+    createdBy: 'Dr. Marc Durand',
+    createdAt: '2026-03-15T09:00:00Z'
+  }
+];
+
+/**
+ * Packs / Gammes préconfigurées d'essais sélectionnables en un clic
+ */
+export const initialAnalysisPacks: AnalysisPack[] = [
+  {
+    id: 'PACK-MET-EXPERTISE',
+    labId: 'lab-metallurgie',
+    name: 'Pack Expertise Métallographique Complète',
+    description: 'Micrographie optique & porosité + Microdureté Vickers + Taille de grains ISO 643.',
+    analysisTemplateIds: ['ANA-METALLO', 'ANA-DURETE-HV', 'ANA-TAILLE-GRAINS'],
+    discountPercent: 10,
+    isActive: true
+  },
+  {
+    id: 'PACK-MEC-POUDRE-SLM',
+    labId: 'lab-mecanique',
+    name: 'Pack Qualification Poudre Fabrication Additive (SLM)',
+    description: 'Granulométrie laser + Surface spécifique BET + Densité vraie Hélium + Dosage C/S.',
+    analysisTemplateIds: ['ANA-GRANULO', 'ANA-BET', 'ANA-DENSITE-HE', 'ANA-DOSAGE-CS'],
+    discountPercent: 15,
     isActive: true
   }
 ];

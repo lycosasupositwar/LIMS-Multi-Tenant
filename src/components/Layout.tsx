@@ -208,8 +208,8 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
     { id: 'requests', label: 'Demandes & Workflow', icon: FileText },
     { id: 'samples', label: 'Échantillons & Préparations', icon: Box },
     { id: 'analyses', label: 'Essais & Analyses', icon: Activity },
-    // Planning & Charge réservé aux managers et administrateurs
-    ...(isManagerOrAdmin ? [{ id: 'planning', label: 'Planning & Charge', icon: CalendarDays }] : []),
+    // Planning & Charge complet pour managers/admins ; Calendrier personnel en lecture seule pour les analystes
+    { id: 'planning', label: isManagerOrAdmin ? 'Planning & Charge' : 'Mon Planning', icon: CalendarDays },
     { id: 'reports', label: 'Rapports', icon: FileText },
     // Parc Équipements & Métrologie réservé aux managers et administrateurs
     ...(isManagerOrAdmin ? [{ id: 'equipments', label: 'Équipements & Métrologie', icon: Wrench }] : []),

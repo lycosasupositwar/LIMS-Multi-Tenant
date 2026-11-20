@@ -171,6 +171,129 @@ export function estimateRequestDurationWithPrep(
   return { totalHours, prepHours, testHours: Math.round(testHours * 10) / 10, savedHours };
 }
 
+/** Détail de charge calculé pour un essai donné (essai seul + préparation amortie) */
+export interface AnalysisWorkloadDetail {
+  testHours: number;
+  prepHours: number;
+  totalHours: number;
+  prepStepNames: string[];
+}
+
+/** Synthèse de charge pour un ensemble d'analyses (une journée, un analyste ou tout un laboratoire) */
+export interface WorkloadSummary {
+  testHours: number;
+  prepHours: number;
+  totalHours: number;
+  savedHours: number;
+  byAnalysisId: Record<string, AnalysisWorkloadDetail>;
+}
+
+/**
+ * Calcule la charge horaire consolidée (essais + préparation optimisée par lots)
+ * pour un ensemble d'analyses donné (ex: une journée du calendrier, la file d'un analyste
+ * ou la charge active globale du laboratoire dans les KPI du Dashboard).
+ */
+export function calculateAnalysesWorkload(
+  analyses: Analysis[],
+  samples: Sample[],
+  analysisTemplates: AnalysisTemplate[],
+  config?: LabSchedulingConfig
+): WorkloadSummary {
+  const cfg = config || getDefaultLabSchedulingConfig();
+  const sampleMap = new Map(samples.map(s => [s.id, s]));
+  const templateMap = new Map(analysisTemplates.map(t => [t.id, t]));
+  const stepMap = new Map(cfg.preparationSteps.map(s => [s.id, s]));
+
+  const prepHoursMap = new Map<string, number>();
+  const prepNamesMap = new Map<string, string[]>();
+  let totalTestHours = 0;
+  let totalNaivePrepMinutes = 0;
+  let totalOptimizedPrepMinutes = 0;
+
+  // Préparation des métadonnées par essai
+  const items = analyses.map(a => {
+    const sample = sampleMap.get(a.sampleId);
+    const template = templateMap.get(a.templateId);
+    const testHours = template?.estimatedHours ?? 2;
+    totalTestHours += testHours;
+    const prepSteps =
+      template?.requiresPreparation && Array.isArray(template.preparationStepIds)
+        ? template.preparationStepIds.map(id => stepMap.get(id)).filter((s): s is PreparationStepTemplate => Boolean(s))
+        : [];
+    prepNamesMap.set(a.id, prepSteps.map(s => s.name));
+    prepHoursMap.set(a.id, 0);
+    return { analysis: a, sample, template, testHours, prepSteps };
+  });
+
+  // 1. Étapes séquentielles (batchCapacity <= 1 ou batchGroupBy === 'none')
+  for (const it of items) {
+    let seqMin = 0;
+    for (const step of it.prepSteps) {
+      if (step.batchCapacity <= 1 || step.batchGroupBy === 'none') {
+        seqMin += step.durationMinutes;
+      }
+    }
+    if (seqMin > 0) {
+      totalNaivePrepMinutes += seqMin;
+      totalOptimizedPrepMinutes += seqMin;
+      prepHoursMap.set(it.analysis.id, (prepHoursMap.get(it.analysis.id) || 0) + seqMin / 60);
+    }
+  }
+
+  // 2. Étapes regroupables en lots (same_material / same_template / any)
+  const multiCapSteps = cfg.preparationSteps.filter(s => s.batchCapacity > 1 && s.batchGroupBy !== 'none');
+  for (const step of multiCapSteps) {
+    const matching = items.filter(it => it.prepSteps.some(s => s.id === step.id));
+    if (matching.length === 0) continue;
+
+    const buckets = new Map<string, typeof matching>();
+    for (const it of matching) {
+      let key = 'ALL';
+      if (step.batchGroupBy === 'same_material') {
+        key = getSampleMaterialKey(it.sample).key;
+      } else if (step.batchGroupBy === 'same_template') {
+        key = it.analysis.templateId;
+      }
+      const list = buckets.get(key) || [];
+      list.push(it);
+      buckets.set(key, list);
+    }
+
+    for (const list of buckets.values()) {
+      for (let i = 0; i < list.length; i += step.batchCapacity) {
+        const chunk = list.slice(i, i + step.batchCapacity);
+        const optMin = step.durationMinutes;
+        const naiveMin = chunk.length * step.durationMinutes;
+        totalOptimizedPrepMinutes += optMin;
+        totalNaivePrepMinutes += naiveMin;
+        const amortizedHours = optMin / 60 / chunk.length;
+        chunk.forEach(it => {
+          prepHoursMap.set(it.analysis.id, (prepHoursMap.get(it.analysis.id) || 0) + amortizedHours);
+        });
+      }
+    }
+  }
+
+  const byAnalysisId: Record<string, AnalysisWorkloadDetail> = {};
+  for (const it of items) {
+    const pHours = Math.round((prepHoursMap.get(it.analysis.id) || 0) * 100) / 100;
+    const tHours = Math.round(it.testHours * 100) / 100;
+    byAnalysisId[it.analysis.id] = {
+      testHours: tHours,
+      prepHours: pHours,
+      totalHours: Math.round((tHours + pHours) * 100) / 100,
+      prepStepNames: prepNamesMap.get(it.analysis.id) || []
+    };
+  }
+
+  const testHours = Math.round(totalTestHours * 10) / 10;
+  const prepHours = Math.round((totalOptimizedPrepMinutes / 60) * 10) / 10;
+  const totalHours = Math.round((totalTestHours + totalOptimizedPrepMinutes / 60) * 10) / 10;
+  const savedHours = Math.round(((totalNaivePrepMinutes - totalOptimizedPrepMinutes) / 60) * 10) / 10;
+
+  return { testHours, prepHours, totalHours, savedHours, byAnalysisId };
+}
+
 /**
  * Calcule une proposition complète de planification intelligente pour le laboratoire actif.
  */

@@ -28,7 +28,12 @@ import {
   AuditLog,
   Consumable,
   LabSettings,
-  ReportTemplate
+  ReportTemplate,
+  Equipment,
+  NonConformity,
+  AnalysisPack,
+  ContractReview,
+  RequestComment
 } from './types';
 import {
   initialLaboratories,
@@ -40,7 +45,10 @@ import {
   initialRequestTemplates,
   initialRequests,
   initialConsumables,
-  initialReportTemplates
+  initialReportTemplates,
+  initialEquipments,
+  initialNonConformities,
+  initialAnalysisPacks
 } from './data';
 import { generateUniqueLimsId } from './utils/idGenerator';
 
@@ -117,6 +125,9 @@ interface LimsContextType {
   allReports: Report[];
   allRequests: AnalysisRequest[];
   allConsumables: Consumable[];
+  allEquipments: Equipment[];
+  allNonConformities: NonConformity[];
+  allAnalysisPacks: AnalysisPack[];
 
   // --- Collections Filtrées (selon `activeLabId` ou `currentUser.id` pour un demandeur) ---
   samples: Sample[];
@@ -124,6 +135,9 @@ interface LimsContextType {
   reports: Report[];
   requests: AnalysisRequest[];
   consumables: Consumable[];
+  equipments: Equipment[];
+  nonConformities: NonConformity[];
+  analysisPacks: AnalysisPack[];
   /** Raccourci vers `activeLab.settings` */
   labSettings: LabSettings;
 
@@ -174,6 +188,29 @@ interface LimsContextType {
   updateConsumableStock: (id: string, newLevel: number) => void;
   addConsumable: (consumable: Consumable) => void;
   deleteConsumable: (id: string) => void;
+
+  // --- Actions Parc Équipements & Métrologie (ISO 17025 §6.4) ---
+  addEquipment: (equipment: Equipment) => void;
+  updateEquipment: (id: string, updates: Partial<Equipment>) => void;
+  deleteEquipment: (id: string) => void;
+
+  // --- Actions Non-Conformités & CAPA (ISO 17025 §7.10) ---
+  addNonConformity: (nc: NonConformity) => void;
+  updateNonConformity: (id: string, updates: Partial<NonConformity>) => void;
+  deleteNonConformity: (id: string) => void;
+
+  // --- Actions Packs d'Essais ---
+  addAnalysisPack: (pack: AnalysisPack) => void;
+  updateAnalysisPack: (id: string, updates: Partial<AnalysisPack>) => void;
+  deleteAnalysisPack: (id: string) => void;
+
+  // --- Actions Enrichies (Revue de contrat, Commentaires, Chaîne de garde, Métadonnées Essais, Révisions Rapports, Habilitations) ---
+  addRequestComment: (requestId: string, message: string, isInternal?: boolean) => void;
+  saveContractReview: (requestId: string, review: Omit<ContractReview, 'reviewedBy' | 'reviewedAt'>, committedDueDate?: string) => void;
+  updateSampleCustody: (id: string, updates: Partial<Pick<Sample, 'storageLocation' | 'retentionUntil' | 'disposalDate' | 'disposalMethod' | 'disposalBy' | 'disposalNotes' | 'consumableLotsUsed' | 'status'>>) => void;
+  updateAnalysisMeta: (id: string, updates: Partial<Pick<Analysis, 'equipmentId' | 'consumableLotsUsed' | 'conformityStatus' | 'plannedDate' | 'notes'>>) => void;
+  createReportRevision: (parentReportId: string, amendmentReason: string) => Report | null;
+  updateUserQualifications: (userId: string, qualifiedTemplateIds: string[]) => Promise<boolean>;
 
   // --- Administration & Maintenance ---
   updateLabSettings: (settings: Partial<LabSettings>) => void;
@@ -306,6 +343,9 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const [rawReports, setReports] = useSyncedState<Report[]>('reports', initialReports, isAuthenticated);
   const [rawRequests, setRequests] = useSyncedState<AnalysisRequest[]>('requests', initialRequests, isAuthenticated);
   const [rawConsumables, setConsumables] = useSyncedState<Consumable[]>('consumables', initialConsumables, isAuthenticated);
+  const [rawEquipments, setEquipments] = useSyncedState<Equipment[]>('equipments', initialEquipments, isAuthenticated);
+  const [rawNonConformities, setNonConformities] = useSyncedState<NonConformity[]>('nonConformities', initialNonConformities, isAuthenticated);
+  const [rawAnalysisPacks, setAnalysisPacks] = useSyncedState<AnalysisPack[]>('analysisPacks', initialAnalysisPacks, isAuthenticated);
 
   const [activeLabId, setActiveLabIdState] = useState<string>(initialLaboratories[0]?.id || '');
 
@@ -411,6 +451,22 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   const consumables = useMemo(() => {
     return rawConsumables.filter(c => c.labId === activeLabId);
   }, [rawConsumables, activeLabId]);
+
+  /** Équipements de mesure filtrés par laboratoire actif */
+  const equipments = useMemo(() => {
+    return rawEquipments.filter(e => e.labId === activeLabId);
+  }, [rawEquipments, activeLabId]);
+
+  /** Fiches de Non-Conformité filtrées par laboratoire actif */
+  const nonConformities = useMemo(() => {
+    return rawNonConformities.filter(nc => nc.labId === activeLabId);
+  }, [rawNonConformities, activeLabId]);
+
+  /** Packs d'essais : tous visibles pour un demandeur, filtrés par labo actif en interne */
+  const analysisPacks = useMemo(() => {
+    if (isRequester) return rawAnalysisPacks;
+    return rawAnalysisPacks.filter(p => p.labId === activeLabId);
+  }, [rawAnalysisPacks, isRequester, activeLabId]);
 
   /** Modèles CMS : un demandeur voit les modèles de tous les laboratoires pour soumettre ses commandes */
   const materialTemplates = useMemo(() => {
@@ -1059,7 +1115,205 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const deleteReport = (id: string) => {
+    const target = rawReports.find(r => r.id === id);
+    // Protection ISO 17025 : un rapport publié/verrouillé ne peut être supprimé que par un administrateur
+    if ((target?.isLocked || target?.status === 'genere') && currentUser?.role !== 'admin') {
+      alert('Conformité ISO 17025 : un rapport publié est immuable. Créez une nouvelle révision (amendement) au lieu de le supprimer.');
+      return;
+    }
     setReports(prev => prev.filter(r => r.id !== id));
+  };
+
+  /**
+   * Crée une nouvelle révision (v2, v3...) d'un rapport déjà publié (ISO 17025 §7.8.8),
+   * verrouille le rapport parent et conserve le motif d'amendement obligatoire.
+   */
+  const createReportRevision = (parentReportId: string, amendmentReason: string): Report | null => {
+    const parent = rawReports.find(r => r.id === parentReportId);
+    if (!parent || !amendmentReason.trim()) return null;
+
+    const rootId = parent.parentReportId || parent.id;
+    const existingVersions = rawReports
+      .filter(r => r.id === rootId || r.parentReportId === rootId)
+      .map(r => r.version || 1);
+    const nextVersion = Math.max(1, ...existingVersions) + 1;
+
+    const baseId = parent.id.replace(/-Rev\d+$/i, '');
+    const revId = `${baseId}-Rev${nextVersion}`;
+
+    const revision: Report = {
+      ...parent,
+      id: revId,
+      title: `${parent.title.replace(/\s*\(Rev\d+\)$/i, '')} (Rev${nextVersion})`,
+      version: nextVersion,
+      parentReportId: rootId,
+      amendmentReason: amendmentReason.trim(),
+      status: 'brouillon',
+      isLocked: false,
+      sha256Hash: undefined,
+      storedFileName: undefined,
+      publishedAt: undefined,
+      createdAt: new Date().toISOString()
+    };
+
+    setReports(prev => [
+      revision,
+      ...prev.map(r => (r.id === parentReportId ? { ...r, isLocked: true } : r))
+    ]);
+
+    return revision;
+  };
+
+  // --- Parc Équipements & Métrologie ---
+  const addEquipment = (equipment: Equipment) => {
+    const item = { ...equipment, labId: equipment.labId || activeLabId };
+    setEquipments(prev => [item, ...prev]);
+  };
+  const updateEquipment = (id: string, updates: Partial<Equipment>) => {
+    setEquipments(prev => prev.map(e => (e.id === id ? { ...e, ...updates } : e)));
+  };
+  const deleteEquipment = (id: string) => {
+    setEquipments(prev => prev.filter(e => e.id !== id));
+  };
+
+  // --- Non-Conformités & CAPA ---
+  const addNonConformity = (nc: NonConformity) => {
+    const item = { ...nc, labId: nc.labId || activeLabId };
+    setNonConformities(prev => [item, ...prev]);
+    // Alerte les managers du laboratoire pour toute NC majeure ou critique
+    if (item.severity === 'majeure' || item.severity === 'critique') {
+      const labManagers = users.filter(u => u.role === 'manager' && (u.labId === item.labId || u.labId === 'all' || !u.labId));
+      labManagers.forEach(m =>
+        addNotification(
+          m.id,
+          `Nouvelle NC ${item.severity.toUpperCase()} : ${item.id}`,
+          `${item.title} — ${item.description}`,
+          'email',
+          { targetTab: 'nonconformities', targetId: item.id, labId: item.labId }
+        )
+      );
+    }
+  };
+  const updateNonConformity = (id: string, updates: Partial<NonConformity>) => {
+    setNonConformities(prev => prev.map(nc => (nc.id === id ? { ...nc, ...updates } : nc)));
+  };
+  const deleteNonConformity = (id: string) => {
+    setNonConformities(prev => prev.filter(nc => nc.id !== id));
+  };
+
+  // --- Packs d'Essais ---
+  const addAnalysisPack = (pack: AnalysisPack) => {
+    const item = { ...pack, labId: pack.labId || activeLabId };
+    setAnalysisPacks(prev => [item, ...prev]);
+  };
+  const updateAnalysisPack = (id: string, updates: Partial<AnalysisPack>) => {
+    setAnalysisPacks(prev => prev.map(p => (p.id === id ? { ...p, ...updates } : p)));
+  };
+  const deleteAnalysisPack = (id: string) => {
+    setAnalysisPacks(prev => prev.filter(p => p.id !== id));
+  };
+
+  // --- Fil de discussion, Revue de contrat, Chaîne de garde & Métadonnées Essais ---
+  const addRequestComment = (requestId: string, message: string, isInternal = false) => {
+    if (!currentUser || !message.trim()) return;
+    const comment: RequestComment = {
+      id: `CMT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      authorId: currentUser.id,
+      authorName: currentUser.name,
+      authorRole: currentUser.role,
+      message: message.trim(),
+      createdAt: new Date().toISOString(),
+      isInternal
+    };
+    setRequests(prev =>
+      prev.map(r => (r.id === requestId ? { ...r, comments: [...(r.comments || []), comment] } : r))
+    );
+    const targetReq = rawRequests.find(r => r.id === requestId);
+    if (targetReq && !isInternal) {
+      if (currentUser.role === 'demandeur') {
+        const recipients = users.filter(u =>
+          (u.id === targetReq.assignedTo) ||
+          (u.role === 'manager' && (u.labId === targetReq.labId || u.labId === 'all' || !u.labId))
+        );
+        recipients.forEach(u =>
+          addNotification(u.id, `Nouveau message client (${targetReq.id})`, `${currentUser.name} : "${comment.message}"`, 'email', { targetTab: 'requests', targetId: targetReq.id, labId: targetReq.labId })
+        );
+      } else {
+        addNotification(targetReq.requesterId, `Nouveau message du laboratoire (${targetReq.id})`, `${currentUser.name} : "${comment.message}"`, 'email', { targetTab: 'requests', targetId: targetReq.id, labId: targetReq.labId });
+      }
+    }
+  };
+
+  const saveContractReview = (
+    requestId: string,
+    review: Omit<ContractReview, 'reviewedBy' | 'reviewedAt'>,
+    committedDueDate?: string
+  ) => {
+    const fullReview: ContractReview = {
+      ...review,
+      reviewedBy: currentUser?.name || 'Manager',
+      reviewedAt: new Date().toISOString()
+    };
+    const audit = createAuditLog(
+      'Revue de contrat ISO 17025',
+      `Faisabilité vérifiée${committedDueDate ? ` — Échéance engagée : ${committedDueDate}` : ''}`
+    );
+    setRequests(prev =>
+      prev.map(r =>
+        r.id === requestId
+          ? {
+              ...r,
+              contractReview: fullReview,
+              committedDueDate: committedDueDate ?? r.committedDueDate,
+              auditTrail: [audit, ...(r.auditTrail || [])]
+            }
+          : r
+      )
+    );
+  };
+
+  const updateSampleCustody = (
+    id: string,
+    updates: Partial<Pick<Sample, 'storageLocation' | 'retentionUntil' | 'disposalDate' | 'disposalMethod' | 'disposalBy' | 'disposalNotes' | 'consumableLotsUsed' | 'status'>>
+  ) => {
+    setSamples(prev => prev.map(s => (s.id === id ? { ...s, ...updates } : s)));
+  };
+
+  const updateAnalysisMeta = (
+    id: string,
+    updates: Partial<Pick<Analysis, 'equipmentId' | 'consumableLotsUsed' | 'conformityStatus' | 'plannedDate' | 'notes'>>
+  ) => {
+    setAnalyses(prev =>
+      prev.map(a => {
+        if (a.id !== id) return a;
+        const details = Object.entries(updates)
+          .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`)
+          .join(', ');
+        const audit = createAuditLog('Mise à jour métadonnées essai', details);
+        return {
+          ...a,
+          ...updates,
+          updatedAt: new Date().toISOString(),
+          auditTrail: [audit, ...(a.auditTrail || [])]
+        };
+      })
+    );
+  };
+
+  const updateUserQualifications = async (userId: string, qualifiedTemplateIds: string[]): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/users/${userId}/qualifications`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ qualifiedTemplateIds })
+      });
+      if (!res.ok) return false;
+      setUsers(prev => prev.map(u => (u.id === userId ? { ...u, qualifiedTemplateIds } : u)));
+      return true;
+    } catch (e) {
+      console.error('Erreur mise à jour habilitations :', e);
+      return false;
+    }
   };
 
   // --- Gestion des Consommables & Stocks ---
@@ -1190,7 +1444,10 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       allReports: rawReports,
       allRequests: rawRequests,
       allConsumables: rawConsumables,
-      samples, analyses, reports, requests, consumables, labSettings,
+      allEquipments: rawEquipments,
+      allNonConformities: rawNonConformities,
+      allAnalysisPacks: rawAnalysisPacks,
+      samples, analyses, reports, requests, consumables, equipments, nonConformities, analysisPacks, labSettings,
       addMaterialTemplate, updateMaterialTemplate, deleteMaterialTemplate,
       addAnalysisTemplate, updateAnalysisTemplate, deleteAnalysisTemplate,
       addRequestTemplate, updateRequestTemplate, deleteRequestTemplate,
@@ -1202,6 +1459,10 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       updateAnalysisResult, addAnalysisImage,
       addReport, deleteReport,
       addConsumable, deleteConsumable, updateConsumableStock,
+      addEquipment, updateEquipment, deleteEquipment,
+      addNonConformity, updateNonConformity, deleteNonConformity,
+      addAnalysisPack, updateAnalysisPack, deleteAnalysisPack,
+      addRequestComment, saveContractReview, updateSampleCustody, updateAnalysisMeta, createReportRevision, updateUserQualifications,
       updateLabSettings, purgeData, applyPatch
     }}>
       {children}

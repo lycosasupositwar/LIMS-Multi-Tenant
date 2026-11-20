@@ -39,7 +39,8 @@ import {
   createAccountRequest,
   getAccountRequests,
   deleteAccountRequest,
-  deleteUser
+  deleteUser,
+  updateUserQualifications
 } from './src/db/auth.js';
 import { initLimsDb, getCollection, setCollection } from './src/db/lims.js';
 
@@ -517,7 +518,10 @@ const ALLOWED_COLLECTIONS = new Set([
   'materials',
   'reports',
   'requests',
-  'consumables'
+  'consumables',
+  'equipments',
+  'nonConformities',
+  'analysisPacks'
 ]);
 
 /** Collections de configuration CMS réservées en écriture aux profils `manager` et `admin` */
@@ -526,7 +530,8 @@ const MANAGER_ONLY_COLLECTIONS = new Set([
   'materialTemplates',
   'analysisTemplates',
   'requestTemplates',
-  'reportTemplates'
+  'reportTemplates',
+  'analysisPacks'
 ]);
 
 /** Collections modifiables par un client externe (`demandeur`), avec fusion sécurisée côté serveur */
@@ -914,6 +919,118 @@ async function startServer() {
     } catch (e) {
       console.error(`Erreur d'écriture de la collection ${req.params.collection}:`, e);
       res.status(500).json({ error: 'Erreur d\'écriture de la collection' });
+    }
+  });
+
+  /**
+   * Routes Atomiques Anti-Écrasement (Concurrence Multi-Utilisateurs) :
+   * Permettent d'ajouter, de mettre à jour partiellement ou de supprimer un seul élément par son `id`
+   * dans une collection sans risquer d'écraser les modifications simultanées d'un autre opérateur.
+   */
+  app.post('/api/db/:collection/item', authenticate, async (req: AuthRequest, res) => {
+    try {
+      const { collection } = req.params;
+      const user = req.user!;
+      if (!ALLOWED_COLLECTIONS.has(collection)) return res.status(400).json({ error: 'Collection non autorisée' });
+      if (MANAGER_ONLY_COLLECTIONS.has(collection) && user.role !== 'manager' && user.role !== 'admin') {
+        return res.status(403).json({ error: 'Action réservée aux managers et administrateurs.' });
+      }
+      if (user.role === 'demandeur' && !REQUESTER_WRITABLE_COLLECTIONS.has(collection)) {
+        return res.status(403).json({ error: 'Action non autorisée pour le profil demandeur.' });
+      }
+      const item = req.body;
+      if (!item || typeof item !== 'object' || !item.id) {
+        return res.status(400).json({ error: 'Élément invalide (champ id obligatoire).' });
+      }
+      const existing: any[] = (await getCollection(collection)) || [];
+      const idx = existing.findIndex((x: any) => x.id === item.id);
+      const updated = idx >= 0
+        ? existing.map((x: any, i: number) => (i === idx ? { ...x, ...item } : x))
+        : [item, ...existing];
+      await setCollection(collection, updated);
+      res.json({ success: true, item });
+    } catch (e) {
+      console.error(`Erreur upsert atomique sur ${req.params.collection}:`, e);
+      res.status(500).json({ error: 'Erreur lors de la sauvegarde unitaire' });
+    }
+  });
+
+  app.patch('/api/db/:collection/:itemId', authenticate, async (req: AuthRequest, res) => {
+    try {
+      const { collection, itemId } = req.params;
+      const user = req.user!;
+      if (!ALLOWED_COLLECTIONS.has(collection)) return res.status(400).json({ error: 'Collection non autorisée' });
+      if (MANAGER_ONLY_COLLECTIONS.has(collection) && user.role !== 'manager' && user.role !== 'admin') {
+        return res.status(403).json({ error: 'Action réservée aux managers et administrateurs.' });
+      }
+      if (user.role === 'demandeur' && !REQUESTER_WRITABLE_COLLECTIONS.has(collection)) {
+        return res.status(403).json({ error: 'Action non autorisée pour le profil demandeur.' });
+      }
+      const existing: any[] = (await getCollection(collection)) || [];
+      const idx = existing.findIndex((x: any) => x.id === itemId);
+      if (idx < 0) return res.status(404).json({ error: 'Élément introuvable' });
+
+      // Protection de confidentialité pour un demandeur
+      if (user.role === 'demandeur' && collection === 'requests' && existing[idx].requesterId !== user.id) {
+        return res.status(403).json({ error: 'Accès interdit à cette demande.' });
+      }
+
+      const merged = { ...existing[idx], ...req.body, id: itemId };
+      existing[idx] = merged;
+      await setCollection(collection, existing);
+      res.json({ success: true, item: merged });
+    } catch (e) {
+      console.error(`Erreur patch atomique sur ${req.params.collection}/${req.params.itemId}:`, e);
+      res.status(500).json({ error: 'Erreur lors de la mise à jour unitaire' });
+    }
+  });
+
+  app.delete('/api/db/:collection/:itemId', authenticate, async (req: AuthRequest, res) => {
+    try {
+      const { collection, itemId } = req.params;
+      const user = req.user!;
+      if (!ALLOWED_COLLECTIONS.has(collection)) return res.status(400).json({ error: 'Collection non autorisée' });
+      if (MANAGER_ONLY_COLLECTIONS.has(collection) && user.role !== 'manager' && user.role !== 'admin') {
+        return res.status(403).json({ error: 'Action réservée aux managers et administrateurs.' });
+      }
+      if (user.role === 'demandeur' && collection !== 'notifications') {
+        return res.status(403).json({ error: 'Action non autorisée pour le profil demandeur.' });
+      }
+      const existing: any[] = (await getCollection(collection)) || [];
+      // Empêche la suppression d'un rapport déjà verrouillé (conformité ISO 17025 §7.8.8) sauf par un admin
+      if (collection === 'reports' && user.role !== 'admin') {
+        const target = existing.find((x: any) => x.id === itemId);
+        if (target?.isLocked || target?.status === 'genere') {
+          return res.status(403).json({ error: 'Un rapport publié est immuable (ISO 17025). Créez une révision au lieu de le supprimer.' });
+        }
+      }
+      const filtered = existing.filter((x: any) => x.id !== itemId);
+      await setCollection(collection, filtered);
+      res.json({ success: true });
+    } catch (e) {
+      console.error(`Erreur suppression atomique sur ${req.params.collection}/${req.params.itemId}:`, e);
+      res.status(500).json({ error: 'Erreur lors de la suppression unitaire' });
+    }
+  });
+
+  /**
+   * Mise à jour des habilitations opérateurs (`qualifiedTemplateIds`) réservée aux managers et admins.
+   */
+  app.patch('/api/users/:id/qualifications', authenticate, async (req: AuthRequest, res) => {
+    try {
+      if (req.user!.role !== 'manager' && req.user!.role !== 'admin') {
+        return res.status(403).json({ error: 'Accès refusé.' });
+      }
+      const { qualifiedTemplateIds } = req.body;
+      if (!Array.isArray(qualifiedTemplateIds)) {
+        return res.status(400).json({ error: 'Liste d\'habilitations invalide.' });
+      }
+      await updateUserQualifications(req.params.id, qualifiedTemplateIds);
+      console.info(`Habilitations mises à jour pour ${req.params.id} par ${req.user!.email}`);
+      res.json({ success: true, qualifiedTemplateIds });
+    } catch (error) {
+      console.error('Erreur mise à jour habilitations :', error);
+      res.status(500).json({ error: 'Erreur serveur lors de la mise à jour des habilitations' });
     }
   });
 
@@ -1362,17 +1479,30 @@ async function startServer() {
       const buffer = Buffer.from(cleanBase64, 'base64');
       await fs.promises.writeFile(filePath, buffer);
 
-      // Mise à jour de la collection reports avec le nom du fichier enregistré
+      // Calcul de l'empreinte cryptographique SHA-256 garantissant l'intégrité du rapport archivé (ISO 17025)
+      const sha256Hash = crypto.createHash('sha256').update(buffer).digest('hex');
+      const publishedAt = new Date().toISOString();
+
+      // Mise à jour de la collection reports avec le nom du fichier enregistré, l'empreinte SHA-256 et le verrouillage
       const reports = ((await getCollection('reports')) as any[]) || [];
       const updatedReports = reports.map((r: any) =>
         r.id === reportId
-          ? { ...r, storedFileName, requestId: requestId || r.requestId, status: 'genere' }
+          ? {
+              ...r,
+              storedFileName,
+              requestId: requestId || r.requestId,
+              status: 'genere',
+              sha256Hash,
+              publishedAt,
+              isLocked: true,
+              signedBy: user.name
+            }
           : r
       );
       await setCollection('reports', updatedReports);
 
-      console.info(`[RAPPORT STOCKÉ] Fichier ${storedFileName} enregistré dans storage/reports/ par ${user.email}`);
-      res.json({ success: true, storedFileName });
+      console.info(`[RAPPORT STOCKÉ] Fichier ${storedFileName} (SHA-256: ${sha256Hash.slice(0, 12)}…) enregistré par ${user.email}`);
+      res.json({ success: true, storedFileName, sha256Hash, publishedAt });
     } catch (error) {
       console.error('Erreur lors de la sauvegarde du fichier de rapport :', error);
       res.status(500).json({ error: 'Impossible de sauvegarder le rapport dans le dossier serveur.' });

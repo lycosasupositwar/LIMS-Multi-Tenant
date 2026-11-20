@@ -32,7 +32,10 @@ import {
   RequestTemplate, 
   AnalysisRequest, 
   Consumable, 
-  ReportTemplate 
+  ReportTemplate,
+  Equipment,
+  NonConformity,
+  AnalysisPack
 } from './types';
 
 /**
@@ -639,6 +642,118 @@ export const initialReportTemplates: ReportTemplate[] = [
     name: 'Procès-Verbal d\'Essais Mécaniques & Granulométrie',
     description: 'En-tête officiel Mécanique avec courbes de traction et diagrammes granulométriques.',
     type: 'report',
+    isActive: true
+  }
+];
+
+/**
+ * Parc d'équipements de mesure et suivi métrologique initial (ISO 17025 §6.4)
+ */
+export const initialEquipments: Equipment[] = [
+  {
+    id: 'EQ-MET-001',
+    labId: 'lab-metallurgie',
+    name: 'Microscope Optique Zeiss Axio Imager M2m',
+    code: 'MIC-MET-01',
+    serialNumber: 'ZEISS-2024-8841',
+    manufacturer: 'Carl Zeiss',
+    category: 'Microstructure',
+    status: 'operationnel',
+    lastCalibrationDate: '2026-06-15',
+    nextCalibrationDate: '2027-06-15',
+    calibrationIntervalMonths: 12,
+    location: 'Salle Microscopie A1',
+    notes: 'Étalonnage micromètre objet COFRAC n°2026-412.'
+  },
+  {
+    id: 'EQ-MET-002',
+    labId: 'lab-metallurgie',
+    name: 'Microduromètre Vickers Struers Duramin-40',
+    code: 'DUR-MET-02',
+    serialNumber: 'STR-2023-1920',
+    manufacturer: 'Struers',
+    category: 'Microstructure',
+    status: 'operationnel',
+    lastCalibrationDate: '2025-12-01',
+    nextCalibrationDate: '2026-12-01',
+    calibrationIntervalMonths: 12,
+    location: 'Salle Essais Dureté A2',
+    notes: 'Vérification journalière sur cale étalon 500 HV1.'
+  },
+  {
+    id: 'EQ-MEC-001',
+    labId: 'lab-mecanique',
+    name: 'Machine de Traction Universelle Instron 5982 (100 kN)',
+    code: 'TRA-MEC-01',
+    serialNumber: 'INS-2022-5591',
+    manufacturer: 'Instron',
+    category: 'Mécanique',
+    status: 'operationnel',
+    lastCalibrationDate: '2026-04-10',
+    nextCalibrationDate: '2027-04-10',
+    calibrationIntervalMonths: 12,
+    location: 'Hall Essais Mécaniques B1',
+    notes: 'Cellule 100 kN Classe 0.5 + extensomètre vidéo.'
+  },
+  {
+    id: 'EQ-MEC-002',
+    labId: 'lab-mecanique',
+    name: 'Granulomètre Laser Malvern Mastersizer 3000',
+    code: 'GRA-MEC-02',
+    serialNumber: 'MAL-2024-3302',
+    manufacturer: 'Malvern Panalytical',
+    category: 'Poudres',
+    status: 'operationnel',
+    lastCalibrationDate: '2025-10-15',
+    nextCalibrationDate: '2026-10-15',
+    calibrationIntervalMonths: 12,
+    location: 'Laboratoire Poudres B3',
+    notes: 'Étalonnage expiré — à planifier avant prochaine série critique.'
+  }
+];
+
+/**
+ * Fiches de Non-Conformités initiales (ISO 17025 §7.10)
+ */
+export const initialNonConformities: NonConformity[] = [
+  {
+    id: 'NC-MET-26-001',
+    labId: 'lab-metallurgie',
+    title: 'Échantillon reçu sans identification gravée',
+    type: 'echantillon',
+    severity: 'mineure',
+    status: 'en_analyse',
+    linkedRequestId: 'REQ-MET-26-001',
+    linkedSampleId: 'ECH-MET-001',
+    description: 'Le sachet contenant l\'aube Inconel 718 ne comportait pas de gravure directe sur la pièce à réception.',
+    rootCause: 'Oubli d\'étiquetage lors de l\'expédition client.',
+    correctiveAction: 'Confirmation écrite du client obtenue et marquage laser interne effectué dès réception.',
+    clientNotified: true,
+    createdBy: 'Dr. Marc Durand',
+    createdAt: '2026-03-15T09:00:00Z'
+  }
+];
+
+/**
+ * Packs / Gammes préconfigurées d'essais sélectionnables en un clic
+ */
+export const initialAnalysisPacks: AnalysisPack[] = [
+  {
+    id: 'PACK-MET-EXPERTISE',
+    labId: 'lab-metallurgie',
+    name: 'Pack Expertise Métallographique Complète',
+    description: 'Micrographie optique & porosité + Microdureté Vickers + Taille de grains ISO 643.',
+    analysisTemplateIds: ['ANA-METALLO', 'ANA-DURETE-HV', 'ANA-TAILLE-GRAINS'],
+    discountPercent: 10,
+    isActive: true
+  },
+  {
+    id: 'PACK-MEC-POUDRE-SLM',
+    labId: 'lab-mecanique',
+    name: 'Pack Qualification Poudre Fabrication Additive (SLM)',
+    description: 'Granulométrie laser + Surface spécifique BET + Densité vraie Hélium + Dosage C/S.',
+    analysisTemplateIds: ['ANA-GRANULO', 'ANA-BET', 'ANA-DENSITE-HE', 'ANA-DOSAGE-CS'],
+    discountPercent: 15,
     isActive: true
   }
 ];

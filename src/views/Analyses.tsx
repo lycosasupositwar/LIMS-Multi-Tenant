@@ -15,6 +15,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useLims } from '../store';
+import { getCalibrationDaysRemaining } from './Equipments';
 import { Search, Microscope, Check, UploadCloud, Image as ImageIcon, Plus, X, Lock, ClipboardPaste } from 'lucide-react';
 import { AnalysisStatus, ExpectedResult } from '../types';
 
@@ -173,9 +174,12 @@ export function Analyses() {
     analysisTemplates,
     updateAnalysisStatus,
     updateAnalysisResult,
+    updateAnalysisMeta,
     addAnalysisImage,
     samples,
     requests,
+    equipments,
+    consumables,
     globalSearchQuery,
     setGlobalSearchQuery
   } = useLims();
@@ -920,7 +924,7 @@ export function Analyses() {
               {/* Affiché uniquement si l'essai est démarré (statut différent de 'planifie') */}
               {analysis.status !== 'planifie' ? (
                 <div className="flex-1 bg-slate-50 rounded-lg border border-slate-200 p-4 relative">
-                  <div className="flex items-center justify-between mb-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                     <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Saisie des résultats</h4>
                     {isAnalysisLocked && (
                       <div className="flex items-center text-[10px] font-bold uppercase text-slate-500 bg-slate-200 px-2 py-1 rounded">
@@ -929,15 +933,115 @@ export function Analyses() {
                       </div>
                     )}
                   </div>
+
+                  {/* Traçabilité Métrologique (Équipement utilisé + Contrôle d'étalonnage ISO 17025 §6.4) & Lots de consommables */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4 pb-3 border-b border-slate-200">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Équipement de mesure (ISO 17025)</label>
+                      <select
+                        disabled={isAnalysisLocked}
+                        value={analysis.equipmentId || ''}
+                        onChange={e => updateAnalysisMeta(analysis.id, { equipmentId: e.target.value || undefined })}
+                        className="w-full text-xs border border-slate-300 rounded-md px-2 py-1.5 bg-white"
+                      >
+                        <option value="">Sélectionner un instrument...</option>
+                        {equipments.map(eq => {
+                          const days = getCalibrationDaysRemaining(eq.nextCalibrationDate);
+                          const expired = days < 0 || eq.status !== 'operationnel';
+                          return (
+                            <option key={eq.id} value={eq.id} disabled={expired && analysis.equipmentId !== eq.id}>
+                              {eq.code} — {eq.name} {expired ? '(BLOQUÉ : étalonnage expiré / HS)' : `(OK ${days}j)`}
+                            </option>
+                          );
+                        })}
+                      </select>
+                      {analysis.equipmentId && (() => {
+                        const eq = equipments.find(e => e.id === analysis.equipmentId);
+                        if (!eq) return null;
+                        const days = getCalibrationDaysRemaining(eq.nextCalibrationDate);
+                        if (days < 0 || eq.status !== 'operationnel') {
+                          return <p className="text-[11px] text-red-600 font-semibold mt-1">⚠ Équipement hors validité métrologique ({days < 0 ? `expiré depuis ${Math.abs(days)}j` : eq.status}).</p>;
+                        }
+                        return null;
+                      })()}
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Lot consommable / réactif utilisé</label>
+                      <select
+                        disabled={isAnalysisLocked}
+                        defaultValue=""
+                        onChange={e => {
+                          const cons = consumables.find(c => c.id === e.target.value);
+                          if (!cons) return;
+                          updateAnalysisMeta(analysis.id, {
+                            consumableLotsUsed: [
+                              ...(analysis.consumableLotsUsed || []),
+                              { consumableId: cons.id, name: cons.name, lotNumber: cons.lotNumber }
+                            ]
+                          });
+                          e.target.value = '';
+                        }}
+                        className="w-full text-xs border border-slate-300 rounded-md px-2 py-1.5 bg-white"
+                      >
+                        <option value="">+ Tracer un lot utilisé...</option>
+                        {consumables.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}{c.lotNumber ? ` [${c.lotNumber}]` : ''}</option>
+                        ))}
+                      </select>
+                      {(analysis.consumableLotsUsed || []).length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {(analysis.consumableLotsUsed || []).map((l, idx) => (
+                            <span key={idx} className="text-[10px] px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded border border-indigo-200">
+                              {l.name}{l.lotNumber ? ` (${l.lotNumber})` : ''}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {template.expectedResults.map(expectedResult => (
-                      <div key={expectedResult.id} className={(expectedResult.type === 'micrography' || expectedResult.type === 'vertical_table') ? 'sm:col-span-2' : ''}>
-                        <label className="text-xs font-semibold text-slate-700">
-                          {expectedResult.name} {expectedResult.required && <span className="text-red-500">*</span>}
-                        </label>
-                        {renderInputForResult(analysis.id, expectedResult, analysis.results[expectedResult.id], analysis.status)}
-                      </div>
-                    ))}
+                    {template.expectedResults.map(expectedResult => {
+                      const rawVal = analysis.results[expectedResult.id];
+                      // Calcul automatique de conformité par rapport aux bornes minSpec / maxSpec (ISO 17025 §7.8.6)
+                      let numericVal: number | null = null;
+                      if (expectedResult.type === 'number' && rawVal !== '' && rawVal !== undefined && rawVal !== null) {
+                        const n = Number(rawVal);
+                        if (!Number.isNaN(n)) numericVal = n;
+                      } else if (expectedResult.type === 'number_series' && Array.isArray(rawVal)) {
+                        const nums = rawVal.map(Number).filter(n => !Number.isNaN(n));
+                        if (nums.length > 0) numericVal = nums.reduce((a, b) => a + b, 0) / nums.length;
+                      }
+                      const hasSpec = expectedResult.minSpec !== undefined || expectedResult.maxSpec !== undefined;
+                      const isCompliant = numericVal !== null && hasSpec
+                        ? (expectedResult.minSpec === undefined || numericVal >= expectedResult.minSpec) &&
+                          (expectedResult.maxSpec === undefined || numericVal <= expectedResult.maxSpec)
+                        : null;
+
+                      return (
+                        <div key={expectedResult.id} className={(expectedResult.type === 'micrography' || expectedResult.type === 'vertical_table') ? 'sm:col-span-2' : ''}>
+                          <div className="flex flex-wrap items-center justify-between gap-1">
+                            <label className="text-xs font-semibold text-slate-700">
+                              {expectedResult.name} {expectedResult.required && <span className="text-red-500">*</span>}
+                              {expectedResult.uncertainty !== undefined && (
+                                <span className="ml-1 text-[10px] font-mono text-slate-400">(± {expectedResult.uncertainty}{expectedResult.unit ? ` ${expectedResult.unit}` : ''})</span>
+                              )}
+                            </label>
+                            {hasSpec && (
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                isCompliant === null ? 'bg-slate-100 text-slate-500' :
+                                isCompliant ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
+                              }`}>
+                                {isCompliant === null
+                                  ? `Spéc: [${expectedResult.minSpec ?? '-∞'} ; ${expectedResult.maxSpec ?? '+∞'}]`
+                                  : isCompliant ? '✓ Conforme' : '✗ Hors spéc.'}
+                              </span>
+                            )}
+                          </div>
+                          {renderInputForResult(analysis.id, expectedResult, analysis.results[expectedResult.id], analysis.status)}
+                        </div>
+                      );
+                    })}
                   </div>
 
                   {analysis.images.length > 0 && (

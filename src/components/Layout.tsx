@@ -10,11 +10,12 @@
  */
 
 import React, { ReactNode, useState } from 'react';
-import { LayoutDashboard, Box, Activity, FileText, Settings, Bell, Search, User, Blocks, LogOut, Archive, Building2, ChevronDown, Check, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Box, Activity, FileText, Settings, Bell, Search, User, Blocks, LogOut, Archive, Building2, ChevronDown, Check, Menu, X, Wrench, AlertOctagon, CalendarDays, QrCode } from 'lucide-react';
 import * as motion from 'motion/react-client';
 import { useLims } from '../store';
 import { getLabColor } from '../utils/colors';
 import { Notification } from '../types';
+import { QuickScanModal } from './QuickScanModal';
 
 /**
  * Propriétés du gabarit de mise en page principal
@@ -59,6 +60,8 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
   const [isLabMenuOpen, setIsLabMenuOpen] = useState(false);
   // État d'ouverture du tiroir de navigation sur écrans mobiles (< md)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  // État d'ouverture de la modale de scan douchette QR Code / Code-barres
+  const [isQuickScanOpen, setIsQuickScanOpen] = useState(false);
   // Compteur de demandes d'ouverture de compte en attente (affiché en badge rouge sur l'onglet Paramètres)
   const [pendingRequestsCount, setPendingRequestsCount] = React.useState(0);
   // Référence mutable mémorisant le dernier nombre de demandes notifiées pour éviter les notifications en doublon
@@ -204,7 +207,10 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
     { id: 'requests', label: 'Demandes & Workflow', icon: FileText },
     { id: 'samples', label: 'Échantillons & Préparations', icon: Box },
     { id: 'analyses', label: 'Essais & Analyses', icon: Activity },
+    { id: 'planning', label: 'Planning & Charge', icon: CalendarDays },
     { id: 'reports', label: 'Rapports', icon: FileText },
+    { id: 'equipments', label: 'Équipements & Métrologie', icon: Wrench },
+    { id: 'nonconformities', label: 'Non-Conformités (CAPA)', icon: AlertOctagon },
     { id: 'inventory', label: 'Consommables', icon: Archive },
   ];
 
@@ -380,6 +386,17 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
             </div>
           </div>
 
+          {/* Bouton Scan Douchette Rapide (QR Code Zebra) */}
+          <button
+            type="button"
+            onClick={() => setIsQuickScanOpen(true)}
+            className="mr-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-blue-50 hover:border-blue-300 text-xs font-semibold text-slate-700 hover:text-blue-700 transition-colors"
+            title="Scanner un QR Code d'échantillon"
+          >
+            <QrCode className="w-4 h-4" />
+            <span className="hidden lg:inline">Scan QR</span>
+          </button>
+
           {/* Sélecteur d'Instance de Laboratoire (Multi-Tenant Switcher) */}
           <div className="relative mr-3">
             <button
@@ -537,6 +554,8 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
           </motion.div>
         </main>
       </div>
+      {/* Modale de Scan Douchette Rapide */}
+      <QuickScanModal isOpen={isQuickScanOpen} onClose={() => setIsQuickScanOpen(false)} onNavigate={setActiveTab} />
     </div>
   );
 }

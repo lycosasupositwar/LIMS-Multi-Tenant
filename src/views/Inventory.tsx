@@ -46,6 +46,8 @@ export function Inventory() {
     minThreshold: 0,
     unit: 'L',
     expiryDate: '',
+    lotNumber: '',
+    supplier: '',
   });
 
   // Filtrage combiné (nom, référence, catégorie) + filtre exact par catégorie sélectionnée
@@ -100,7 +102,9 @@ export function Inventory() {
       minThreshold: Number(newConsumable.minThreshold),
       unit: newConsumable.unit,
       lastRestocked: new Date().toISOString(),
-      expiryDate: newConsumable.expiryDate || undefined
+      expiryDate: newConsumable.expiryDate || undefined,
+      lotNumber: newConsumable.lotNumber.trim() || undefined,
+      supplier: newConsumable.supplier.trim() || undefined
     });
     
     setShowNewModal(false);
@@ -111,6 +115,8 @@ export function Inventory() {
       minThreshold: 0,
       unit: 'L',
       expiryDate: '',
+      lotNumber: '',
+      supplier: '',
     });
   };
 
@@ -193,7 +199,9 @@ export function Inventory() {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex flex-col">
                         <span className="text-sm font-semibold text-slate-900">{item.name}</span>
-                        <span className="text-xs text-slate-500 font-mono mt-0.5">{item.id}</span>
+                        <span className="text-xs text-slate-500 font-mono mt-0.5">
+                          {item.id}{item.lotNumber ? ` • Lot: ${item.lotNumber}` : ''}{item.supplier ? ` • ${item.supplier}` : ''}
+                        </span>
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -374,6 +382,28 @@ export function Inventory() {
                   onChange={e => setNewConsumable({...newConsumable, minThreshold: Number(e.target.value)})}
                   className="w-full rounded-lg border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                 />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">N° de Lot (ISO 17025)</label>
+                  <input
+                    type="text"
+                    value={newConsumable.lotNumber}
+                    onChange={e => setNewConsumable({...newConsumable, lotNumber: e.target.value})}
+                    placeholder="Ex: LOT-2026-884"
+                    className="w-full rounded-lg border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Fournisseur</label>
+                  <input
+                    type="text"
+                    value={newConsumable.supplier}
+                    onChange={e => setNewConsumable({...newConsumable, supplier: e.target.value})}
+                    placeholder="Ex: Struers, Presi..."
+                    className="w-full rounded-lg border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                  />
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Date de péremption (Optionnel)</label>

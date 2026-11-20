@@ -13,6 +13,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { jsPDF } from 'jspdf';
 import { useLims } from '../store';
 import { FileText, Clock, User, CheckCircle, Shield, AlertCircle, PlayCircle, History, Mail, XCircle, Plus, Box, Edit2, Save, Database, Layers, TestTube2, Trash2, Printer, QrCode } from 'lucide-react';
 import { RequestStatus, AnalysisRequest, MaterialState, Sample } from '../types';
@@ -105,12 +106,172 @@ export function RequestsInternal() {
   const [reviewMethodsOk, setReviewMethodsOk] = useState(true);
   const [reviewResourcesOk, setReviewResourcesOk] = useState(true);
   const [reviewStaffOk, setReviewStaffOk] = useState(true);
+  // Message d'erreur affiché si une tentative d'assignation échoue faute d'habilitation ISO 17025
+  const [assignError, setAssignError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAssignError(null);
+  }, [selectedRequest?.id]);
 
   // Liste des utilisateurs ayant le rôle analyste ou manager rattachés au laboratoire du dossier pour l'assignation
   const analysts = users.filter(u =>
     (u.role === 'analyste' || u.role === 'manager') &&
     (!u.labId || u.labId === 'all' || u.labId === (selectedRequest?.labId || activeLabId))
   );
+
+  /**
+   * Retourne la liste dédupliquée des identifiants de modèles d'analyses requis par une demande :
+   * combine les essais déjà instanciés sur les échantillons et ceux déclarés dans `customData`.
+   */
+  const getRequestRequiredTemplateIds = (req: AnalysisRequest | null): string[] => {
+    if (!req) return [];
+    const ids = new Set<string>();
+
+    // 1. Analyses déjà créées pour les échantillons de cette demande
+    const reqSampleIds = new Set(samples.filter(s => s.requestId === req.id).map(s => s.id));
+    analyses.forEach(a => {
+      if (reqSampleIds.has(a.sampleId) && a.templateId) {
+        ids.add(a.templateId);
+      }
+    });
+
+    // 2. Analyses demandées dans le formulaire dynamique (même avant génération des échantillons)
+    const resolveTplId = (raw: string) => {
+      const matched = analysisTemplates.find(t => t.id === raw || t.name === raw);
+      return matched?.id;
+    };
+
+    const reqTpl = requestTemplates.find(t => t.id === req.templateId);
+    let rawRequested: string[] = [];
+    if (reqTpl) {
+      reqTpl.fields
+        .filter(f => f.type === 'analyses')
+        .forEach(f => {
+          const val = req.customData?.[f.id];
+          if (Array.isArray(val)) rawRequested.push(...val.map(String));
+        });
+    }
+    if (rawRequested.length === 0 && Array.isArray(req.customData?.['analyses_demandees'])) {
+      rawRequested = req.customData['analyses_demandees'].map(String);
+    }
+    if (rawRequested.length === 0 && req.customData) {
+      Object.values(req.customData).forEach(value => {
+        if (Array.isArray(value)) {
+          value.forEach(v => {
+            const resolved = resolveTplId(String(v));
+            if (resolved) rawRequested.push(resolved);
+          });
+        } else if (typeof value === 'string') {
+          const resolved = resolveTplId(value);
+          if (resolved) rawRequested.push(resolved);
+        }
+      });
+    }
+    rawRequested.forEach(raw => {
+      const resolved = resolveTplId(raw);
+      if (resolved) ids.add(resolved);
+    });
+
+    return Array.from(ids);
+  };
+
+  /** Vérifie si un utilisateur possède une habilitation valide (non expirée) pour une méthode d'analyse donnée (ISO 17025 §6.2) */
+  const isUserQualifiedForTemplate = (userId: string | undefined, templateId: string): boolean => {
+    if (!userId) return false;
+    const u = users.find(usr => usr.id === userId);
+    const quals = u?.qualifiedTemplateIds || [];
+    if (!quals.includes(templateId)) return false;
+    const expStr = u?.qualificationExpiries?.[templateId];
+    if (expStr && new Date(expStr).getTime() < new Date().setHours(0, 0, 0, 0)) {
+      return false;
+    }
+    return true;
+  };
+
+  /** Génère un Devis PDF A4 (option activable par laboratoire via `labSettings.enableQuotes`) */
+  const handleGenerateQuotePdf = (req: AnalysisRequest) => {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const quoteNum = req.quoteNumber || `DEV-${req.id.replace(/^REQ-/, '')}`;
+    const requester = users.find(u => u.id === req.requesterId);
+    const neededIds = getRequestRequiredTemplateIds(req);
+    const sampleQty = Math.max(1, req.sampleCount || 1);
+
+    doc.setFontSize(18);
+    doc.setTextColor(30, 58, 138);
+    doc.text(labSettings?.labName || 'Laboratoire', 15, 20);
+    doc.setFontSize(9);
+    doc.setTextColor(100, 116, 139);
+    doc.text(labSettings?.labAddress || '', 15, 26);
+    doc.text(`${labSettings?.contactEmail || ''} • ${labSettings?.phone || ''}`, 15, 31);
+
+    doc.setFontSize(16);
+    doc.setTextColor(15, 23, 42);
+    doc.text('DEVIS D\'ESSAIS', 195, 20, { align: 'right' });
+    doc.setFontSize(10);
+    doc.text(`N° ${quoteNum}`, 195, 26, { align: 'right' });
+    doc.text(`Date : ${new Date().toLocaleDateString('fr-FR')} (Validité 30 jours)`, 195, 31, { align: 'right' });
+
+    doc.setDrawColor(203, 213, 225);
+    doc.line(15, 37, 195, 37);
+
+    doc.setFontSize(10);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`Client : ${requester?.company || requester?.name || 'N/A'} (${requester?.name || ''})`, 15, 45);
+    doc.text(`Demande : ${req.id} — ${req.title}`, 15, 51);
+    doc.text(`Nombre d'échantillons estimé : ${sampleQty} • Durée estimée : ~${req.estimatedHours || '-'} h`, 15, 57);
+
+    let y = 68;
+    doc.setFillColor(241, 245, 249);
+    doc.rect(15, y - 5, 180, 8, 'F');
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Prestation / Essai', 18, y);
+    doc.text('Qté', 130, y, { align: 'right' });
+    doc.text('P.U. HT', 160, y, { align: 'right' });
+    doc.text('Total HT', 192, y, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
+    y += 8;
+
+    let totalHT = 0;
+    neededIds.forEach(tid => {
+      const tpl = analysisTemplates.find(t => t.id === tid);
+      const unitPrice = tpl?.unitPrice || 0;
+      const lineTotal = unitPrice * sampleQty;
+      totalHT += lineTotal;
+      doc.text(`${tpl?.name || tid}${tpl?.standardRef ? ` (${tpl.standardRef})` : ''}`, 18, y);
+      doc.text(String(sampleQty), 130, y, { align: 'right' });
+      doc.text(`${unitPrice.toFixed(2)} €`, 160, y, { align: 'right' });
+      doc.text(`${lineTotal.toFixed(2)} €`, 192, y, { align: 'right' });
+      y += 7;
+    });
+    if (totalHT === 0 && req.estimatedCost) {
+      totalHT = req.estimatedCost;
+    }
+
+    y += 6;
+    doc.line(120, y, 195, y);
+    y += 7;
+    const tva = totalHT * 0.2;
+    const totalTTC = totalHT + tva;
+    doc.text(`Total HT : ${totalHT.toFixed(2)} €`, 192, y, { align: 'right' });
+    y += 6;
+    doc.text(`TVA (20 %) : ${tva.toFixed(2)} €`, 192, y, { align: 'right' });
+    y += 7;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(`Total TTC : ${totalTTC.toFixed(2)} €`, 192, y, { align: 'right' });
+
+    doc.save(`${quoteNum}.pdf`);
+    updateRequestData(
+      req.id,
+      {
+        quoteNumber: quoteNum,
+        quoteStatus: req.quoteStatus && req.quoteStatus !== 'aucun' ? req.quoteStatus : 'genere',
+        quoteGeneratedAt: new Date().toISOString()
+      },
+      `Devis PDF ${quoteNum} généré (${totalHT.toFixed(2)} € HT)`
+    );
+  };
 
   /**
    * Extrait la valeur d'une propriété de matériau depuis le customData d'une demande
@@ -365,12 +526,13 @@ export function RequestsInternal() {
       };
       addSample(newSample);
 
-      // Instanciation des essais correspondants
+      // Instanciation des essais correspondants (uniquement assignés si l'opérateur est habilité sur la méthode)
       requestedAnalyses.forEach((analysisIdentifier: string) => {
         const matchedTemplate = analysisTemplates.find(t => t.id === analysisIdentifier || t.name === analysisIdentifier);
         if (matchedTemplate) {
           const analysisId = generateUniqueLimsId('ESS', usedAnalysisIds);
           usedAnalysisIds.add(analysisId);
+          const assignedQualified = isUserQualifiedForTemplate(selectedRequest.assignedTo, matchedTemplate.id);
 
           addAnalysis({
             id: analysisId,
@@ -378,7 +540,7 @@ export function RequestsInternal() {
             sampleId: sampleId,
             templateId: matchedTemplate.id,
             status: 'planifie',
-            technician: selectedRequest.assignedTo
+            technician: assignedQualified && selectedRequest.assignedTo
               ? (users.find(u => u.id === selectedRequest.assignedTo)?.name || 'Non assigné')
               : 'Non assigné',
             updatedAt: new Date().toISOString(),
@@ -511,37 +673,80 @@ export function RequestsInternal() {
 
                     <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
                       <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
-                        Assignation Analyste
+                        Assignation Analyste (Contrôle Habilitations)
                       </label>
-                      <select
-                        value={selectedRequest.assignedTo || ''}
-                        onChange={(e) => {
-                          assignRequest(selectedRequest.id, e.target.value);
-                          setSelectedRequest({ ...selectedRequest, assignedTo: e.target.value });
-                        }}
-                        className="w-full text-sm border-slate-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
-                      >
-                        <option value="">-- Non assigné --</option>
-                        {analysts.map(a => (
-                          <option key={a.id} value={a.id}>
-                            {a.name}{(a.qualifiedTemplateIds && a.qualifiedTemplateIds.length > 0) ? ` (${a.qualifiedTemplateIds.length} habilit.)` : ''}
-                          </option>
-                        ))}
-                      </select>
-                      {selectedRequest.assignedTo && (() => {
-                        const assignedUser = analysts.find(a => a.id === selectedRequest.assignedTo);
-                        const reqAnas = analyses.filter(a => samples.some(s => s.requestId === selectedRequest.id && s.id === a.sampleId));
-                        const neededTplIds = Array.from(new Set(reqAnas.map(a => a.templateId)));
-                        const quals = assignedUser?.qualifiedTemplateIds || [];
-                        const missingQuals = quals.length > 0 ? neededTplIds.filter(tid => !quals.includes(tid)) : [];
-                        if (missingQuals.length > 0) {
-                          return (
-                            <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1.5">
-                              ⚠ Opérateur non habilité sur {missingQuals.length} méthode(s) de ce dossier (ISO 17025 §6.2).
-                            </p>
-                          );
-                        }
-                        return null;
+                      {(() => {
+                        const neededTplIds = getRequestRequiredTemplateIds(selectedRequest);
+                        const getMissingTplNames = (userId: string) =>
+                          neededTplIds
+                            .filter(tid => !isUserQualifiedForTemplate(userId, tid))
+                            .map(tid => analysisTemplates.find(t => t.id === tid)?.name || tid);
+
+                        const currentMissingNames = selectedRequest.assignedTo
+                          ? getMissingTplNames(selectedRequest.assignedTo)
+                          : [];
+
+                        return (
+                          <>
+                            <select
+                              value={selectedRequest.assignedTo || ''}
+                              onChange={(e) => {
+                                const targetId = e.target.value;
+                                if (!targetId) {
+                                  setAssignError(null);
+                                  assignRequest(selectedRequest.id, '');
+                                  setSelectedRequest({ ...selectedRequest, assignedTo: '' });
+                                  return;
+                                }
+                                const candidate = analysts.find(a => a.id === targetId);
+                                const missing = getMissingTplNames(targetId);
+                                if (missing.length > 0) {
+                                  setAssignError(
+                                    `Assignation bloquée (ISO 17025 §6.2) : ${candidate?.name || 'cet opérateur'} n'est pas habilité (ou habilitation expirée) pour : ${missing.join(', ')}.`
+                                  );
+                                  return;
+                                }
+                                setAssignError(null);
+                                assignRequest(selectedRequest.id, targetId);
+                                setSelectedRequest({ ...selectedRequest, assignedTo: targetId });
+                              }}
+                              className="w-full text-sm border-slate-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                            >
+                              <option value="">-- Non assigné --</option>
+                              {analysts.map(a => {
+                                const missing = getMissingTplNames(a.id);
+                                const isQualified = missing.length === 0;
+                                const isCurrentlyAssigned = a.id === selectedRequest.assignedTo;
+                                return (
+                                  <option
+                                    key={a.id}
+                                    value={a.id}
+                                    disabled={!isQualified && !isCurrentlyAssigned}
+                                  >
+                                    {a.name}{' '}
+                                    {neededTplIds.length === 0
+                                      ? `(${(a.qualifiedTemplateIds || []).length} habilit.)`
+                                      : isQualified
+                                        ? '— ✓ Habilité'
+                                        : `— ⛔ Non habilité (${missing.length} méthode(s) manquante(s))`}
+                                  </option>
+                                );
+                              })}
+                            </select>
+
+                            {assignError && (
+                              <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5 mt-1.5 font-medium">
+                                ⛔ {assignError}
+                              </p>
+                            )}
+
+                            {!assignError && currentMissingNames.length > 0 && (
+                              <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5 mt-1.5">
+                                ⛔ Opérateur non habilité (ISO 17025 §6.2) pour : <strong>{currentMissingNames.join(', ')}</strong>. Veuillez réassigner le dossier ou mettre à jour ses habilitations dans Paramètres.
+                              </p>
+                            )}
+                          </>
+                        );
                       })()}
                     </div>
                     <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
@@ -566,6 +771,55 @@ export function RequestsInternal() {
                         <option value="rejetee">Rejetée</option>
                       </select>
                     </div>
+
+                    {/* Option Devis PDF Commercial (affichée uniquement si activée dans Paramètres → Laboratoire) */}
+                    {labSettings?.enableQuotes && (
+                      <div className="bg-emerald-50/60 border border-emerald-200 p-3 rounded-lg shadow-sm sm:col-span-2 lg:col-span-3 flex flex-wrap items-center justify-between gap-3">
+                        <div className="space-y-0.5">
+                          <div className="text-xs font-bold uppercase tracking-wider text-emerald-900">
+                            Devis Commercial (Optionnel){selectedRequest.quoteNumber ? ` — ${selectedRequest.quoteNumber}` : ''}
+                          </div>
+                          <div className="text-xs text-emerald-800">
+                            Montant estimé : <strong>{(selectedRequest.estimatedCost || 0).toLocaleString('fr-FR')} € HT</strong>
+                            {selectedRequest.quoteGeneratedAt && ` • Généré le ${new Date(selectedRequest.quoteGeneratedAt).toLocaleDateString('fr-FR')}`}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <select
+                            value={selectedRequest.quoteStatus || 'aucun'}
+                            onChange={e => {
+                              const nextSt = e.target.value as NonNullable<AnalysisRequest['quoteStatus']>;
+                              updateRequestData(selectedRequest.id, { quoteStatus: nextSt }, `Statut devis passé à : ${nextSt}`);
+                            }}
+                            className="text-xs border border-emerald-300 rounded-md px-2 py-1.5 bg-white text-slate-700"
+                          >
+                            <option value="aucun">Devis : Non émis</option>
+                            <option value="genere">Devis généré</option>
+                            <option value="envoye">Devis envoyé au client</option>
+                            <option value="approuve">Accord / BC reçu ✓</option>
+                            <option value="refuse">Devis refusé</option>
+                          </select>
+                          <input
+                            type="text"
+                            placeholder="N° Bon de commande..."
+                            defaultValue={selectedRequest.purchaseOrderRef || ''}
+                            onBlur={e => {
+                              if (e.target.value !== (selectedRequest.purchaseOrderRef || '')) {
+                                updateRequestData(selectedRequest.id, { purchaseOrderRef: e.target.value }, `Bon de commande renseigné : ${e.target.value}`);
+                              }
+                            }}
+                            className="text-xs border border-emerald-300 rounded-md px-2 py-1.5 bg-white w-40"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleGenerateQuotePdf(selectedRequest)}
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-md shadow-xs"
+                          >
+                            Générer Devis PDF
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1348,14 +1602,27 @@ export function RequestsInternal() {
                                           if (!selectedNewAnalysisTplId) return;
                                           const usedAnalysisIds = new Set(allAnalyses.map(a => a.id));
                                           const newAnalysisId = generateUniqueLimsId('ESS', usedAnalysisIds);
+                                          const isAssignedQualified = isUserQualifiedForTemplate(
+                                            selectedRequest.assignedTo,
+                                            selectedNewAnalysisTplId
+                                          );
+                                          const assignedUser = selectedRequest.assignedTo
+                                            ? users.find(u => u.id === selectedRequest.assignedTo)
+                                            : null;
+                                          if (assignedUser && !isAssignedQualified) {
+                                            const tplName = analysisTemplates.find(t => t.id === selectedNewAnalysisTplId)?.name || selectedNewAnalysisTplId;
+                                            setAssignError(
+                                              `L'essai "${tplName}" a été créé sans technicien car ${assignedUser.name} ne dispose pas de cette habilitation.`
+                                            );
+                                          }
                                           addAnalysis({
                                             id: newAnalysisId,
                                             labId: selectedRequest.labId || activeLabId,
                                             sampleId: sample.id,
                                             templateId: selectedNewAnalysisTplId,
                                             status: 'planifie',
-                                            technician: selectedRequest.assignedTo
-                                              ? (users.find(u => u.id === selectedRequest.assignedTo)?.name || 'Non assigné')
+                                            technician: isAssignedQualified && assignedUser
+                                              ? assignedUser.name
                                               : 'Non assigné',
                                             updatedAt: new Date().toISOString(),
                                             results: {},

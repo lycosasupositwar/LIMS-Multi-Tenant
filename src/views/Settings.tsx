@@ -66,10 +66,17 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     applyPatch,
     materialTemplates,
     analysisTemplates,
+    allMaterialTemplates,
     allAnalysisTemplates,
     requestTemplates,
+    allRequestTemplates,
     reportTemplates,
+    allReportTemplates,
+    allAnalysisPacks,
+    allEquipments,
+    allControlCharts,
     laboratories,
+    activeLabId,
     addLaboratory,
     updateLaboratory,
     deleteLaboratory,
@@ -95,6 +102,31 @@ export function Settings({ onBack }: { onBack?: () => void }) {
   const [purgeMsg, setPurgeMsg] = useState({ type: '', text: '' });
   // Double confirmation requise avant l'exécution irréversible de la purge
   const [confirmPurge, setConfirmPurge] = useState(false);
+
+  // États pour les sauvegardes automatiques SQLite (onglet Système)
+  const [backupsList, setBackupsList] = useState<{ name: string; createdAt: string; files: { name: string; sizeBytes: number }[] }[]>([]);
+  const [backupRetentionDays, setBackupRetentionDays] = useState(30);
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [backupMsg, setBackupMsg] = useState<string | null>(null);
+
+  const loadBackups = async () => {
+    try {
+      const res = await fetch('/api/system/backups');
+      if (res.ok) {
+        const data = await res.json();
+        setBackupsList(data.backups || []);
+        if (data.retentionDays) setBackupRetentionDays(data.retentionDays);
+      }
+    } catch {
+      // Ignore si route non encore disponible
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'system' && (currentUser?.role === 'admin' || currentUser?.role === 'manager')) {
+      loadBackups();
+    }
+  }, [activeTab, currentUser]);
 
   // Écoute de l'événement d'ouverture directe de l'onglet utilisateurs (réservé manager/admin)
   useEffect(() => {
@@ -835,85 +867,158 @@ export function Settings({ onBack }: { onBack?: () => void }) {
             </div>
           </div>
 
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-6 border-b border-slate-200">
-              <h3 className="text-lg font-semibold text-slate-800 flex items-center">
-                <Users className="w-5 h-5 mr-2 text-slate-400" />
-                Utilisateurs existants ({users.length})
-              </h3>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {users.map(u => {
-                const userQuals: string[] = u.qualifiedTemplateIds || [];
-                const canHaveQuals = u.role === 'analyste' || u.role === 'manager';
-                return (
-                <div key={u.id} className="p-4 hover:bg-slate-50 transition-colors space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-semibold text-slate-900">{u.name}</div>
-                      <div className="text-sm text-slate-500">{u.email} {u.company && `- ${u.company}`}</div>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <div className={`text-xs px-2 py-1 rounded-full ${(u.role === 'manager' || u.role === 'admin') ? 'bg-purple-100 text-purple-700' : u.role === 'analyste' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                        {u.role.toUpperCase()}
-                      </div>
-                      {currentUser?.role === 'admin' && currentUser.id !== u.id && (
-                        <button
-                          onClick={() => handleDeleteUser(u.id)}
-                          className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded"
-                          title="Supprimer l'utilisateur"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  {/* Matrice d'habilitations opérateurs (ISO 17025 §6.2) */}
-                  {canHaveQuals && allAnalysisTemplates.length > 0 && (
-                    <div className="pt-2 border-t border-slate-100">
-                      <span className="block text-[10px] font-bold uppercase text-slate-400 mb-1.5">
-                        Habilitations essais ({userQuals.length} méthode(s))
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {allAnalysisTemplates
-                          .filter(t => !u.labId || u.labId === 'all' || t.labId === u.labId)
-                          .map(tpl => {
-                            const active = userQuals.includes(tpl.id);
-                            return (
+          {(() => {
+            // Pour un manager : filtrage strict sur le personnel (analystes/managers) et les méthodes de son propre laboratoire
+            const isManagerScoped = currentUser?.role === 'manager';
+            const managerLabId = isManagerScoped
+              ? (currentUser?.labId && currentUser.labId !== 'all' ? currentUser.labId : activeLabId)
+              : null;
+            const managerLabName = managerLabId
+              ? laboratories.find(l => l.id === managerLabId)?.name || managerLabId
+              : null;
+            const displayedUsers = isManagerScoped
+              ? users.filter(u => (u.role === 'analyste' || u.role === 'manager') && u.labId === managerLabId)
+              : users;
+
+            return (
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-6 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-lg font-semibold text-slate-800 flex items-center">
+                    <Users className="w-5 h-5 mr-2 text-slate-400" />
+                    {isManagerScoped
+                      ? `Personnel & Habilitations du laboratoire (${displayedUsers.length})`
+                      : `Utilisateurs existants (${displayedUsers.length})`}
+                  </h3>
+                  {isManagerScoped && managerLabName && (
+                    <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                      Périmètre : {managerLabName}
+                    </span>
+                  )}
+                </div>
+                <div className="divide-y divide-slate-100">
+                  {displayedUsers.map(u => {
+                    const userQuals: string[] = u.qualifiedTemplateIds || [];
+                    const canHaveQuals = u.role === 'analyste' || u.role === 'manager';
+                    const availableTemplates = isManagerScoped
+                      ? allAnalysisTemplates.filter(t => t.labId === managerLabId)
+                      : allAnalysisTemplates.filter(t => !u.labId || u.labId === 'all' || t.labId === u.labId);
+                    const labLabel = u.labId && u.labId !== 'all'
+                      ? laboratories.find(l => l.id === u.labId)?.shortName || u.labId
+                      : (u.labId === 'all' ? 'Tous les labos' : null);
+
+                    return (
+                      <div key={u.id} className="p-4 hover:bg-slate-50 transition-colors space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="font-semibold text-slate-900 flex items-center gap-2">
+                              <span>{u.name}</span>
+                              {labLabel && (
+                                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                                  {labLabel}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-sm text-slate-500">{u.email} {u.company && `- ${u.company}`}</div>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <div className={`text-xs px-2 py-1 rounded-full ${(u.role === 'manager' || u.role === 'admin') ? 'bg-purple-100 text-purple-700' : u.role === 'analyste' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                              {u.role.toUpperCase()}
+                            </div>
+                            {currentUser?.role === 'admin' && currentUser.id !== u.id && (
                               <button
-                                key={tpl.id}
-                                type="button"
-                                onClick={async () => {
-                                  const next = active
-                                    ? userQuals.filter(id => id !== tpl.id)
-                                    : [...userQuals, tpl.id];
-                                  const ok = await updateUserQualifications(u.id, next);
-                                  if (!ok) {
-                                    setUserMsg({
-                                      type: 'error',
-                                      text: "Impossible d'enregistrer l'habilitation. Redémarrez le serveur backend (npm run dev / npm run start) pour activer les nouvelles routes API."
-                                    });
-                                  } else {
-                                    setUserMsg({ type: 'success', text: `Habilitations mises à jour pour ${u.name}.` });
-                                  }
-                                }}
-                                className={`px-2 py-0.5 rounded-full text-[11px] font-medium border transition-colors ${
-                                  active
-                                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                                    : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-100'
-                                }`}
+                                onClick={() => handleDeleteUser(u.id)}
+                                className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded"
+                                title="Supprimer l'utilisateur"
                               >
-                                {active ? '✓ ' : '+ '}{tpl.name}
+                                <Trash2 className="w-4 h-4" />
                               </button>
-                            );
-                          })}
+                            )}
+                          </div>
+                        </div>
+                        {/* Matrice d'habilitations opérateurs (ISO 17025 §6.2) */}
+                        {canHaveQuals && availableTemplates.length > 0 && (
+                          <div className="pt-2 border-t border-slate-100">
+                            <span className="block text-[10px] font-bold uppercase text-slate-400 mb-1.5">
+                              Habilitations essais ({userQuals.filter(id => availableTemplates.some(t => t.id === id)).length} méthode(s))
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {availableTemplates.map(tpl => {
+                                const active = userQuals.includes(tpl.id);
+                                const userExpiries: Record<string, string> = u.qualificationExpiries || {};
+                                const expDate = userExpiries[tpl.id] || '';
+                                const daysUntilExp = expDate
+                                  ? Math.ceil((new Date(expDate).getTime() - new Date().setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24))
+                                  : null;
+                                const isExpired = daysUntilExp !== null && daysUntilExp < 0;
+                                const isSoon = daysUntilExp !== null && daysUntilExp >= 0 && daysUntilExp <= 30;
+                                return (
+                                  <div
+                                    key={tpl.id}
+                                    className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                                      active
+                                        ? isExpired
+                                          ? 'bg-red-50 text-red-800 border-red-300'
+                                          : isSoon
+                                            ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                            : 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                        : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        const next = active
+                                          ? userQuals.filter(id => id !== tpl.id)
+                                          : [...userQuals, tpl.id];
+                                        const ok = await updateUserQualifications(u.id, next, userExpiries);
+                                        if (!ok) {
+                                          setUserMsg({
+                                            type: 'error',
+                                            text: "Impossible d'enregistrer l'habilitation. Redémarrez le serveur backend (npm run dev / npm run start) pour activer les nouvelles routes API."
+                                          });
+                                        } else {
+                                          setUserMsg({ type: 'success', text: `Habilitations mises à jour pour ${u.name}.` });
+                                        }
+                                      }}
+                                      className="font-medium"
+                                    >
+                                      {active ? (isExpired ? '⚠ ' : '✓ ') : '+ '}{tpl.name}
+                                    </button>
+                                    {active && (
+                                      <input
+                                        type="date"
+                                        value={expDate}
+                                        title="Date d'expiration de l'habilitation (optionnelle, ISO 17025 §6.2)"
+                                        onChange={async e => {
+                                          const nextExpiries = { ...userExpiries };
+                                          if (e.target.value) nextExpiries[tpl.id] = e.target.value;
+                                          else delete nextExpiries[tpl.id];
+                                          const ok = await updateUserQualifications(u.id, userQuals, nextExpiries);
+                                          if (ok) {
+                                            setUserMsg({ type: 'success', text: `Date de validité enregistrée pour ${u.name}.` });
+                                          }
+                                        }}
+                                        className="text-[10px] bg-white/80 border border-slate-300/70 rounded px-1 py-0 text-slate-700 w-[104px]"
+                                      />
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </div>
+                    );
+                  })}
+                  {displayedUsers.length === 0 && (
+                    <div className="p-8 text-center text-sm text-slate-400 italic">
+                      Aucun personnel rattaché à votre laboratoire.
                     </div>
                   )}
                 </div>
-              );})}
-            </div>
-          </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -1075,6 +1180,31 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                 />
               </div>
             </div>
+          </div>
+
+          {/* Option Module Devis PDF Commercial (activable par laboratoire) */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mt-6 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="text-base font-semibold text-slate-800">Option : Génération de Devis PDF avant validation</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Active le bouton « Générer Devis PDF » ainsi que le suivi commercial (Devis envoyé / Approuvé / N° Bon de commande) dans les dossiers de demandes de ce laboratoire.
+              </p>
+            </div>
+            <label className="inline-flex items-center gap-2.5 text-sm font-semibold text-slate-800 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={Boolean(formData.enableQuotes)}
+                onChange={e => {
+                  const next = { ...formData, enableQuotes: e.target.checked };
+                  setFormData(next);
+                  updateLabSettings(next);
+                  setSaved(true);
+                  setTimeout(() => setSaved(false), 2000);
+                }}
+                className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+              {formData.enableQuotes ? 'Activé' : 'Désactivé'}
+            </label>
           </div>
 
           {/* Règles de Planification Intelligente & Étapes de Préparation (100 % spécifique par laboratoire) */}
@@ -1405,7 +1535,7 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                 {confirmPurge ? 'Oui, confirmer la suppression' : 'Supprimer les données sélectionnées'}
               </button>
               {confirmPurge && (
-                <button
+                  <button
                   onClick={() => {
                     setConfirmPurge(false);
                     setPurgeMsg({ type: '', text: '' });
@@ -1414,6 +1544,179 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                 >
                   Annuler
                 </button>
+              )}
+            </div>
+          </div>
+
+          {/* Sauvegardes Automatiques SQLite & Configurations par Laboratoire */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mt-6">
+            <div className="p-6 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+                  <Database className="w-5 h-5 text-emerald-600" />
+                  Sauvegardes SQLite & Configurations par Laboratoire (Rétention {backupRetentionDays}j)
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Chaque sauvegarde quotidienne copie la base SQLite et génère un fichier JSON de configuration par laboratoire dans <code className="font-mono">storage/backups/</code>.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={backupLoading}
+                onClick={async () => {
+                  setBackupLoading(true);
+                  setBackupMsg(null);
+                  try {
+                    const res = await fetch('/api/system/backups', { method: 'POST' });
+                    if (res.ok) {
+                      setBackupMsg('Sauvegarde manuelle (SQLite + configurations de chaque laboratoire) créée avec succès.');
+                      await loadBackups();
+                    } else {
+                      setBackupMsg('Erreur lors de la sauvegarde (vérifiez que le serveur backend est redémarré).');
+                    }
+                  } catch {
+                    setBackupMsg('Erreur réseau lors de la sauvegarde.');
+                  } finally {
+                    setBackupLoading(false);
+                  }
+                }}
+                className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold disabled:opacity-50"
+              >
+                {backupLoading ? 'Sauvegarde...' : 'Sauvegarder maintenant'}
+              </button>
+            </div>
+            <div className="p-6 space-y-5">
+              {/* Export / Restauration directe de la configuration de chaque laboratoire */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                      Export / Restauration manuelle par Laboratoire (.json)
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Inclut les paramètres du laboratoire, règles de planification & préparation, option devis, modèles CMS, packs, équipements et cartes CQ.
+                    </p>
+                  </div>
+                  <label className="inline-flex items-center px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer">
+                    Importer une config (.json)
+                    <input
+                      type="file"
+                      accept=".json"
+                      className="hidden"
+                      onChange={e => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          try {
+                            const parsed = JSON.parse(String(reader.result || '{}'));
+                            if (parsed.laboratory && parsed.laboratory.id) {
+                              updateLaboratory(parsed.laboratory.id, parsed.laboratory);
+                            }
+                            applyPatch({
+                              materialTemplates: parsed.materialTemplates,
+                              analysisTemplates: parsed.analysisTemplates,
+                              requestTemplates: parsed.requestTemplates,
+                              reportTemplates: parsed.reportTemplates,
+                              labSettings: parsed.laboratory?.settings
+                            });
+                            setBackupMsg(`Configuration restaurée avec succès pour ${parsed.laboratory?.name || parsed.labId || 'le laboratoire'}.`);
+                          } catch {
+                            setBackupMsg('Fichier JSON invalide : impossible de restaurer la configuration.');
+                          }
+                        };
+                        reader.readAsText(file);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {laboratories
+                    .filter(l => currentUser?.role === 'admin' || !currentUser?.labId || currentUser.labId === 'all' || l.id === currentUser.labId)
+                    .map(lab => (
+                      <div key={lab.id} className="flex items-center justify-between gap-2 p-2.5 bg-white rounded-lg border border-slate-200 text-xs">
+                        <div className="truncate">
+                          <div className="font-semibold text-slate-900 truncate">{lab.name}</div>
+                          <div className="text-[10px] font-mono text-slate-500">{lab.code} • {lab.id}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const payload = {
+                              exportedAt: new Date().toISOString(),
+                              backupVersion: 2,
+                              labId: lab.id,
+                              laboratory: lab,
+                              materialTemplates: allMaterialTemplates.filter(x => x.labId === lab.id),
+                              analysisTemplates: allAnalysisTemplates.filter(x => x.labId === lab.id),
+                              requestTemplates: allRequestTemplates.filter(x => x.labId === lab.id),
+                              reportTemplates: allReportTemplates.filter(x => x.labId === lab.id),
+                              analysisPacks: allAnalysisPacks.filter(x => x.labId === lab.id),
+                              equipments: allEquipments.filter(x => x.labId === lab.id),
+                              controlCharts: allControlCharts.filter(x => x.labId === lab.id)
+                            };
+                            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `config-lab-${lab.code || lab.id}-${new Date().toISOString().slice(0, 10)}.json`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                          className="px-2.5 py-1 rounded bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 border border-slate-200 font-semibold shrink-0"
+                        >
+                          ↓ Exporter
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              {backupMsg && (
+                <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 font-medium">
+                  {backupMsg}
+                </div>
+              )}
+              {backupsList.length === 0 ? (
+                <p className="text-xs text-slate-400 italic">Aucune sauvegarde serveur disponible pour le moment.</p>
+              ) : (
+                <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+                  {backupsList.slice(0, 10).map(bk => (
+                    <div key={bk.name} className="p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <div>
+                        <div className="font-mono font-bold text-slate-800">{bk.name}</div>
+                        <div className="text-slate-500">
+                          {new Date(bk.createdAt).toLocaleString('fr-FR')} • {bk.files.length} fichier(s)
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {bk.files.map(f => {
+                          const canDownload =
+                            currentUser?.role === 'admin' ||
+                            (currentUser?.role === 'manager' && f.name.startsWith('config-lab-') && f.name.endsWith('.json'));
+                          return canDownload ? (
+                            <a
+                              key={f.name}
+                              href={`/api/system/backups/${encodeURIComponent(bk.name)}/${encodeURIComponent(f.name)}`}
+                              className={`px-2.5 py-1 rounded border font-mono text-[11px] ${
+                                f.name.startsWith('config-lab-')
+                                  ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border-indigo-200'
+                                  : 'bg-slate-100 hover:bg-blue-50 hover:text-blue-700 border-slate-200'
+                              }`}
+                            >
+                              ↓ {f.name} ({Math.max(1, Math.round(f.sizeBytes / 1024))} Ko)
+                            </a>
+                          ) : (
+                            <span key={f.name} className="px-2 py-1 rounded bg-slate-50 border border-slate-200 font-mono text-[11px] text-slate-500">
+                              {f.name} ({Math.max(1, Math.round(f.sizeBytes / 1024))} Ko)
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </div>

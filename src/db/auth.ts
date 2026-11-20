@@ -64,6 +64,13 @@ export async function initDb() {
     // La colonne existe déjà dans le schéma
   }
 
+  // Migration douce du schéma pour les dates d'expiration d'habilitations (objet JSON { templateId: YYYY-MM-DD })
+  try {
+    database.exec('ALTER TABLE users ADD COLUMN qualificationExpiries TEXT');
+  } catch (e) {
+    // La colonne existe déjà dans le schéma
+  }
+
   // Création de la table des codes temporaires de réinitialisation de mot de passe
   database.exec(`
     CREATE TABLE IF NOT EXISTS reset_tokens (
@@ -135,23 +142,39 @@ export async function createUser(id: string, email: string, passwordHash: string
  */
 export async function getUsers() {
   const database = getDb();
-  const stmt = database.prepare('SELECT id, email, name, role, company, labId, qualifiedTemplateIds FROM users');
+  const stmt = database.prepare('SELECT id, email, name, role, company, labId, qualifiedTemplateIds, qualificationExpiries FROM users');
   return (stmt.all() as any[]).map(u => ({
     ...u,
-    qualifiedTemplateIds: u.qualifiedTemplateIds ? (() => { try { return JSON.parse(u.qualifiedTemplateIds); } catch { return []; } })() : []
+    qualifiedTemplateIds: u.qualifiedTemplateIds ? (() => { try { return JSON.parse(u.qualifiedTemplateIds); } catch { return []; } })() : [],
+    qualificationExpiries: u.qualificationExpiries ? (() => { try { return JSON.parse(u.qualificationExpiries); } catch { return {}; } })() : {}
   }));
 }
 
 /**
- * Met à jour la liste des modèles d'analyses (`AnalysisTemplate.id`) sur lesquels un opérateur est habilité.
+ * Met à jour la liste des modèles d'analyses (`AnalysisTemplate.id`) sur lesquels un opérateur est habilité,
+ * ainsi que leurs éventuelles dates d'expiration (ISO 17025 §6.2).
  *
  * @param id Identifiant de l'utilisateur
  * @param templateIds Liste des identifiants de méthodes d'essais habilitées
+ * @param expiries Dictionnaire optionnel `{ [templateId]: 'YYYY-MM-DD' }`
  */
-export async function updateUserQualifications(id: string, templateIds: string[]) {
+export async function updateUserQualifications(
+  id: string,
+  templateIds: string[],
+  expiries?: Record<string, string>
+) {
   const database = getDb();
-  const stmt = database.prepare('UPDATE users SET qualifiedTemplateIds = ? WHERE id = ?');
-  stmt.run(JSON.stringify(Array.isArray(templateIds) ? templateIds : []), id);
+  if (expiries !== undefined) {
+    const stmt = database.prepare('UPDATE users SET qualifiedTemplateIds = ?, qualificationExpiries = ? WHERE id = ?');
+    stmt.run(
+      JSON.stringify(Array.isArray(templateIds) ? templateIds : []),
+      JSON.stringify(expiries && typeof expiries === 'object' ? expiries : {}),
+      id
+    );
+  } else {
+    const stmt = database.prepare('UPDATE users SET qualifiedTemplateIds = ? WHERE id = ?');
+    stmt.run(JSON.stringify(Array.isArray(templateIds) ? templateIds : []), id);
+  }
 }
 
 /**

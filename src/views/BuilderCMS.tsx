@@ -1568,6 +1568,72 @@ export function BuilderCMS() {
                       </div>
                     )}
                   </div>
+
+                  {/* Document Normatif / Mode Opératoire PDF (GED légère ISO 17025) */}
+                  <div className="pt-3 border-t border-slate-200 space-y-2">
+                    <label className="block text-sm font-medium text-slate-800">
+                      Mode Opératoire / Norme (PDF — GED légère ISO 17025)
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <input
+                        type="text"
+                        placeholder="Version / Réf. (ex: v2.1 — ISO 6892-1:2019)"
+                        value={activeAnalysisTpl.sopVersion || ''}
+                        onChange={e => {
+                          const updated = { ...activeAnalysisTpl, sopVersion: e.target.value };
+                          updateAnalysisTemplate(activeAnalysisTpl.id, updated);
+                          setActiveAnalysisTpl(updated);
+                        }}
+                        className="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5"
+                      />
+                      <label className="inline-flex items-center justify-center px-3 py-1.5 text-xs font-semibold rounded-lg border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 cursor-pointer">
+                        Importer un PDF...
+                        <input
+                          type="file"
+                          accept="application/pdf"
+                          className="hidden"
+                          onChange={e => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const reader = new FileReader();
+                            reader.onload = () => {
+                              const dataUrl = String(reader.result || '');
+                              const updated = {
+                                ...activeAnalysisTpl,
+                                sopDocumentName: file.name,
+                                sopDocumentData: dataUrl
+                              };
+                              updateAnalysisTemplate(activeAnalysisTpl.id, updated);
+                              setActiveAnalysisTpl(updated);
+                            };
+                            reader.readAsDataURL(file);
+                          }}
+                        />
+                      </label>
+                    </div>
+                    {activeAnalysisTpl.sopDocumentName && (
+                      <div className="flex items-center justify-between text-xs bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg px-3 py-1.5">
+                        <span className="truncate font-medium">
+                          📄 {activeAnalysisTpl.sopDocumentName}{activeAnalysisTpl.sopVersion ? ` (${activeAnalysisTpl.sopVersion})` : ''}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = {
+                              ...activeAnalysisTpl,
+                              sopDocumentName: undefined,
+                              sopDocumentData: undefined
+                            };
+                            updateAnalysisTemplate(activeAnalysisTpl.id, updated);
+                            setActiveAnalysisTpl(updated);
+                          }}
+                          className="text-red-600 hover:underline font-semibold ml-2 shrink-0"
+                        >
+                          Retirer
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </>
               )}
               {builderTab === 'requests' && activeRequestTpl && (

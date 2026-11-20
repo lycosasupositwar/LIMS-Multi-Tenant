@@ -161,6 +161,8 @@ export interface User {
   labId?: string;
   /** Liste des identifiants d'`AnalysisTemplate` sur lesquels l'opérateur est habilité (ISO 17025 §6.2) */
   qualifiedTemplateIds?: string[];
+  /** Dates d'expiration des habilitations opérateur par `templateId` (`{ [templateId]: 'YYYY-MM-DD' }`) */
+  qualificationExpiries?: Record<string, string>;
 }
 
 /**
@@ -317,6 +319,12 @@ export interface AnalysisTemplate {
   requiresPreparation?: boolean;
   /** Identifiants ordonnés des étapes de préparation du laboratoire (`LabSchedulingConfig.preparationSteps`) */
   preparationStepIds?: string[];
+  /** Document normatif / mode opératoire PDF rattaché à la méthode (GED légère ISO 17025) */
+  sopDocumentName?: string;
+  /** Contenu DataURL Base64 du document PDF mode opératoire / norme */
+  sopDocumentData?: string;
+  /** Indice de version / révision du mode opératoire (ex: 'v2.1 — ISO 6892-1:2019') */
+  sopVersion?: string;
   /** Liste des grandeurs, tableaux ou clichés attendus lors de l'exécution de l'essai */
   expectedResults: ExpectedResult[];
 }
@@ -413,6 +421,14 @@ export interface AnalysisRequest {
   estimatedHours?: number;
   /** Valorisation financière estimée (€ HT) calculée à partir des tarifs des essais */
   estimatedCost?: number;
+  /** Statut du devis commercial optionnel (activable par laboratoire via `LabSettings.enableQuotes`) */
+  quoteStatus?: 'aucun' | 'genere' | 'envoye' | 'approuve' | 'refuse';
+  /** Numéro du devis généré (ex: 'DEV-MET-26-001') */
+  quoteNumber?: string;
+  /** Date ISO de génération du devis PDF */
+  quoteGeneratedAt?: string;
+  /** Référence du bon de commande client associé au devis */
+  purchaseOrderRef?: string;
 }
 
 /**
@@ -535,6 +551,44 @@ export interface Analysis {
   isScheduleLocked?: boolean;
   /** Identifiant du lot de préparation optimisé (ex: 'LOT-POL-1') auquel cet essai est rattaché */
   scheduledBatchId?: string;
+  /** Justification traçable en cas de dérogation manager sur un équipement hors validité métrologique */
+  calibrationOverrideReason?: string;
+}
+
+/** Période d'indisponibilité d'un opérateur (congé/absence) ou d'un équipement (maintenance) */
+export interface LabUnavailability {
+  id: string;
+  targetType: 'staff' | 'equipment';
+  targetId: string;
+  targetName: string;
+  /** Date de début inclusive (YYYY-MM-DD) */
+  startDate: string;
+  /** Date de fin inclusive (YYYY-MM-DD) */
+  endDate: string;
+  reason: string;
+  /** Réduction de capacité journalière (en heures) pour une absence opérateur */
+  capacityReductionHours?: number;
+}
+
+/** Point de mesure d'une carte de contrôle qualité interne (CQ / Westgard) */
+export interface ControlChartPoint {
+  id: string;
+  date: string;
+  value: number;
+  operator: string;
+  notes?: string;
+}
+
+/** Carte de contrôle qualité interne (échantillon témoin / cale de référence, moyenne ± 2σ / ± 3σ) */
+export interface ControlChart {
+  id: string;
+  labId: string;
+  name: string;
+  equipmentId?: string;
+  unit: string;
+  targetValue: number;
+  stdDev: number;
+  points: ControlChartPoint[];
 }
 
 /** Règle de regroupement d'une étape de préparation en lot simultané */
@@ -570,6 +624,8 @@ export interface LabSchedulingConfig {
   batchWindowDays: number;
   /** Catalogue dynamique des étapes de préparation propres à ce laboratoire */
   preparationSteps: PreparationStepTemplate[];
+  /** Absences opérateurs et maintenances équipements prises en compte par le planning */
+  unavailabilities?: LabUnavailability[];
 }
 
 /**
@@ -608,6 +664,8 @@ export interface LabSettings {
   };
   /** Configuration dynamique du moteur de planification intelligente et des lots de préparation */
   schedulingConfig?: LabSchedulingConfig;
+  /** Active l'option de génération et de suivi des Devis PDF avant validation (désactivée par défaut) */
+  enableQuotes?: boolean;
 }
 
 /**

@@ -1,287 +1,196 @@
-# LIMS — Gestion de laboratoire
+# LIMS Multi-Tenant — Plateforme de Gestion de Laboratoire (ISO/IEC 17025)
 
-Application web de gestion de laboratoire (LIMS, *Laboratory Information Management System*) construite avec React, TypeScript, Vite et Express. Elle regroupe le suivi des demandes clients, des échantillons, des analyses, des rapports et des consommables, ainsi que la configuration des formulaires et des modèles métier.
+Application web complète de gestion de laboratoire (**LIMS**, *Laboratory Information Management System*) multi-laboratoires orientée essais matériaux (Métallographie, Microstructure, Essais Mécaniques, Physico-Chimie, Poudres), construite avec **React 19, TypeScript, Vite 6, Tailwind CSS 4, Express 5 et SQLite (`node:sqlite`)**.
 
-> **État du document :** cette documentation décrit la structure et les commandes visibles dans le dépôt. Les étapes de déploiement et les fonctions doivent être validées dans l’environnement cible avant une mise en production.
+---
 
 ## Sommaire
 
-- [Fonctionnalités](#fonctionnalités)
+- [Fonctionnalités principales](#fonctionnalités-principales)
 - [Technologies](#technologies)
 - [Prérequis](#prérequis)
 - [Installation](#installation)
 - [Démarrage et commandes](#démarrage-et-commandes)
 - [Configuration](#configuration)
-- [Comptes, rôles et accès](#comptes-rôles-et-accès)
-- [Utilisation](#utilisation)
-- [Builder CMS et formulaires clients](#builder-cms-et-formulaires-clients)
-- [Stockage et sauvegardes](#stockage-et-sauvegardes)
-- [Sécurité](#sécurité)
-- [Dépannage](#dépannage)
+- [Comptes, rôles et cloisonnement (RBAC)](#comptes-rôles-et-cloisonnement-rbac)
+- [Builder CMS, GED & Modèles de Rapports](#builder-cms-ged--modèles-de-rapports)
+- [Stockage et sauvegardes automatiques](#stockage-et-sauvegardes-automatiques)
+- [Sécurité et conformité ISO 17025](#sécurité-et-conformité-iso-17025)
+- [Guides par profil utilisateur](#guides-par-profil-utilisateur)
 - [Structure du projet](#structure-du-projet)
 
-## Fonctionnalités
+---
 
-- **Tableau de bord** : vue d’ensemble de l’activité, génération d’un bilan PDF opérationnel et export d’un classeur Excel multi-feuilles (Dashboard, Demandes, Échantillons, Analyses, Stocks, Modèles matériaux et Modèles analyses). Les exports reprennent les données accessibles au compte connecté au moment de la génération.
-- **Demandes** : création, consultation et suivi des demandes clients.
-- **Portail demandeur** : espace client dédié pour déposer et suivre les demandes et, selon leur état, les modifier ou les soumettre à nouveau.
-- **Échantillons** : gestion et suivi des échantillons associés aux demandes.
-- **Essais et analyses** : gestion des analyses et saisie des résultats attendus.
-- **Rapports** : gestion des modèles et des rapports, avec prise en charge de documents Word et de fichiers PDF dans les flux concernés.
-- **Inventaire** : gestion des éléments d’inventaire/consommables.
-- **Builder CMS** : création et configuration des modèles de matériaux, des modèles d’analyses, des formulaires de demande et des modèles de rapports.
-- **Utilisateurs et laboratoires** : gestion des comptes, rôles et périmètres de laboratoire.
-- **Notifications par e-mail** : configuration SMTP depuis l’application.
-- **Journaux système** : consultation des journaux d’administration disponibles dans l’application.
+## Fonctionnalités principales
 
-Les fonctions disponibles dans l’interface peuvent varier selon le rôle de l’utilisateur.
+### Pilotage & Tableaux de Bord
+- **KPI structurés en 4 catégories** :
+  1. *Pilotage Demandes, Délais & Valorisation* (retards sur `committedDueDate`, demandes à revoir, taux de clôture, valorisation `€ HT` & respect OTD).
+  2. *Production & Charge Laboratoire* (charge active **essais + préparation optimisée par lots**, échantillons suivis, analyses à valider).
+  3. *Qualité & Conformité ISO 17025* (taux de validation, essais repris/rejetés, fiches Non-Conformités / CAPA ouvertes).
+  4. *Ressources, Métrologie & Stocks* (étalonnages expirés ou ≤ 30 jours, alertes de stock et péremptions).
+- **Exports de pilotage** : Bilan PDF paginé et classeur Excel multi-feuilles (`.xlsx` OpenXML natif avec graphiques intégrés).
+
+### Demandes, Devis & Portail Demandeur
+- **Portail Client dédié (`demandeur`)** : dépôt de demandes multi-laboratoires avec **Packs d'essais en 1 clic**, saisie du nombre d'échantillons, **estimation instantanée de la durée (essais + préparation)** et du coût, **barre de progression visuelle en 5 étapes** (*Soumise → Revue → Essais → Validation → Rapport*), fil de discussion intégré et téléchargement sécurisé par lien à usage unique.
+- **Revue de contrat ISO 17025 §7.1** : validation de faisabilité (méthodes, ressources, personnel habilité) et engagement de date de rendu (`committedDueDate`).
+- **Option Devis PDF Commercial** *(activable par laboratoire dans Paramètres → Laboratoire)* : génération de devis PDF A4 (HT, TVA 20 %, TTC), suivi du statut (`genere`, `envoye`, `approuve`, `refuse`) et saisie du N° de bon de commande client.
+
+### Échantillons, Essais & Traçabilité
+- **Chaîne de garde & fin de vie** : réception, découpe en sous-échantillons/enrobages, impression d'étiquettes thermiques **Zebra ZPL II / QR Code (70×37 mm)**, scan rapide douchette (**QuickScan QR**), localisation physique, conservation, restitution ou destruction tracée.
+- **Saisie d'analyses avancée** :
+  - Types de résultats riches : valeurs numériques avec bornes `minSpec`/`maxSpec` et incertitude `± U` (verdict Conforme/Non conforme automatique), **séries numériques avec calcul Moyenne/Écart-type et import CSV/TXT machine**, **tableaux verticaux (ex. ICP/OES) avec import CSV et collage Excel**, galeries de micrographies.
+  - **Assignation par essai** avec **contrôle bloquant des habilitations opérateurs** (y compris dates d'expiration).
+  - **Verrouillage métrologique strict** : blocage des instruments expirés ou hors service (dérogation manager traçable obligatoire).
+  - **GED légère** : accès en 1 clic au PDF du mode opératoire / norme rattaché à la méthode.
+
+### Planning, Charge & Planification Intelligente
+- **Calendrier interactif (Mois / Semaine / Jour)** : glisser-déposer des essais, affichage des échéances, étalonnages, lots et jauges de charge **Essais + Préparation**.
+- **Planification Intelligente (Auto)** :
+  - Préemption sélective des urgences (`haute`) sans déplacer les essais déjà démarrés ou épinglés (`isScheduleLocked`).
+  - **Regroupement dynamique en lots de préparation** configurable par laboratoire (ex. *Enrobage à chaud* 1 à la fois vs *Polissage automatique* jusqu'à 6 plots d'un même alliage).
+  - **Gestion des absences opérateurs et maintenances machines** prise en compte automatiquement dans la capacité journalière.
+- **Accès Analyste (« Mon Planning »)** : vue calendrier uniquement (Mois/Semaine/Jour), **strictement en lecture seule** et filtrée sur ses propres essais.
+- **Vues Kanban & Charge** *(managers/admins)* : répartition par statut et charge par analyste/équipement.
+
+### Qualité, Métrologie & Rapports ISO 17025
+- **Parc Équipements & Cartes de Contrôle (CQ Interne)** *(managers/admins)* : suivi des étalonnages (alertes ≤ 30j / expiré) et **cartes de contrôle qualité Recharts** (valeur cible, limites ±2σ et ±3σ avec alertes de dérive).
+- **Non-Conformités & CAPA (§7.10)** : fiches NC, analyse cause racine, actions correctives et clôture tracée.
+- **Rapports Officiels (Word `.docx` & HTML A4 PDF)** :
+  - Fusion Docxtemplater + conversion PDF LibreOffice, ou gabarit HTML A4 natif.
+  - **Traçabilité métrologique intégrée** : tableau récapitulatif des équipements utilisés (code, désignation, fabricant/modèle, n° série, validité étalonnage) dans le rapport de base et via balises dynamiques (`{{@table_equipements}}`, `{{#equipements}}`, `{{equipement}}`).
+  - **Immutabilité & Révisions (§7.8.8)** : empreinte cryptographique **SHA-256**, verrouillage après publication, création de révisions (`Rev2`, `Rev3`...) via modale dédiée avec motif d'amendement obligatoire et notification e-mail client.
+
+---
 
 ## Technologies
 
-- React 19 et TypeScript
-- Vite et Tailwind CSS
-- Express 5 (serveur HTTP et API)
-- SQLite via `node:sqlite` pour les données persistantes
-- JWT et `bcryptjs` pour l’authentification et le hachage des mots de passe
-- Bibliothèques de génération/lecture de documents et de visualisation, notamment `docxtemplater`, `docx-preview`, `jspdf` et `react-pdf`
+- **Frontend** : React 19, TypeScript 5.8, Vite 6, Tailwind CSS 4, `lucide-react`, `recharts`.
+- **Backend** : Node.js >= 22, Express 5, `node:sqlite` (`DatabaseSync`), JWT (`HttpOnly`), `bcryptjs`, `nodemailer`.
+- **Moteurs documentaires** : `docxtemplater`, `pizzip`, `libreoffice-convert`, `jspdf`, `dom-to-image-more`, `react-pdf`, `qrcode`.
+
+---
 
 ## Prérequis
 
-- **Node.js 22 ou supérieur** recommandé (le projet utilise `node:sqlite`).
-- npm, fourni avec Node.js. Bun est présent dans le dépôt, mais les commandes ci-dessous utilisent npm.
-- Pour convertir certains documents Word en PDF côté serveur, une installation fonctionnelle de **LibreOffice** peut être nécessaire selon le système et le flux utilisé.
+- **Node.js 22 ou supérieur** (requis pour `node:sqlite`).
+- **LibreOffice** (optionnel, requis uniquement pour la conversion serveur `.docx` → `.pdf` ; en son absence, le `.docx` fusionné reste téléchargeable).
+
+---
 
 ## Installation
-
-Placez-vous dans le répertoire du projet, celui qui contient `package.json`.
 
 ```bash
 npm install
 ```
 
-Créez un fichier `.env` à la racine du projet. Exemple minimal :
+Créez un fichier `.env` à la racine du projet :
 
 ```dotenv
 NODE_ENV=development
+PORT=3000
 JWT_SECRET=remplacer-par-une-cle-aleatoire-longue-et-secrete
+BACKUP_RETENTION_DAYS=30
 ```
 
-Générez une clé aléatoire, par exemple avec Node.js :
+Générez un secret JWT sécurisé :
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-Copiez le résultat dans `JWT_SECRET`. Ne publiez pas ce fichier et ne partagez pas sa valeur.
+> Un script Linux d'installation assistée (`install.sh`) est également fourni à la racine.
 
-### Installation assistée
-
-Le dépôt contient un script `install.sh` destiné aux environnements Linux compatibles. Il peut installer Node.js et les dépendances, créer un fichier `.env` si nécessaire et configurer un compte administrateur.
-
-```bash
-chmod +x install.sh
-./install.sh
-```
-
-**Attention :** examinez le script avant de l’exécuter, notamment sur un serveur existant. Il peut utiliser `sudo`, installer des paquets système et créer ou réinitialiser le compte administrateur. Choisissez un mot de passe fort et unique. Si l’installation manuelle est préférable, utilisez les étapes précédentes.
+---
 
 ## Démarrage et commandes
 
-### Développement
-
 ```bash
-npm run dev
+npm run dev     # Serveur Express + Vite HMR (http://localhost:3000)
+npm run lint    # Vérification TypeScript complète (tsc --noEmit)
+npm run build   # Compilation frontend (dist/) et backend (dist/server.cjs)
+npm run start   # Démarrage en mode production
 ```
 
-Le serveur Express démarre sur le **port 3000**. Ouvrez ensuite [http://localhost:3000](http://localhost:3000). Le serveur intègre les middlewares Vite en mode développement.
-
-### Vérification TypeScript
-
-```bash
-npm run lint
-```
-
-Cette commande exécute `tsc --noEmit` : elle vérifie les types, mais ne remplace pas un test fonctionnel complet.
-
-### Compilation et production
-
-```bash
-npm run build
-npm run start
-```
-
-La compilation produit les fichiers frontend dans `dist/` et le serveur compilé dans `dist/server.cjs`. `npm run start` lance le serveur de production. Définissez `NODE_ENV=production` et fournissez obligatoirement un `JWT_SECRET` robuste avant le démarrage.
-
-Autres commandes :
-
-```bash
-npm run preview # prévisualisation Vite du frontend compilé
-npm run clean   # supprime les artefacts ciblés par le script
-```
-
-Le serveur définit actuellement son port dans `server.ts` à `3000` ; la variable `PORT` écrite par le script d’installation n’est donc pas utilisée par cette version. Pour changer le port, adaptez le code serveur et vérifiez la configuration de déploiement.
+---
 
 ## Configuration
 
-### Variables d’environnement
-
-| Variable | Utilisation | Recommandation |
+| Variable | Rôle | Défaut |
 |---|---|---|
-| `JWT_SECRET` | Signature et vérification des jetons d’authentification | Obligatoire en production ; clé aléatoire, longue et privée |
-| `NODE_ENV` | Sélection du comportement développement/production | Définir `production` en production |
-| `DISABLE_HMR` | Référencée par la configuration serveur pour le comportement HMR | À utiliser uniquement si nécessaire dans l’environnement de développement |
+| `PORT` | Port HTTP d'écoute du serveur Express | `3000` |
+| `JWT_SECRET` | Clé de signature des cookies de session JWT (obligatoire en prod) | Clé dev |
+| `NODE_ENV` | `development` ou `production` | `development` |
+| `BACKUP_RETENTION_DAYS` | Durée de rétention (en jours) des sauvegardes SQLite automatiques | `30` |
+| `DISABLE_HMR` | Désactive le Hot Module Replacement Vite si `true` | `false` |
 
-Le port est actuellement fixé à `3000` dans `server.ts`. La configuration SMTP se fait depuis l’interface d’administration, si les droits nécessaires sont disponibles : renseignez l’hôte, le port, le mode sécurisé, l’utilisateur, le mot de passe et l’adresse d’expédition. Effectuez un envoi de test après configuration.
+Les paramètres SMTP, les règles de planification/préparation, l'option **Devis PDF** et les préfixes d'identifiants se configurent directement dans **Paramètres**.
 
-## Comptes, rôles et accès
+---
 
-Les rôles utilisés dans l’application comprennent :
+## Comptes, rôles et cloisonnement (RBAC)
 
-- **`demandeur`** : accès au portail client, pour créer et suivre ses demandes.
-- **`analyste`** : accès aux vues opérationnelles internes autorisées, notamment les échantillons et les analyses.
-- **`manager`** : accès aux vues de gestion, aux paramètres correspondants et au Builder CMS.
-- **`admin`** : rôle d’administration système, notamment pour la gestion des utilisateurs.
+| Rôle | Accès & Périmètre |
+|---|---|
+| **`demandeur`** | Portail client uniquement : soumission, suivi visuel 5 étapes, commentaires, téléchargement sécurisé des rapports. |
+| **`analyste`** | Console opérationnelle de son laboratoire : Dashboard opérateur, Demandes assignées, Échantillons, Analyses, **Mon Planning (calendrier en lecture seule de ses essais)**, Rapports, NC/CAPA, Consommables. *Pas d'accès à Équipements/Métrologie, Kanban, Charge, ni Builder CMS.* |
+| **`manager`** | Toutes les vues de son laboratoire + **Planning & Charge complet (Planification Auto, Absences)**, **Équipements & Cartes CQ**, **Builder CMS**, **Habilitations opérateurs (strictement limité au personnel et méthodes de son laboratoire)**, **Devis PDF (si activé)**. |
+| **`admin`** | Accès transversal multi-laboratoires (`all`), gestion des laboratoires, comptes utilisateurs, SMTP, journaux système et téléchargement des sauvegardes SQLite. |
 
-Les vues et les données disponibles sont filtrées selon le rôle et, pour les utilisateurs internes, le laboratoire associé lorsque cette règle est applicable. Vérifiez les droits avec plusieurs comptes avant la mise en production.
+---
 
-La base d’authentification crée les tables nécessaires au premier démarrage. Si aucun utilisateur n’est présent, le code initialise le schéma ; la création du compte super-administrateur peut être effectuée avec le script d’installation. Ne supposez pas qu’un mot de passe de démonstration est sûr : définissez un identifiant et un mot de passe propres à votre installation.
+## Builder CMS, GED & Modèles de Rapports
 
-## Utilisation
+Réservé aux `manager` et `admin` :
+- **Matériaux** : champs personnalisés dynamiques réutilisés dans les formulaires clients (`type: 'materials'`).
+- **Analyses** : résultats attendus (`number`, `number_series`, `vertical_table`, `micrography`, etc.), spécifications `minSpec`/`maxSpec`, incertitude, tarif HT, durée, étapes de préparation et **upload du Mode Opératoire PDF (GED légère)**.
+- **Formulaires** : configuration des formulaires de demande client.
+- **Rapports** : import de modèles Word `.docx` avec aide-mémoire intégré des balises (`{{demande.*}}`, `{{#analyses}}`, `{{#echantillons}}`, `{{#equipements}}`, `{{@table_equipements}}`, `{{#tables_series}}`, `{{#tables_verticales}}`, `{{#micrographies}}`).
 
-### Demandes et portail client
+---
 
-1. Connectez-vous avec un compte autorisé.
-2. Le demandeur utilise son portail pour créer et suivre une demande.
-3. Le personnel interne consulte les demandes dans la vue **Demandes**.
-4. Les échantillons, analyses et rapports sont ensuite gérés dans leurs vues respectives, selon les droits attribués.
+## Stockage et sauvegardes automatiques
 
-### Échantillons, analyses et rapports
+- **Base SQLite** : `database.sqlite` à la racine (tables `users`, `reset_tokens`, `account_requests`, `collections`).
+- **Rapports archivés** : `storage/reports/` (fichiers PDF/DOCX finaux verrouillés avec hash SHA-256).
+- **Sauvegardes automatiques planifiées** : une copie quotidienne automatique des bases SQLite **et un fichier JSON de configuration complet par laboratoire** (`config-lab-<code_ou_id>.json`) sont créés dans `storage/backups/backup-YYYY-MM-DD_HH-mm-ss-auto/` avec purge automatique au-delà de `BACKUP_RETENTION_DAYS` (30 jours par défaut). Déclenchement manuel, export/restauration JSON par laboratoire et téléchargement sont disponibles dans **Paramètres → Système**.
 
-- Associez les échantillons à la demande correspondante et renseignez les informations de suivi.
-- Utilisez les modèles d’analyses pour définir les champs et les résultats attendus.
-- Configurez les modèles de rapports et les fichiers de modèle requis par votre processus. Vérifiez les documents générés et leur mise en page avant de les utiliser officiellement.
+---
 
-## Bilan PDF depuis le tableau de bord
+## Guides par profil utilisateur
 
-Depuis le tableau de bord de pilotage, le bouton **Générer Bilan PDF** télécharge un bilan d’activité construit à partir des données disponibles dans l’application au moment de la génération. Le document comprend :
+- **[Guide Manager / Responsable Laboratoire](docs/GUIDE_MANAGER.md)** : KPI, revue de contrat, devis PDF optionnel, planning intelligent & absences, métrologie & cartes CQ, habilitations, Builder CMS, rapports et sauvegardes.
+- **[Guide Analyste / Technicien](docs/GUIDE_ANALYSTE.md)** : Mon Planning (lecture seule), échantillons & étiquetage Zebra/QR, saisie d'analyses, modes opératoires PDF, import CSV, NC et stocks.
+- **[Guide Demandeur / Client](docs/GUIDE_DEMANDEUR.md)** : dépôt de demandes avec packs d'essais, suivi visuel 5 étapes, fil de discussion, resoumission et téléchargement sécurisé des rapports.
+- **[Guide Développeur & Audit](docs/GUIDE_DEVELOPPEUR_ET_AUDIT.md)** : architecture technique, RBAC, persistance SQLite et détail fichier par fichier.
 
-- les informations d’identification du laboratoire et la date de génération ;
-- une synthèse des demandes, échantillons, analyses, validations en attente et alertes de consommables ;
-- la répartition des demandes, échantillons et analyses par statut ;
-- des listes récentes de demandes, échantillons et analyses pour faciliter le suivi ;
-- un aperçu des modèles de matériaux et des propriétés configurées ;
-- les stocks sous seuil et une section de points d’attention ;
-- une pagination et un pied de page daté.
+---
 
-Le périmètre suit le laboratoire associé au compte connecté lorsque ce périmètre est renseigné. Le bilan est un outil de pilotage : il ne remplace pas un rapport d’essai officiel approuvé, une revue qualité, ni une démonstration de conformité ISO/IEC 17025. Les indicateurs de délai ne sont pas calculés si les dates d’échéance et les horodatages nécessaires ne sont pas disponibles. Vérifiez les chiffres et les autorisations d’accès dans l’environnement cible avant d’utiliser le document pour une décision qualité ou réglementaire.
+## Sécurité et conformité ISO 17025
 
+- Authentification par cookie JWT `HttpOnly` + rate limiting anti-bruteforce.
+- Contrôle multi-tenant strict côté serveur sur toutes les routes `/api/db/*` et `/api/users/:id/qualifications`.
+- Contrôle bloquant des habilitations opérateurs (y compris dates d'expiration) et verrouillage métrologique des équipements expirés.
+- Piste d'audit horodatée (`auditTrail`) sur les demandes, essais et rapports, et liens de téléchargement client à usage unique.
 
-### Bilan et export Excel du tableau de bord
-
-Depuis le tableau de bord de direction, deux exports sont proposés :
-
-- **Générer Bilan PDF** : rapport d’activité paginé avec synthèse, statuts, échantillons, analyses, modèles, stocks et points d’attention.
-- **Exporter Dashboard Excel** : classeur compatible Microsoft Excel, avec une feuille de synthèse et des feuilles de détail pour les demandes, échantillons, analyses, stocks et modèles.
-
-Les fichiers sont générés côté navigateur à partir des données déjà chargées dans l’application. Le périmètre est limité au laboratoire du compte connecté lorsque celui-ci est défini ; un compte dont le laboratoire est `all` voit les données accessibles globalement. Le classeur est un export ponctuel : il ne se synchronise pas ensuite avec le LIMS. Pour actualiser les chiffres, générez un nouvel export.
-
-**Limites et usage qualité :** les indicateurs sont calculés à partir des statuts et dates réellement disponibles. Les délais moyens, le respect des délais contractuels, les non-conformités formelles et la piste d’audit complète ne sont pas déduits lorsqu’ils ne sont pas enregistrés de façon structurée. Le bilan ne remplace pas une revue qualité et n’atteste pas, à lui seul, la conformité ISO/IEC 17025. Vérifiez les chiffres et les règles métier du laboratoire avant de diffuser le rapport.
-
-## Builder CMS et formulaires clients
-
-Le **Builder CMS** est réservé aux utilisateurs disposant du rôle `manager`. Il comporte quatre zones principales : **Matériaux**, **Analyses**, **Formulaires** et **Rapports**.
-
-### Modèles de matériaux
-
-La zone **Matériaux** sert à définir les modèles de matériaux, leurs champs/propriétés et leur disponibilité pour le laboratoire concerné. Activez les modèles qui doivent pouvoir être proposés dans un formulaire client.
-
-### Modèles d’analyses
-
-La zone **Analyses** sert à configurer les modèles d’analyse et les résultats attendus : nom du champ, type, unité éventuelle, options et caractère obligatoire selon le type de champ.
-
-### Formulaires de demande côté client
-
-La configuration du formulaire client se fait dans **Builder CMS → Formulaires** — et non dans la zone **Matériaux**.
-
-Pour proposer les matériaux au client :
-
-1. Ouvrez **Builder CMS → Formulaires** et créez ou modifiez le formulaire de demande concerné.
-2. Ajoutez un champ de formulaire de type **Matériaux du modèle** (`materials`).
-3. Enregistrez le formulaire.
-4. Dans le portail client, les modèles de matériaux actifs associés au laboratoire de la demande sont proposés à la sélection.
-5. Lorsque le client sélectionne un modèle, les propriétés configurées pour ce matériau sont affichées avec leur type de saisie (texte, nombre, date, liste, choix multiples ou Oui/Non, selon la définition de la propriété).
-6. Les valeurs saisies sont enregistrées dans les données personnalisées de la demande et sont réaffichées dans le formulaire de modification.
-
-Si aucun matériau n’apparaît, vérifiez que le modèle est actif et associé au même laboratoire que la demande, puis vérifiez que le champ `materials` est bien présent dans le formulaire client.
-
-> Les libellés précis affichés dans l’interface peuvent dépendre de la version de l’application. La clé technique du type de champ est `materials`.
-
-### Modèles de rapports
-
-La zone **Rapports** permet de gérer les modèles de rapport et, dans les flux concernés, d’importer un document Word (`.docx`). Testez les balises, images et conversions avec un document non critique avant de généraliser le modèle.
-
-## Stockage et sauvegardes
-
-- **Base de données SQLite :** `database.sqlite` à la racine du projet. Elle contient les comptes et les collections métier sérialisées en JSON.
-- **Rapports enregistrés :** `storage/reports/`.
-- **Fichiers temporaires et artefacts :** certains fichiers peuvent être créés pendant la génération ou la consultation de documents.
-
-Avant toute mise à jour, arrêtez l’application et effectuez une sauvegarde cohérente de `database.sqlite` ainsi que du répertoire `storage/`. Stockez les sauvegardes hors du serveur, limitez-en l’accès et testez périodiquement leur restauration. Ne supprimez pas la base de données pour résoudre un problème sans avoir effectué une sauvegarde.
-
-## Sécurité
-
-- Utilisez un `JWT_SECRET` robuste et différent pour chaque environnement ; il est obligatoire en production.
-- N’utilisez pas de mots de passe par défaut ou partagés. Changez immédiatement les identifiants initialement créés.
-- Ne commitez jamais `.env`, les bases de données, les documents clients ou les sauvegardes dans le dépôt.
-- Servez l’application derrière HTTPS en production et limitez l’accès réseau au serveur.
-- Restreignez l’accès au fichier SQLite, aux rapports générés et aux sauvegardes aux seuls comptes système nécessaires.
-- Configurez SMTP avec des identifiants dédiés et protégez-les comme des secrets.
-- Testez les permissions, les scénarios de réinitialisation de mot de passe et l’accès inter-laboratoires avant la mise en service.
-- Les journaux peuvent contenir des détails techniques : évitez d’y écrire des données personnelles ou confidentielles et contrôlez leur accès.
-
-Cette documentation ne constitue pas une certification de conformité réglementaire. Pour une utilisation en environnement réglementé, définissez et validez vos procédures de sauvegarde, de traçabilité, de validation et de contrôle d’accès.
-
-## Dépannage
-
-- **Le serveur ne démarre pas :** vérifiez `node -v` (Node.js 22+), puis exécutez `npm install` et consultez les messages du terminal.
-- **Le port 3000 est déjà utilisé :** arrêtez le service qui l’occupe ou adaptez le port dans `server.ts` et vérifiez les paramètres de déploiement.
-- **Erreur de jeton en production :** vérifiez que `JWT_SECRET` est défini avant de lancer le serveur.
-- **Le formulaire ne propose aucun matériau :** vérifiez le laboratoire sélectionné, l’état actif du modèle et la présence du champ de type `materials` dans **Builder CMS → Formulaires**.
-- **Un rapport Word/PDF échoue :** vérifiez le fichier modèle, les droits d’écriture sur `storage/reports/` et la disponibilité de LibreOffice si une conversion est requise.
-- **Une modification ne semble pas enregistrée :** vérifiez les messages du serveur et la sauvegarde de `database.sqlite` avant de tenter une réparation.
+---
 
 ## Structure du projet
 
 ```text
 .
-├── server.ts                 # Serveur Express, API et service de fichiers
-├── install.sh                # Script d’installation assistée Linux
-├── package.json              # Dépendances et commandes npm
-├── index.html                # Point d’entrée HTML
-├── vite.config.ts            # Configuration Vite
-├── tsconfig.json             # Configuration TypeScript
+├── server.ts                          # Serveur Express 5, API REST, LibreOffice, Backups SQLite
+├── install.sh                         # Script d'installation assistée Linux
+├── docs/GUIDE_DEVELOPPEUR_ET_AUDIT.md # Architecture détaillée & guide développeur
 └── src/
-    ├── App.tsx               # Navigation et contrôle d’accès par rôle
-    ├── main.tsx              # Point d’entrée React
-    ├── store.tsx             # État et données partagées de l’application
-    ├── types.ts              # Types TypeScript
-    ├── data.ts               # Données/configurations initiales
-    ├── db/                   # Accès aux bases SQLite
-    ├── components/           # Modales et composants partagés
-    ├── views/                # Écrans métier
-    └── utils/                # Utilitaires
+    ├── App.tsx                        # Routeur principal par rôle
+    ├── store.tsx                      # État global multi-tenant synchronisé SQLite
+    ├── types.ts                       # Modèle de données TypeScript complet
+    ├── data.ts                        # Données et configurations initiales
+    ├── db/                            # Couche SQLite (auth.ts, lims.ts)
+    ├── utils/                         # smartScheduler.ts, zebraLabelPrinter.ts, idGenerator.ts...
+    ├── components/                    # Layout, ReportPreviewModal, QuickScanModal, NewRequestModal...
+    └── views/                         # Dashboard, RequestsInternal, Samples, Analyses, Planning,
+                                       # Equipments, NonConformities, Reports, Inventory,
+                                       # BuilderCMS, Settings, RequesterPortal, Login
 ```
-
-## Contribution et maintenance
-
-Avant de livrer une modification :
-
-1. Exécutez `npm run lint`.
-2. Exécutez `npm run build`.
-3. Testez les parcours concernés avec des comptes de rôles différents.
-4. Vérifiez la création, la modification et la persistance des demandes, notamment les propriétés des matériaux si le formulaire utilise le champ `materials`.
-5. Sauvegardez la base et les fichiers avant le déploiement.
-
----
-
-*Document maintenu avec le projet. Mettez-le à jour à chaque changement de comportement, de configuration ou de procédure d’installation.*

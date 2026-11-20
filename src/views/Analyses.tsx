@@ -16,7 +16,7 @@
 import React, { useState, useEffect } from 'react';
 import { useLims } from '../store';
 import { getCalibrationDaysRemaining } from './Equipments';
-import { Search, Microscope, Check, UploadCloud, Image as ImageIcon, Plus, X, Lock, ClipboardPaste } from 'lucide-react';
+import { Search, Microscope, Check, UploadCloud, Upload, Image as ImageIcon, Plus, X, Lock, ClipboardPaste } from 'lucide-react';
 import { AnalysisStatus, ExpectedResult } from '../types';
 
 /** Structure d'une image de micrographie stockée dans un résultat d'analyse */

@@ -45,6 +45,7 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
     allRequestTemplates, 
     allAnalysisTemplates, 
     allMaterialTemplates,
+    allAnalysisPacks,
     allRequests,
     addRequest 
   } = useLims();
@@ -110,8 +111,9 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
   
 // Analyses disponibles configurées dans le CMS pour ce laboratoire spécifique
   const availableAnalyses = allAnalysisTemplates.filter(a => a.labId === selectedLabId && a.isActive !== false);
-  // Modèles de matériaux actifs configurés pour ce laboratoire spécifique
+  // Modèles de matériaux actifs et packs d'essais préconfigurés pour ce laboratoire
   const availableMaterials = allMaterialTemplates.filter(m => m.labId === selectedLabId && m.isActive !== false);
+  const availablePacks = allAnalysisPacks.filter(p => p.labId === selectedLabId && p.isActive !== false);
 
   /**
    * Enregistrement de la nouvelle demande avec assignation du laboratoire.
@@ -300,31 +302,55 @@ export function NewRequestModal({ isOpen, onClose, initialRequest }: Props) {
                           ))}
                         </select>
                       ) : field.type === 'analyses' ? (
-                        /* Catalogue des essais du laboratoire actif */
-                        <div className="flex flex-wrap gap-2 mt-2">
-                          {availableAnalyses.map(tpl => {
-                            const currentValues = customData[field.id] || [];
-                            const isSelected = currentValues.includes(tpl.id);
-                            return (
-                              <button
-                                key={tpl.id}
-                                type="button"
-                                onClick={() => {
-                                  const newValues = isSelected
-                                    ? currentValues.filter((v: string) => v !== tpl.id)
-                                    : [...currentValues, tpl.id];
-                                  handleCustomDataChange(field.id, newValues);
-                                }}
-                                className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
-                                  isSelected
-                                     ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
-                                     : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                                }`}
-                              >
-                                {tpl.name}
-                              </button>
-                            );
-                          })}
+                        /* Catalogue des packs d'essais (1 clic) et des essais unitaires du laboratoire actif */
+                        <div className="space-y-2.5 mt-2">
+                          {availablePacks.length > 0 && (
+                            <div className="bg-indigo-50/70 border border-indigo-200 rounded-lg p-2.5">
+                              <span className="block text-[10px] font-bold uppercase tracking-wider text-indigo-700 mb-1.5">Packs d'essais rapides (1 clic)</span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {availablePacks.map(pack => (
+                                  <button
+                                    key={pack.id}
+                                    type="button"
+                                    onClick={() => {
+                                      const currentValues: string[] = customData[field.id] || [];
+                                      const merged = Array.from(new Set([...currentValues, ...pack.analysisTemplateIds]));
+                                      handleCustomDataChange(field.id, merged);
+                                    }}
+                                    className="px-2.5 py-1 text-xs font-semibold rounded-md bg-white text-indigo-700 border border-indigo-300 hover:bg-indigo-600 hover:text-white transition-colors"
+                                    title={pack.description}
+                                  >
+                                    + {pack.name}{pack.discountPercent ? ` (-${pack.discountPercent}%)` : ''}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          <div className="flex flex-wrap gap-2">
+                            {availableAnalyses.map(tpl => {
+                              const currentValues = customData[field.id] || [];
+                              const isSelected = currentValues.includes(tpl.id);
+                              return (
+                                <button
+                                  key={tpl.id}
+                                  type="button"
+                                  onClick={() => {
+                                    const newValues = isSelected
+                                      ? currentValues.filter((v: string) => v !== tpl.id)
+                                      : [...currentValues, tpl.id];
+                                    handleCustomDataChange(field.id, newValues);
+                                  }}
+                                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors cursor-pointer ${
+                                    isSelected
+                                       ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                                       : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                                  }`}
+                                >
+                                  {tpl.name}{tpl.unitPrice ? ` (${tpl.unitPrice} €)` : ''}
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
                       ) : field.type === 'materials' ? (
                         /* Catalogue des modèles de matériaux du laboratoire sélectionné */

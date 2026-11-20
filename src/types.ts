@@ -20,8 +20,10 @@
  * - `en_essai` : Actuellement sur banc d'essai ou microscope
  * - `termine` : Tous les essais sur cet échantillon sont achevés
  * - `non_conforme` : Échantillon endommagé, pollué ou impropre à l'essai
+ * - `restitue` : Échantillon retourné au client (fin de vie tracée)
+ * - `detruit` : Échantillon mis au rebut / détruit après durée de conservation
  */
-export type SampleStatus = 'receptionne' | 'en_preparation' | 'en_essai' | 'termine' | 'non_conforme';
+export type SampleStatus = 'receptionne' | 'en_preparation' | 'en_essai' | 'termine' | 'non_conforme' | 'restitue' | 'detruit';
 
 /**
  * Statuts du cycle de vie d'une fiche d'analyse (essai individuel) :
@@ -120,6 +122,21 @@ export interface Consumable {
   lastRestocked: string;
   /** Date d'expiration (YYYY-MM-DD) optionnelle pour les produits périssables/chimiques */
   expiryDate?: string;
+  /** Numéro de lot fabricant pour traçabilité ISO 17025 sur les préparations et essais */
+  lotNumber?: string;
+  /** Fournisseur du consommable */
+  supplier?: string;
+}
+
+/**
+ * Référence d'un lot de consommable utilisé lors d'une préparation ou d'un essai
+ */
+export interface ConsumableLotUsage {
+  consumableId: string;
+  name: string;
+  lotNumber?: string;
+  quantityUsed?: number;
+  usedAt?: string;
 }
 
 // ==========================================
@@ -142,6 +159,8 @@ export interface User {
   company?: string;
   /** Périmètre laboratoire ('all' pour accès transversal, ou ID d'un laboratoire précis) */
   labId?: string;
+  /** Liste des identifiants d'`AnalysisTemplate` sur lesquels l'opérateur est habilité (ISO 17025 §6.2) */
+  qualifiedTemplateIds?: string[];
 }
 
 /**
@@ -260,6 +279,14 @@ export interface ExpectedResult {
   unit?: string;
   /** Caractère obligatoire pour soumettre l'essai à la validation Manager */
   required: boolean;
+  /** Borne minimale de spécification / tolérance (calcul automatique Conforme / Non conforme) */
+  minSpec?: number;
+  /** Borne maximale de spécification / tolérance (calcul automatique Conforme / Non conforme) */
+  maxSpec?: number;
+  /** Incertitude élargie de mesure (± U) dans la même unité que la grandeur */
+  uncertainty?: number;
+  /** Règle de décision ISO 17025 §7.8.6 (ex: 'Acceptation simple', 'Bande de garde') */
+  decisionRule?: string;
 }
 
 /**
@@ -280,6 +307,12 @@ export interface AnalysisTemplate {
   standardRef?: string;
   /** Indique si la méthode est actuellement ouverte aux nouvelles demandes */
   isActive?: boolean;
+  /** Tarif unitaire indicatif (€ HT) pour valorisation des demandes / devis */
+  unitPrice?: number;
+  /** Temps standard estimé (en heures) pour le planning de charge */
+  estimatedHours?: number;
+  /** Catégorie d'équipement requise pour réaliser cet essai (ex: 'Microscopie', 'Dureté', 'Traction') */
+  requiredEquipmentCategory?: string;
   /** Liste des grandeurs, tableaux ou clichés attendus lors de l'exécution de l'essai */
   expectedResults: ExpectedResult[];
 }
@@ -305,6 +338,32 @@ export interface RequestTemplate {
 // ==========================================
 // 5. Demandes d'Analyses & Échantillons
 // ==========================================
+
+/**
+ * Message horodaté dans le fil de discussion intégré d'une demande d'analyse
+ */
+export interface RequestComment {
+  id: string;
+  authorId: string;
+  authorName: string;
+  authorRole: Role;
+  message: string;
+  createdAt: string;
+  /** Si true, visible uniquement par le personnel interne du laboratoire (non visible par le demandeur) */
+  isInternal?: boolean;
+}
+
+/**
+ * Enregistrement formel de la revue de demande / contrat (ISO/IEC 17025 §7.1)
+ */
+export interface ContractReview {
+  reviewedBy: string;
+  reviewedAt: string;
+  methodsAdequate: boolean;
+  resourcesAvailable: boolean;
+  staffQualified: boolean;
+  notes?: string;
+}
 
 /**
  * Demande d'analyse soumise par un demandeur à un laboratoire donné
@@ -336,6 +395,16 @@ export interface AnalysisRequest {
   priority?: 'basse' | 'normale' | 'haute';
   /** Conclusion générale ou synthèse technique rédigée par le laboratoire pour le rapport */
   conclusion?: string;
+  /** Date de rendu souhaitée par le client (YYYY-MM-DD) */
+  requestedDueDate?: string;
+  /** Date de rendu contractuelle engagée par le laboratoire lors de la revue (YYYY-MM-DD) */
+  committedDueDate?: string;
+  /** Revue de faisabilité et de contrat ISO 17025 §7.1 */
+  contractReview?: ContractReview;
+  /** Fil de discussion client / laboratoire attaché au dossier */
+  comments?: RequestComment[];
+  /** Valorisation financière estimée (€ HT) calculée à partir des tarifs des essais */
+  estimatedCost?: number;
 }
 
 /**
@@ -390,6 +459,20 @@ export interface Sample {
   images: string[];
   /** Remarques ou consignes de découpe/préparation */
   notes?: string;
+  /** Emplacement physique de stockage au laboratoire (ex: 'Armoire B / Tiroir 3') */
+  storageLocation?: string;
+  /** Date limite de conservation prévue (YYYY-MM-DD) */
+  retentionUntil?: string;
+  /** Date ISO de restitution au client ou de destruction tracée */
+  disposalDate?: string;
+  /** Mode de fin de vie physique ('restitution' ou 'destruction') */
+  disposalMethod?: 'restitution' | 'destruction';
+  /** Opérateur ayant effectué la restitution ou la destruction */
+  disposalBy?: string;
+  /** Commentaire / bordereau de restitution ou de mise au rebut */
+  disposalNotes?: string;
+  /** Lots de consommables utilisés lors de la préparation / enrobage */
+  consumableLotsUsed?: ConsumableLotUsage[];
 }
 
 // ==========================================
@@ -432,6 +515,14 @@ export interface Analysis {
   rejectionReason?: string;
   /** Piste d'audit traçant toutes les saisies et changements de statut de l'essai */
   auditTrail?: AuditLog[];
+  /** Identifiant de l'équipement de mesure utilisé (`Equipment.id`, ISO 17025 §6.4) */
+  equipmentId?: string;
+  /** Lots de consommables/réactifs utilisés durant l'essai */
+  consumableLotsUsed?: ConsumableLotUsage[];
+  /** Verdict de conformité global calculé automatiquement selon les tolérances `minSpec`/`maxSpec` */
+  conformityStatus?: 'conforme' | 'non_conforme' | 'indetermine';
+  /** Date planifiée d'exécution (YYYY-MM-DD) pour le module Planning */
+  plannedDate?: string;
 }
 
 /**
@@ -494,6 +585,97 @@ export interface Report {
   templateId?: string;
   /** Nom du fichier stocké dans le dossier sécurisé storage/reports/ */
   storedFileName?: string;
+  /** Numéro de version / révision (1 par défaut, incrémenté lors d'un amendement ISO 17025 §7.8.8) */
+  version?: number;
+  /** Identifiant du rapport parent en cas de révision / amendement */
+  parentReportId?: string;
+  /** Motif obligatoire de réédition ou d'amendement d'un rapport déjà publié */
+  amendmentReason?: string;
+  /** Empreinte cryptographique SHA-256 du fichier archivé garantissant son intégrité */
+  sha256Hash?: string;
+  /** Verrou d'immuabilité (true dès publication officielle) */
+  isLocked?: boolean;
+  /** Horodatage ISO de publication officielle */
+  publishedAt?: string;
+  /** Nom du responsable signataire au moment de la publication */
+  signedBy?: string;
+}
+
+// ==========================================
+// 7. Parc Équipements, Non-Conformités & Packs d'Essais
+// ==========================================
+
+/** État opérationnel et métrologique d'un instrument de laboratoire */
+export type EquipmentStatus = 'operationnel' | 'en_maintenance' | 'hors_tolerance' | 'hors_service';
+
+/**
+ * Équipement ou instrument de mesure suivi en métrologie (ISO/IEC 17025 §6.4)
+ */
+export interface Equipment {
+  id: string;
+  labId: string;
+  /** Désignation de l'équipement (ex: 'Duromètre Vickers Struers Duramin-40') */
+  name: string;
+  /** Code interne de parc (ex: 'EQ-MET-01') */
+  code: string;
+  serialNumber: string;
+  manufacturer: string;
+  /** Famille technique (ex: 'Microscopie', 'Dureté', 'Traction', 'Granulométrie') */
+  category: string;
+  status: EquipmentStatus;
+  /** Date du dernier étalonnage / vérification (YYYY-MM-DD) */
+  lastCalibrationDate: string;
+  /** Date d'échéance du prochain étalonnage (YYYY-MM-DD) */
+  nextCalibrationDate: string;
+  /** Périodicité d'étalonnage en mois (ex: 12) */
+  calibrationIntervalMonths: number;
+  /** Salle ou paillasse d'implantation */
+  location: string;
+  /** Observations ou référence de certificat d'étalonnage */
+  notes?: string;
+}
+
+/** Gravité d'une fiche de non-conformité */
+export type NonConformitySeverity = 'mineure' | 'majeure' | 'critique';
+/** Statut de traitement d'une fiche de non-conformité (CAPA) */
+export type NonConformityStatus = 'ouverte' | 'en_analyse' | 'action_en_cours' | 'cloturee';
+
+/**
+ * Fiche de Non-Conformité (NC) et Action Corrective / Préventive (CAPA - ISO 17025 §7.10)
+ */
+export interface NonConformity {
+  id: string;
+  labId: string;
+  title: string;
+  type: 'echantillon' | 'equipement' | 'analyse' | 'methode' | 'autre';
+  severity: NonConformitySeverity;
+  status: NonConformityStatus;
+  linkedRequestId?: string;
+  linkedSampleId?: string;
+  linkedAnalysisId?: string;
+  linkedEquipmentId?: string;
+  description: string;
+  rootCause?: string;
+  correctiveAction?: string;
+  clientNotified?: boolean;
+  createdBy: string;
+  createdAt: string;
+  closedAt?: string;
+  closedBy?: string;
+}
+
+/**
+ * Pack / Gamme préconfigurée d'essais sélectionnable en un clic lors d'une demande
+ */
+export interface AnalysisPack {
+  id: string;
+  labId: string;
+  name: string;
+  description: string;
+  analysisTemplateIds: string[];
+  /** Remise commerciale / forfaitaire optionnelle (%) */
+  discountPercent?: number;
+  isActive?: boolean;
 }
 
 /**

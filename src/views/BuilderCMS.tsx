@@ -81,6 +81,9 @@ export function BuilderCMS() {
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldType, setNewFieldType] = useState<string>('text');
   const [newFieldUnit, setNewFieldUnit] = useState('');
+  const [newFieldMinSpec, setNewFieldMinSpec] = useState('');
+  const [newFieldMaxSpec, setNewFieldMaxSpec] = useState('');
+  const [newFieldUncertainty, setNewFieldUncertainty] = useState('');
   const [newFieldOptions, setNewFieldOptions] = useState('');
   const [newFieldRequired, setNewFieldRequired] = useState(false);
 
@@ -126,6 +129,9 @@ export function BuilderCMS() {
     setNewFieldName(field.name);
     setNewFieldType(field.type);
     setNewFieldUnit(field.unit || '');
+    setNewFieldMinSpec(field.minSpec !== undefined ? String(field.minSpec) : '');
+    setNewFieldMaxSpec(field.maxSpec !== undefined ? String(field.maxSpec) : '');
+    setNewFieldUncertainty(field.uncertainty !== undefined ? String(field.uncertainty) : '');
     setNewFieldOptions(field.options ? field.options.join(', ') : '');
     setNewFieldRequired(field.required || false);
     setIsAddingField(true);
@@ -188,6 +194,9 @@ export function BuilderCMS() {
         name: newFieldName,
         type: newFieldType as ExpectedResult['type'],
         unit: newFieldUnit || undefined,
+        minSpec: newFieldMinSpec !== '' ? Number(newFieldMinSpec) : undefined,
+        maxSpec: newFieldMaxSpec !== '' ? Number(newFieldMaxSpec) : undefined,
+        uncertainty: newFieldUncertainty !== '' ? Number(newFieldUncertainty) : undefined,
         options: parsedOptions,
         required: newFieldRequired
       };
@@ -206,6 +215,9 @@ export function BuilderCMS() {
         name: newFieldName,
         type: newFieldType as CustomField['type'],
         unit: newFieldUnit || undefined,
+        minSpec: newFieldMinSpec !== '' ? Number(newFieldMinSpec) : undefined,
+        maxSpec: newFieldMaxSpec !== '' ? Number(newFieldMaxSpec) : undefined,
+        uncertainty: newFieldUncertainty !== '' ? Number(newFieldUncertainty) : undefined,
         options: parsedOptions,
         required: newFieldRequired
       };
@@ -872,6 +884,22 @@ export function BuilderCMS() {
                         <label className="block text-xs font-medium text-indigo-800 mb-1">Unité par défaut (opt.)</label>
                         <input type="text" value={newFieldUnit} onChange={e => setNewFieldUnit(e.target.value)} placeholder="Ex: ppm, %, mg/L" className="w-full text-sm px-2 py-1.5 rounded border border-indigo-200" />
                       </div>
+                      {(newFieldType === 'number' || newFieldType === 'number_series') && (
+                        <>
+                          <div>
+                            <label className="block text-xs font-medium text-indigo-800 mb-1">Tolérance Min (opt.)</label>
+                            <input type="number" step="any" value={newFieldMinSpec} onChange={e => setNewFieldMinSpec(e.target.value)} placeholder="Ex: 0" className="w-full text-sm px-2 py-1.5 rounded border border-indigo-200" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-indigo-800 mb-1">Tolérance Max (opt.)</label>
+                            <input type="number" step="any" value={newFieldMaxSpec} onChange={e => setNewFieldMaxSpec(e.target.value)} placeholder="Ex: 1.5" className="w-full text-sm px-2 py-1.5 rounded border border-indigo-200" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-indigo-800 mb-1">Incertitude ± U (opt.)</label>
+                            <input type="number" step="any" value={newFieldUncertainty} onChange={e => setNewFieldUncertainty(e.target.value)} placeholder="Ex: 0.05" className="w-full text-sm px-2 py-1.5 rounded border border-indigo-200" />
+                          </div>
+                        </>
+                      )}
                       {['select', 'multiselect', 'vertical_table'].includes(newFieldType) && (
                         <div className="col-span-2 sm:col-span-4">
                           <label className="block text-xs font-medium text-indigo-800 mb-1">
@@ -1431,6 +1459,40 @@ export function BuilderCMS() {
                       placeholder="Ex: ISO 9001, ASTM E112"
                       className="w-full text-sm border-slate-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
                     />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Tarif unitaire (€ HT)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        step="10"
+                        value={activeAnalysisTpl.unitPrice ?? ''}
+                        onChange={e => {
+                          const updated = { ...activeAnalysisTpl, unitPrice: e.target.value === '' ? undefined : Number(e.target.value) };
+                          updateAnalysisTemplate(activeAnalysisTpl.id, updated);
+                          setActiveAnalysisTpl(updated);
+                        }}
+                        placeholder="Ex: 250"
+                        className="w-full text-sm border-slate-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Durée estimée (heures)</label>
+                      <input
+                        type="number"
+                        min={0.5}
+                        step="0.5"
+                        value={activeAnalysisTpl.estimatedHours ?? ''}
+                        onChange={e => {
+                          const updated = { ...activeAnalysisTpl, estimatedHours: e.target.value === '' ? undefined : Number(e.target.value) };
+                          updateAnalysisTemplate(activeAnalysisTpl.id, updated);
+                          setActiveAnalysisTpl(updated);
+                        }}
+                        placeholder="Ex: 2.5"
+                        className="w-full text-sm border-slate-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
                   </div>
                 </>
               )}

@@ -22,6 +22,9 @@ import { Settings } from './views/Settings';
 import { Login } from './views/Login';
 import { RequesterPortal } from './views/RequesterPortal';
 import { RequestsInternal } from './views/RequestsInternal';
+import { Equipments } from './views/Equipments';
+import { NonConformities } from './views/NonConformities';
+import { Planning } from './views/Planning';
 import { LogOut } from 'lucide-react';
 
 /**
@@ -73,6 +76,12 @@ function Main() {
         return <Reports />;
       case 'inventory':
         return <Inventory />;
+      case 'equipments':
+        return <Equipments />;
+      case 'nonconformities':
+        return <NonConformities />;
+      case 'planning':
+        return <Planning />;
       case 'builder':
         // Le module de conception de formulaires et templates est réservé aux managers
         return currentUser.role === 'manager' || currentUser.role === 'admin' ? (

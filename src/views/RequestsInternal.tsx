@@ -46,7 +46,9 @@ export function RequestsInternal() {
     labSettings,
     globalSearchQuery,
     activeLabId,
-    laboratories
+    laboratories,
+    addRequestComment,
+    saveContractReview
   } = useLims();
 
   // États locaux de sélection et d'édition du dossier actif
@@ -96,6 +98,13 @@ export function RequestsInternal() {
   const [selectedNewAnalysisTplId, setSelectedNewAnalysisTplId] = useState<string>('');
   // Contrôle le repli/dépli de la chronologie Audit Trail
   const [showAudit, setShowAudit] = useState(false);
+  // États pour le fil de discussion intégré et la revue de contrat ISO 17025
+  const [newCommentText, setNewCommentText] = useState('');
+  const [isInternalComment, setIsInternalComment] = useState(false);
+  const [committedDateDraft, setCommittedDateDraft] = useState('');
+  const [reviewMethodsOk, setReviewMethodsOk] = useState(true);
+  const [reviewResourcesOk, setReviewResourcesOk] = useState(true);
+  const [reviewStaffOk, setReviewStaffOk] = useState(true);
 
   // Liste des utilisateurs ayant le rôle analyste ou manager rattachés au laboratoire du dossier pour l'assignation
   const analysts = users.filter(u =>
@@ -513,9 +522,26 @@ export function RequestsInternal() {
                       >
                         <option value="">-- Non assigné --</option>
                         {analysts.map(a => (
-                          <option key={a.id} value={a.id}>{a.name}</option>
+                          <option key={a.id} value={a.id}>
+                            {a.name}{(a.qualifiedTemplateIds && a.qualifiedTemplateIds.length > 0) ? ` (${a.qualifiedTemplateIds.length} habilit.)` : ''}
+                          </option>
                         ))}
                       </select>
+                      {selectedRequest.assignedTo && (() => {
+                        const assignedUser = analysts.find(a => a.id === selectedRequest.assignedTo);
+                        const reqAnas = analyses.filter(a => samples.some(s => s.requestId === selectedRequest.id && s.id === a.sampleId));
+                        const neededTplIds = Array.from(new Set(reqAnas.map(a => a.templateId)));
+                        const quals = assignedUser?.qualifiedTemplateIds || [];
+                        const missingQuals = quals.length > 0 ? neededTplIds.filter(tid => !quals.includes(tid)) : [];
+                        if (missingQuals.length > 0) {
+                          return (
+                            <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1.5">
+                              ⚠ Opérateur non habilité sur {missingQuals.length} méthode(s) de ce dossier (ISO 17025 §6.2).
+                            </p>
+                          );
+                        }
+                        return null;
+                      })()}
                     </div>
                     <div className="bg-white border border-slate-200 p-3 rounded-lg shadow-sm">
                       <label className="block text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wider">
@@ -1062,6 +1088,119 @@ export function RequestsInternal() {
                       placeholder="Rédigez ici la conclusion générale de l'expertise, la conformité des échantillons ou les recommandations techniques..."
                       className="w-full rounded-lg border border-emerald-300 bg-white p-3 text-sm text-slate-800 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 focus:outline-none"
                     />
+                  </div>
+
+                  {/* Revue de Contrat ISO 17025 §7.1, Date Engagée & Valorisation Financière */}
+                  {(currentUser?.role === 'manager' || currentUser?.role === 'admin') && (
+                    <div className="mt-5 bg-indigo-50/50 border border-indigo-200 rounded-xl p-5 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h4 className="text-xs font-bold text-indigo-950 uppercase tracking-wider">Revue de Demande / Contrat (ISO 17025 §7.1)</h4>
+                          {selectedRequest.contractReview && (
+                            <p className="text-[11px] text-indigo-700 mt-0.5">
+                              Validée par {selectedRequest.contractReview.reviewedBy} le {new Date(selectedRequest.contractReview.reviewedAt).toLocaleDateString('fr-FR')}
+                              {selectedRequest.committedDueDate ? ` • Échéance engagée : ${new Date(selectedRequest.committedDueDate).toLocaleDateString('fr-FR')}` : ''}
+                            </p>
+                          )}
+                        </div>
+                        {(() => {
+                          const reqAnas = analyses.filter(a => samples.some(s => s.requestId === selectedRequest.id && s.id === a.sampleId));
+                          const totalCost = reqAnas.reduce((sum, a) => sum + (analysisTemplates.find(t => t.id === a.templateId)?.unitPrice || 0), 0);
+                          return totalCost > 0 ? (
+                            <span className="px-2.5 py-1 rounded-full bg-white border border-indigo-200 text-xs font-bold text-indigo-800">
+                              Valorisation estimée : {totalCost} € HT
+                            </span>
+                          ) : null;
+                        })()}
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+                        <label className="flex items-center gap-2 text-xs text-slate-700">
+                          <input type="checkbox" checked={reviewMethodsOk} onChange={e => setReviewMethodsOk(e.target.checked)} className="rounded text-indigo-600" />
+                          Méthodes adaptées
+                        </label>
+                        <label className="flex items-center gap-2 text-xs text-slate-700">
+                          <input type="checkbox" checked={reviewResourcesOk} onChange={e => setReviewResourcesOk(e.target.checked)} className="rounded text-indigo-600" />
+                          Moyens / équipements OK
+                        </label>
+                        <label className="flex items-center gap-2 text-xs text-slate-700">
+                          <input type="checkbox" checked={reviewStaffOk} onChange={e => setReviewStaffOk(e.target.checked)} className="rounded text-indigo-600" />
+                          Personnel habilité
+                        </label>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-indigo-900 mb-1">Date engagée labo</label>
+                          <input
+                            type="date"
+                            value={committedDateDraft || selectedRequest.committedDueDate || ''}
+                            onChange={e => setCommittedDateDraft(e.target.value)}
+                            className="w-full px-2 py-1 text-xs border border-indigo-300 rounded bg-white"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            saveContractReview(
+                              selectedRequest.id,
+                              { methodsAdequate: reviewMethodsOk, resourcesAvailable: reviewResourcesOk, staffQualified: reviewStaffOk },
+                              committedDateDraft || selectedRequest.committedDueDate || undefined
+                            );
+                          }}
+                          className="px-3.5 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700"
+                        >
+                          Enregistrer la revue de contrat
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Fil de discussion intégré client / laboratoire */}
+                  <div className="mt-5 bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      Fil de discussion du dossier ({(selectedRequest.comments || []).length})
+                    </h4>
+                    <div className="space-y-2 max-h-52 overflow-y-auto">
+                      {(selectedRequest.comments || []).length === 0 ? (
+                        <p className="text-xs text-slate-400 italic">Aucun échange pour le moment.</p>
+                      ) : (
+                        (selectedRequest.comments || []).map(c => (
+                          <div key={c.id} className={`p-2.5 rounded-lg text-xs border ${c.isInternal ? 'bg-amber-50/70 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
+                            <div className="flex items-center justify-between text-[11px] text-slate-500 mb-1">
+                              <span className="font-semibold text-slate-800">
+                                {c.authorName} <span className="uppercase text-[10px] text-slate-400">({c.authorRole})</span>
+                                {c.isInternal && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-200 text-amber-900 rounded text-[9px] font-bold">NOTE INTERNE</span>}
+                              </span>
+                              <span>{new Date(c.createdAt).toLocaleString('fr-FR')}</span>
+                            </div>
+                            <p className="text-slate-700 whitespace-pre-wrap">{c.message}</p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-slate-100">
+                      <input
+                        type="text"
+                        value={newCommentText}
+                        onChange={e => setNewCommentText(e.target.value)}
+                        placeholder="Écrire un message au client ou une note interne..."
+                        className="flex-1 px-3 py-2 text-xs border border-slate-300 rounded-lg"
+                      />
+                      <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 px-2">
+                        <input type="checkbox" checked={isInternalComment} onChange={e => setIsInternalComment(e.target.checked)} className="rounded text-amber-600" />
+                        Interne
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!newCommentText.trim()) return;
+                          addRequestComment(selectedRequest.id, newCommentText, isInternalComment);
+                          setNewCommentText('');
+                        }}
+                        className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800"
+                      >
+                        Envoyer
+                      </button>
+                    </div>
                   </div>
                 </div>
 

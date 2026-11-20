@@ -64,12 +64,14 @@ export function Settings({ onBack }: { onBack?: () => void }) {
     applyPatch,
     materialTemplates,
     analysisTemplates,
+    allAnalysisTemplates,
     requestTemplates,
     reportTemplates,
     laboratories,
     addLaboratory,
     updateLaboratory,
-    deleteLaboratory
+    deleteLaboratory,
+    updateUserQualifications
   } = useLims();
 
   // États de gestion de la modale de création/édition de laboratoire (architecture multi-laboratoires)
@@ -839,28 +841,67 @@ export function Settings({ onBack }: { onBack?: () => void }) {
               </h3>
             </div>
             <div className="divide-y divide-slate-100">
-              {users.map(u => (
-                <div key={u.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                  <div>
-                    <div className="font-semibold text-slate-900">{u.name}</div>
-                    <div className="text-sm text-slate-500">{u.email} {u.company && `- ${u.company}`}</div>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <div className={`text-xs px-2 py-1 rounded-full ${(u.role === 'manager' || u.role === 'admin') ? 'bg-purple-100 text-purple-700' : u.role === 'analyste' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                      {u.role.toUpperCase()}
+              {users.map(u => {
+                const userQuals: string[] = u.qualifiedTemplateIds || [];
+                const canHaveQuals = u.role === 'analyste' || u.role === 'manager';
+                return (
+                <div key={u.id} className="p-4 hover:bg-slate-50 transition-colors space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-semibold text-slate-900">{u.name}</div>
+                      <div className="text-sm text-slate-500">{u.email} {u.company && `- ${u.company}`}</div>
                     </div>
-                    {currentUser?.role === 'admin' && currentUser.id !== u.id && (
-                      <button
-                        onClick={() => handleDeleteUser(u.id)}
-                        className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded"
-                        title="Supprimer l'utilisateur"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
+                    <div className="flex items-center space-x-2">
+                      <div className={`text-xs px-2 py-1 rounded-full ${(u.role === 'manager' || u.role === 'admin') ? 'bg-purple-100 text-purple-700' : u.role === 'analyste' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                        {u.role.toUpperCase()}
+                      </div>
+                      {currentUser?.role === 'admin' && currentUser.id !== u.id && (
+                        <button
+                          onClick={() => handleDeleteUser(u.id)}
+                          className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded"
+                          title="Supprimer l'utilisateur"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
+                  {/* Matrice d'habilitations opérateurs (ISO 17025 §6.2) */}
+                  {canHaveQuals && allAnalysisTemplates.length > 0 && (
+                    <div className="pt-2 border-t border-slate-100">
+                      <span className="block text-[10px] font-bold uppercase text-slate-400 mb-1.5">
+                        Habilitations essais ({userQuals.length} méthode(s))
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {allAnalysisTemplates
+                          .filter(t => !u.labId || u.labId === 'all' || t.labId === u.labId)
+                          .map(tpl => {
+                            const active = userQuals.includes(tpl.id);
+                            return (
+                              <button
+                                key={tpl.id}
+                                type="button"
+                                onClick={() => {
+                                  const next = active
+                                    ? userQuals.filter(id => id !== tpl.id)
+                                    : [...userQuals, tpl.id];
+                                  void updateUserQualifications(u.id, next);
+                                }}
+                                className={`px-2 py-0.5 rounded-full text-[11px] font-medium border transition-colors ${
+                                  active
+                                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                    : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-100'
+                                }`}
+                              >
+                                {active ? '✓ ' : '+ '}{tpl.name}
+                              </button>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              ))}
+              );})}
             </div>
           </div>
         </div>

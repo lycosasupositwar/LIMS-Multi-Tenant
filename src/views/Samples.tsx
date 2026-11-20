@@ -32,6 +32,9 @@ export function Samples() {
     addSampleImage,
     updateSampleStatus,
     updateSampleMounting,
+    updateSampleCustody,
+    consumables,
+    updateConsumableStock,
     globalSearchQuery,
     addSample,
     labSettings,
@@ -663,6 +666,112 @@ export function Samples() {
                     Aucune préparation métallographique définie.
                   </div>
                 )}
+              </section>
+
+              {/* Chaîne de Garde, Localisation Physique, Fin de Vie & Lots de Consommables (ISO 17025) */}
+              <section className="space-y-3 border-t border-slate-200 pt-4">
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Chaîne de Garde & Stockage Physique</h4>
+                <div className="bg-slate-50 rounded-lg p-3 border border-slate-200 space-y-2.5 text-xs">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1">Emplacement physique</label>
+                      <input
+                        type="text"
+                        value={selectedSample.storageLocation || ''}
+                        onChange={e => updateSampleCustody(selectedSample.id, { storageLocation: e.target.value })}
+                        placeholder="Ex: Armoire B / Tiroir 3"
+                        className="w-full px-2 py-1 border border-slate-300 rounded bg-white text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1">Conservation jusqu'au</label>
+                      <input
+                        type="date"
+                        value={selectedSample.retentionUntil || ''}
+                        onChange={e => updateSampleCustody(selectedSample.id, { retentionUntil: e.target.value })}
+                        className="w-full px-2 py-1 border border-slate-300 rounded bg-white text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Lots de consommables utilisés sur l'échantillon */}
+                  <div>
+                    <label className="block font-semibold text-slate-600 mb-1">Traçabilité lots de consommables (résines / réactifs)</label>
+                    <select
+                      defaultValue=""
+                      onChange={e => {
+                        const cons = consumables.find(c => c.id === e.target.value);
+                        if (!cons) return;
+                        const nextLots = [
+                          ...(selectedSample.consumableLotsUsed || []),
+                          { consumableId: cons.id, name: cons.name, lotNumber: cons.lotNumber, usedAt: new Date().toISOString() }
+                        ];
+                        updateSampleCustody(selectedSample.id, { consumableLotsUsed: nextLots });
+                        if (cons.stockLevel > 0) {
+                          updateConsumableStock(cons.id, Math.max(0, Math.round((cons.stockLevel - 0.1) * 10) / 10));
+                        }
+                        e.target.value = '';
+                      }}
+                      className="w-full px-2 py-1 border border-slate-300 rounded bg-white text-xs"
+                    >
+                      <option value="">+ Associer un lot consommable (déstocke 0.1 unité)...</option>
+                      {consumables.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}{c.lotNumber ? ` [Lot: ${c.lotNumber}]` : ''} ({c.stockLevel} {c.unit})
+                        </option>
+                      ))}
+                    </select>
+                    {(selectedSample.consumableLotsUsed || []).length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {(selectedSample.consumableLotsUsed || []).map((u, idx) => (
+                          <span key={idx} className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px]">
+                            {u.name}{u.lotNumber ? ` (${u.lotNumber})` : ''}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Fin de vie tracée : Restitution client ou Destruction */}
+                  {selectedSample.disposalDate ? (
+                    <div className="p-2 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px]">
+                      <strong>Fin de vie enregistrée :</strong> {selectedSample.disposalMethod === 'restitution' ? 'Restitué au client' : 'Détruit / Mis au rebut'} le {new Date(selectedSample.disposalDate).toLocaleDateString('fr-FR')} par {selectedSample.disposalBy || 'Opérateur'}.
+                    </div>
+                  ) : (
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!confirm(`Confirmer la restitution client de ${selectedSample.id} ?`)) return;
+                          updateSampleCustody(selectedSample.id, {
+                            status: 'restitue',
+                            disposalDate: new Date().toISOString(),
+                            disposalMethod: 'restitution',
+                            disposalBy: currentUser?.name || 'Opérateur'
+                          });
+                        }}
+                        className="flex-1 py-1.5 px-2 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded font-semibold hover:bg-emerald-100"
+                      >
+                        Restituer au client
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!confirm(`Confirmer la destruction tracée de ${selectedSample.id} ?`)) return;
+                          updateSampleCustody(selectedSample.id, {
+                            status: 'detruit',
+                            disposalDate: new Date().toISOString(),
+                            disposalMethod: 'destruction',
+                            disposalBy: currentUser?.name || 'Opérateur'
+                          });
+                        }}
+                        className="flex-1 py-1.5 px-2 bg-red-50 text-red-700 border border-red-200 rounded font-semibold hover:bg-red-100"
+                      >
+                        Détruire (Rebut)
+                      </button>
+                    </div>
+                  )}
+                </div>
               </section>
 
               {/* Galerie Optique & Microscopie */}

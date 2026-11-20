@@ -57,6 +57,13 @@ export async function initDb() {
     // La colonne existe déjà dans le schéma
   }
 
+  // Migration douce du schéma pour les habilitations opérateurs (tableau JSON d'IDs d'AnalysisTemplate)
+  try {
+    database.exec('ALTER TABLE users ADD COLUMN qualifiedTemplateIds TEXT');
+  } catch (e) {
+    // La colonne existe déjà dans le schéma
+  }
+
   // Création de la table des codes temporaires de réinitialisation de mot de passe
   database.exec(`
     CREATE TABLE IF NOT EXISTS reset_tokens (
@@ -128,8 +135,23 @@ export async function createUser(id: string, email: string, passwordHash: string
  */
 export async function getUsers() {
   const database = getDb();
-  const stmt = database.prepare('SELECT id, email, name, role, company, labId FROM users');
-  return stmt.all() as any[];
+  const stmt = database.prepare('SELECT id, email, name, role, company, labId, qualifiedTemplateIds FROM users');
+  return (stmt.all() as any[]).map(u => ({
+    ...u,
+    qualifiedTemplateIds: u.qualifiedTemplateIds ? (() => { try { return JSON.parse(u.qualifiedTemplateIds); } catch { return []; } })() : []
+  }));
+}
+
+/**
+ * Met à jour la liste des modèles d'analyses (`AnalysisTemplate.id`) sur lesquels un opérateur est habilité.
+ *
+ * @param id Identifiant de l'utilisateur
+ * @param templateIds Liste des identifiants de méthodes d'essais habilitées
+ */
+export async function updateUserQualifications(id: string, templateIds: string[]) {
+  const database = getDb();
+  const stmt = database.prepare('UPDATE users SET qualifiedTemplateIds = ? WHERE id = ?');
+  stmt.run(JSON.stringify(Array.isArray(templateIds) ? templateIds : []), id);
 }
 
 /**

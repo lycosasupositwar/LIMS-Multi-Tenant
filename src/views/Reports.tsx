@@ -42,7 +42,8 @@ export function Reports() {
     labSettings,
     activeLabId,
     addReport, 
-    deleteReport 
+    deleteReport,
+    createReportRevision
   } = useLims() as any;
 
   /**
@@ -955,12 +956,47 @@ export function Reports() {
                   {formatDate(report.createdAt)}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
-                  <span className="inline-flex items-center px-2.5 py-0.5 rounded border border-slate-200 text-xs font-medium bg-slate-100 text-slate-800">
-                    {report.format}
-                  </span>
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded border border-slate-200 text-xs font-medium bg-slate-100 text-slate-800">
+                        {report.format}
+                      </span>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                        v{report.version || 1}
+                      </span>
+                    </div>
+                    {report.sha256Hash && (
+                      <span className="text-[10px] font-mono text-emerald-700" title={`SHA-256 : ${report.sha256Hash}`}>
+                        SHA-256: {report.sha256Hash.slice(0, 10)}…
+                      </span>
+                    )}
+                    {report.amendmentReason && (
+                      <span className="text-[10px] text-amber-700 truncate max-w-[180px]" title={report.amendmentReason}>
+                        Motif : {report.amendmentReason}
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                   <div className="flex items-center justify-end space-x-3">
+                    {report.status === 'genere' && (
+                      <button
+                        onClick={() => {
+                          const reason = prompt(`Motif obligatoire de l'amendement / révision pour ${report.id} (ISO 17025 §7.8.8) :`);
+                          if (reason && reason.trim()) {
+                            const rev = createReportRevision(report.id, reason);
+                            if (rev) {
+                              setAutoDownloadPdf(false);
+                              setPreviewReport(rev);
+                            }
+                          }
+                        }}
+                        className="text-xs font-semibold text-amber-700 hover:text-amber-900 bg-amber-50 border border-amber-200 px-2 py-1 rounded"
+                        title="Créer une nouvelle révision tracée (amendement ISO 17025)"
+                      >
+                        Réviser
+                      </button>
+                    )}
                     <button 
                       onClick={() => {
                         setAutoDownloadPdf(false);

@@ -48,8 +48,14 @@ import {
   Clock,
   ShieldAlert,
   TrendingUp,
-  Filter
+  Filter,
+  Wrench,
+  AlertOctagon,
+  Euro,
+  Layers
 } from 'lucide-react';
+import { getCalibrationDaysRemaining } from './Equipments';
+import { calculateAnalysesWorkload, getDefaultLabSchedulingConfig } from '../utils/smartScheduler';
 import {
   RequestStatus,
   AnalysisRequest,
@@ -480,9 +486,14 @@ function getRequestAgeDays(req: AnalysisRequest, refDate = new Date()): number {
  */
 function isRequestOverdue(req: AnalysisRequest, refDate = new Date()): boolean {
   if (['terminee', 'rejetee', 'brouillon'].includes(req.status)) return false;
-  const customDue = req.customData?.dueDate || req.customData?.dateEcheance || req.customData?.deadline;
-  if (customDue) {
-    const due = new Date(customDue);
+  const dueStr =
+    req.committedDueDate ||
+    req.requestedDueDate ||
+    req.customData?.dueDate ||
+    req.customData?.dateEcheance ||
+    req.customData?.deadline;
+  if (dueStr) {
+    const due = new Date(dueStr);
     if (!isNaN(due.getTime())) {
       return refDate.getTime() > due.getTime();
     }
@@ -570,6 +581,10 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
     allMaterialTemplates,
     allAnalysisTemplates,
     allRequestTemplates,
+    equipments,
+    allEquipments,
+    nonConformities,
+    allNonConformities,
     labSettings,
     users,
     setGlobalSearchQuery
@@ -1017,6 +1032,60 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
     () => baseRequestTemplates.filter(t => matchLab(t.labId)),
     [baseRequestTemplates, effectiveLabId]
   );
+
+  const filteredEquipments = useMemo(
+    () => (allEquipments || equipments || []).filter(eq => matchLab(eq.labId)),
+    [allEquipments, equipments, effectiveLabId]
+  );
+
+  const filteredNonConformities = useMemo(
+    () => (allNonConformities || nonConformities || []).filter(nc => matchLab(nc.labId)),
+    [allNonConformities, nonConformities, effectiveLabId]
+  );
+
+  // Configuration de planification/préparation du laboratoire filtré (ou actif par défaut)
+  const effectiveSchedulingConfig = useMemo(() => {
+    const targetLab = laboratories.find(l => l.id === effectiveLabId);
+    return targetLab?.settings?.schedulingConfig || labSettings?.schedulingConfig || getDefaultLabSchedulingConfig();
+  }, [laboratories, effectiveLabId, labSettings]);
+
+  // Charge active globale du laboratoire : Essais + Préparation optimisée par lots
+  const activeLabAnalyses = useMemo(
+    () => filteredAnalyses.filter(a => ['planifie', 'En Cours', 'en_cours', 'rejete'].includes(a.status)),
+    [filteredAnalyses]
+  );
+  const activeLabWorkload = useMemo(
+    () => calculateAnalysesWorkload(activeLabAnalyses, baseSamples, baseAnalysisTemplates, effectiveSchedulingConfig),
+    [activeLabAnalyses, baseSamples, baseAnalysisTemplates, effectiveSchedulingConfig]
+  );
+  const effectiveDailyCap = Math.max(1, effectiveSchedulingConfig.dailyCapacityHours || 7);
+  const activeWorkloadDays = Math.round((activeLabWorkload.totalHours / effectiveDailyCap) * 10) / 10;
+
+  // Indicateurs Métrologie (équipements expirés ou étalonnage <= 30 jours)
+  const expiredEquipmentsCount = filteredEquipments.filter(
+    eq => getCalibrationDaysRemaining(eq.nextCalibrationDate) < 0
+  ).length;
+  const soonCalibrationCount = filteredEquipments.filter(eq => {
+    const d = getCalibrationDaysRemaining(eq.nextCalibrationDate);
+    return d >= 0 && d <= 30;
+  }).length;
+
+  // Indicateurs Qualité CAPA / Non-Conformités ouvertes
+  const openNonConformities = filteredNonConformities.filter(nc => nc.status !== 'cloturee');
+  const criticalNonConformities = openNonConformities.filter(
+    nc => nc.severity === 'majeure' || nc.severity === 'critique'
+  ).length;
+
+  // Indicateur Financier & Respect des Échéances Engagées (OTD)
+  const totalEstimatedRevenue = filteredRequests.reduce((sum, r) => sum + (Number(r.estimatedCost) || 0), 0);
+  const requestsWithDueDate = filteredRequests.filter(r => r.committedDueDate || r.requestedDueDate);
+  const onTimeRate = requestsWithDueDate.length
+    ? Math.round(
+        (requestsWithDueDate.filter(r => !isRequestOverdue(r)).length / requestsWithDueDate.length) * 100
+      )
+    : filteredRequests.length
+      ? Math.round(((filteredRequests.length - filteredRequests.filter(r => isRequestOverdue(r)).length) / filteredRequests.length) * 100)
+      : 100;
 
   // Calcul des indicateurs de suivi & qualité
   const totalSamples = filteredSamples.length;
@@ -2126,6 +2195,44 @@ export function Dashboard({ onNavigate }: DashboardProps = {}) {
           subtitle={`${rejectedRequests} demande(s) rejetée(s)`}
           icon={Activity}
           colorClass="bg-slate-100 text-slate-700"
+        />
+      </div>
+
+      {/* Ligne 3 : Charge Essais + Préparation, Métrologie, CAPA & Valorisation ISO 17025 */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <StatCard
+          title="Charge Active (Essais + Prépa)"
+          value={`${activeLabWorkload.totalHours} h`}
+          subtitle={`Ess. ${activeLabWorkload.testHours}h + Prép. ${activeLabWorkload.prepHours}h (~${activeWorkloadDays}j${activeLabWorkload.savedHours > 0 ? `, -${activeLabWorkload.savedHours}h lots` : ''})`}
+          icon={Layers}
+          colorClass="bg-indigo-100 text-indigo-600"
+        />
+        <StatCard
+          title="Métrologie Équipements"
+          value={expiredEquipmentsCount + soonCalibrationCount}
+          subtitle={
+            expiredEquipmentsCount > 0
+              ? `${expiredEquipmentsCount} expiré(s), ${soonCalibrationCount} sous 30j`
+              : `${soonCalibrationCount} étalonnage(s) sous 30j / ${filteredEquipments.length} parc`
+          }
+          icon={Wrench}
+          colorClass={expiredEquipmentsCount > 0 ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'}
+          highlight={expiredEquipmentsCount > 0}
+        />
+        <StatCard
+          title="Non-Conformités (CAPA)"
+          value={openNonConformities.length}
+          subtitle={`${criticalNonConformities} majeure(s) / critique(s) ouverte(s)`}
+          icon={AlertOctagon}
+          colorClass="bg-orange-100 text-orange-600"
+          highlight={criticalNonConformities > 0}
+        />
+        <StatCard
+          title="Valorisation & OTD"
+          value={`${Math.round(totalEstimatedRevenue).toLocaleString('fr-FR')} €`}
+          subtitle={`Respect délais (OTD) : ${onTimeRate} %`}
+          icon={Euro}
+          colorClass="bg-emerald-100 text-emerald-700"
         />
       </div>
 

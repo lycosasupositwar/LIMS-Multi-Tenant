@@ -86,12 +86,8 @@ function Main() {
       case 'nonconformities':
         return <NonConformities />;
       case 'planning':
-        // Planning & charge réservé aux managers et administrateurs
-        return currentUser.role === 'manager' || currentUser.role === 'admin' ? (
-          <Planning />
-        ) : (
-          <Dashboard onNavigate={(tab) => setActiveTab(tab)} />
-        );
+        // Calendrier complet & charge pour managers/admins ; calendrier personnel en lecture seule pour les analystes
+        return <Planning />;
       case 'builder':
         // Le module de conception de formulaires et templates est réservé aux managers
         return currentUser.role === 'manager' || currentUser.role === 'admin' ? (

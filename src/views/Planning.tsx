@@ -33,10 +33,16 @@ import {
   Unlock,
   Layers,
   CheckCircle2,
-  ArrowRight
+  ArrowRight,
+  Eye
 } from 'lucide-react';
 import { getCalibrationDaysRemaining } from './Equipments';
-import { computeSmartSchedule, SchedulingProposal } from '../utils/smartScheduler';
+import {
+  computeSmartSchedule,
+  calculateAnalysesWorkload,
+  getDefaultLabSchedulingConfig,
+  SchedulingProposal
+} from '../utils/smartScheduler';
 
 /**
  * Formate un objet Date local au format `YYYY-MM-DD`.
@@ -50,6 +56,7 @@ function toIsoDate(d: Date): string {
 
 export function Planning() {
   const {
+    currentUser,
     analyses,
     analysisTemplates,
     samples,
@@ -63,33 +70,43 @@ export function Planning() {
     activeLabId
   } = useLims();
 
+  /** Les analystes accèdent uniquement à leur calendrier personnel en lecture seule */
+  const isReadOnlyAnalyst = currentUser?.role === 'analyste';
+
+  /** Configuration dynamique de planification et de préparation du laboratoire actif */
+  const schedulingConfig = labSettings?.schedulingConfig || getDefaultLabSchedulingConfig();
+  const dailyCap = Math.max(1, schedulingConfig.dailyCapacityHours || 7);
+  const weeklyCap = Math.max(1, dailyCap * (schedulingConfig.workingDays?.length || 5));
+
   /** Mode d'affichage actif : 'calendar' (par défaut), 'kanban' ou 'workload' */
   const [viewMode, setViewMode] = useState<'calendar' | 'kanban' | 'workload'>('calendar');
-  /** Mois actuellement affiché dans la vue calendrier */
-  const [currentMonth, setCurrentMonth] = useState<Date>(() => {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
-  });
-  /** Filtre optionnel par technicien dans le calendrier */
+  const effectiveViewMode = isReadOnlyAnalyst ? 'calendar' : viewMode;
+
+  /** Granularité de la vue calendrier : Mois, Semaine ou Jour */
+  const [calendarGranularity, setCalendarGranularity] = useState<'month' | 'week' | 'day'>('month');
+  /** Date pivot actuellement affichée dans la vue calendrier */
+  const [focusDate, setFocusDate] = useState<Date>(() => new Date());
+  /** Filtre optionnel par technicien dans le calendrier (réservé manager/admin) */
   const [staffFilter, setStaffFilter] = useState<string>('all');
   /** Identifiant de l'essai actuellement survolé/glissé (Drag & Drop) */
   const [draggedAnalysisId, setDraggedAnalysisId] = useState<string | null>(null);
   /** Date cible survolée lors d'un glisser-déposer */
   const [dragOverDate, setDragOverDate] = useState<string | null>(null);
-  /** Essai ouvert dans la modale d'édition rapide du calendrier */
+  /** Essai ouvert dans la modale d'édition/consultation rapide du calendrier */
   const [selectedAnalysisId, setSelectedAnalysisId] = useState<string | null>(null);
   /** Proposition de planification intelligente en cours de prévisualisation (Dry-Run) */
   const [proposal, setProposal] = useState<SchedulingProposal | null>(null);
 
   /** Lance la simulation du moteur de planification intelligente sans rien modifier en base */
   const handleRunSmartSchedule = () => {
+    if (isReadOnlyAnalyst) return;
     const result = computeSmartSchedule({
       analyses,
       samples,
       requests,
       analysisTemplates,
       equipments,
-      config: labSettings?.schedulingConfig
+      config: schedulingConfig
     });
     setProposal(result);
   };
@@ -104,25 +121,46 @@ export function Planning() {
       (!u.labId || u.labId === 'all' || u.labId === activeLabId)
   );
 
-  // Essais filtrés par opérateur pour le calendrier
-  const calendarAnalyses = useMemo(() => {
-    return analyses.filter(a => staffFilter === 'all' || a.technician === staffFilter);
-  }, [analyses, staffFilter]);
+  // Index des demandes assignées à l'analyste connecté (pour filtrage strict)
+  const analystRequestIds = useMemo(() => {
+    if (!isReadOnlyAnalyst || !currentUser) return new Set<string>();
+    return new Set(requests.filter(r => r.assignedTo === currentUser.id).map(r => r.id));
+  }, [isReadOnlyAnalyst, currentUser, requests]);
 
-  // Essais actifs sans date planifiée (file d'attente à glisser sur le calendrier)
+  // Essais filtrés pour le calendrier (strictement ceux de l'analyste en mode lecture seule)
+  const calendarAnalyses = useMemo(() => {
+    if (isReadOnlyAnalyst && currentUser) {
+      return analyses.filter(a => {
+        if (a.technician === currentUser.name) return true;
+        const sample = samples.find(s => s.id === a.sampleId);
+        return Boolean(sample?.requestId && analystRequestIds.has(sample.requestId));
+      });
+    }
+    return analyses.filter(a => staffFilter === 'all' || a.technician === staffFilter);
+  }, [analyses, samples, isReadOnlyAnalyst, currentUser, analystRequestIds, staffFilter]);
+
+  // Demandes visibles sur le calendrier (uniquement celles de l'analyste s'il est en lecture seule)
+  const visibleRequests = useMemo(() => {
+    if (isReadOnlyAnalyst && currentUser) {
+      return requests.filter(r => r.assignedTo === currentUser.id);
+    }
+    return requests;
+  }, [requests, isReadOnlyAnalyst, currentUser]);
+
+  // Essais actifs sans date planifiée (file d'attente à glisser sur le calendrier - manager/admin)
   const unscheduledAnalyses = useMemo(() => {
     return calendarAnalyses.filter(a => !a.plannedDate && a.status !== 'valide' && a.status !== 'termine');
   }, [calendarAnalyses]);
 
   // Demandes actives n'ayant pas encore d'échantillons générés mais portant une estimation horaire
   const pendingEstimatedRequests = useMemo(() => {
-    return requests.filter(r => !['terminee', 'rejetee'].includes(r.status) && (r.estimatedHours || r.committedDueDate));
-  }, [requests]);
+    return visibleRequests.filter(r => !['terminee', 'rejetee'].includes(r.status) && (r.estimatedHours || r.committedDueDate));
+  }, [visibleRequests]);
 
   // Génération de la grille mensuelle (Lundi -> Dimanche, 35 ou 42 cases)
   const calendarDays = useMemo(() => {
-    const year = currentMonth.getFullYear();
-    const month = currentMonth.getMonth();
+    const year = focusDate.getFullYear();
+    const month = focusDate.getMonth();
     const firstDay = new Date(year, month, 1);
     const startOffset = (firstDay.getDay() + 6) % 7; // Lundi = 0, Dimanche = 6
     const startDate = new Date(year, month, 1 - startOffset);
@@ -144,7 +182,74 @@ export function Planning() {
       });
     }
     return days;
-  }, [currentMonth]);
+  }, [focusDate]);
+
+  // Génération des 7 jours de la semaine active (Lundi -> Dimanche)
+  const weekDays = useMemo(() => {
+    const d = new Date(focusDate);
+    d.setHours(0, 0, 0, 0);
+    const offset = (d.getDay() + 6) % 7; // Lundi = 0
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - offset);
+    const todayIso = toIsoDate(new Date());
+    return Array.from({ length: 7 }, (_, i) => {
+      const cur = new Date(monday);
+      cur.setDate(monday.getDate() + i);
+      const iso = toIsoDate(cur);
+      return {
+        date: cur,
+        iso,
+        isCurrentMonth: cur.getMonth() === focusDate.getMonth(),
+        isToday: iso === todayIso
+      };
+    });
+  }, [focusDate]);
+
+  // Journée sélectionnée pour la vue Jour
+  const focusedDayCell = useMemo(() => {
+    const d = new Date(focusDate);
+    d.setHours(0, 0, 0, 0);
+    const iso = toIsoDate(d);
+    return {
+      date: d,
+      iso,
+      isCurrentMonth: true,
+      isToday: iso === toIsoDate(new Date())
+    };
+  }, [focusDate]);
+
+  /** Navigation Précédent / Suivant adaptée à la granularité (Mois / Semaine / Jour) */
+  const navigateCalendar = (direction: -1 | 1) => {
+    const next = new Date(focusDate);
+    if (calendarGranularity === 'month') {
+      next.setMonth(next.getMonth() + direction, 1);
+    } else if (calendarGranularity === 'week') {
+      next.setDate(next.getDate() + direction * 7);
+    } else {
+      next.setDate(next.getDate() + direction);
+    }
+    setFocusDate(next);
+  };
+
+  /** Libellé lisible de la période affichée */
+  const periodLabel = useMemo(() => {
+    if (calendarGranularity === 'month') {
+      return new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric' }).format(focusDate);
+    }
+    if (calendarGranularity === 'week') {
+      const first = weekDays[0]?.date;
+      const last = weekDays[6]?.date;
+      if (!first || !last) return '';
+      const fmtShort = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'short' });
+      return `Semaine du ${fmtShort.format(first)} au ${fmtShort.format(last)} ${last.getFullYear()}`;
+    }
+    return new Intl.DateTimeFormat('fr-FR', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    }).format(focusDate);
+  }, [calendarGranularity, focusDate, weekDays]);
 
   /** Style couleur d'une pastille d'essai sur le calendrier selon son statut */
   const getAnalysisChipStyle = (status: AnalysisStatus) => {
@@ -163,8 +268,9 @@ export function Planning() {
     }
   };
 
-  /** Gestion du dépôt d'un essai sur une journée du calendrier */
+  /** Gestion du dépôt d'un essai sur une journée du calendrier (bloqué pour analyste) */
   const handleDropOnDay = (isoDate: string) => {
+    if (isReadOnlyAnalyst) return;
     if (draggedAnalysisId) {
       updateAnalysisMeta(draggedAnalysisId, { plannedDate: isoDate });
     }
@@ -180,296 +286,707 @@ export function Planning() {
     { status: 'valide', title: 'Validés', color: 'border-emerald-300 bg-emerald-50/50' }
   ];
 
-  const monthLabel = new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric' }).format(currentMonth);
+  // Charge détaillée calculée pour la journée active en vue Jour
+  const focusedDayAnalyses = useMemo(
+    () => calendarAnalyses.filter(a => a.plannedDate === focusedDayCell.iso),
+    [calendarAnalyses, focusedDayCell.iso]
+  );
+  const focusedDayWorkload = useMemo(
+    () => calculateAnalysesWorkload(focusedDayAnalyses, samples, analysisTemplates, schedulingConfig),
+    [focusedDayAnalyses, samples, analysisTemplates, schedulingConfig]
+  );
+
+  // Détail de charge (essai + prépa) de l'analyse sélectionnée dans la modale
+  const selectedAnalysisDetail = useMemo(() => {
+    if (!selectedAnalysis) return null;
+    const sameDay = selectedAnalysis.plannedDate
+      ? calendarAnalyses.filter(a => a.plannedDate === selectedAnalysis.plannedDate)
+      : [selectedAnalysis];
+    const w = calculateAnalysesWorkload(sameDay, samples, analysisTemplates, schedulingConfig);
+    return w.byAnalysisId[selectedAnalysis.id] || null;
+  }, [selectedAnalysis, calendarAnalyses, samples, analysisTemplates, schedulingConfig]);
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-display font-bold text-slate-900">Planning & Charge Laboratoire</h2>
+          <div className="flex items-center gap-2.5">
+            <h2 className="text-2xl font-display font-bold text-slate-900">
+              {isReadOnlyAnalyst ? 'Mon Planning' : 'Planning & Charge Laboratoire'}
+            </h2>
+            {isReadOnlyAnalyst && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                <Eye className="w-3.5 h-3.5" /> Lecture seule
+              </span>
+            )}
+          </div>
           <p className="text-sm text-slate-500 mt-1">
-            Calendrier interactif (glisser-déposer), ordonnancement Kanban et suivi de charge par analyste / équipement.
+            {isReadOnlyAnalyst
+              ? 'Consultation de vos essais planifiés et de vos temps de préparation (vues Mois, Semaine et Jour).'
+              : 'Calendrier interactif (Mois / Semaine / Jour avec temps de préparation), ordonnancement Kanban et suivi de charge.'}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={handleRunSmartSchedule}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs transition-colors"
-            title="Optimiser automatiquement le planning selon les urgences et les lots de préparation du laboratoire"
-          >
-            <Sparkles className="w-4 h-4" /> Planification Intelligente (Auto)
-          </button>
-          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-xs">
-          <button
-            onClick={() => setViewMode('calendar')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1.5 ${
-              viewMode === 'calendar' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            <CalendarDays className="w-4 h-4" /> Calendrier
-          </button>
-          <button
-            onClick={() => setViewMode('kanban')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1.5 ${
-              viewMode === 'kanban' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            <Columns3 className="w-4 h-4" /> Kanban
-          </button>
-          <button
-            onClick={() => setViewMode('workload')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1.5 ${
-              viewMode === 'workload' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            <Users className="w-4 h-4" /> Charge
-          </button>
+        {!isReadOnlyAnalyst && (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleRunSmartSchedule}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs transition-colors"
+              title="Optimiser automatiquement le planning selon les urgences et les lots de préparation du laboratoire"
+            >
+              <Sparkles className="w-4 h-4" /> Planification Intelligente (Auto)
+            </button>
+            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-xs">
+              <button
+                onClick={() => setViewMode('calendar')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1.5 ${
+                  effectiveViewMode === 'calendar' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <CalendarDays className="w-4 h-4" /> Calendrier
+              </button>
+              <button
+                onClick={() => setViewMode('kanban')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1.5 ${
+                  effectiveViewMode === 'kanban' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <Columns3 className="w-4 h-4" /> Kanban
+              </button>
+              <button
+                onClick={() => setViewMode('workload')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1.5 ${
+                  effectiveViewMode === 'workload' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <Users className="w-4 h-4" /> Charge
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* ========================================== */}
-      {/* 1. VUE CALENDRIER MENSUEL INTERACTIF       */}
+      {/* 1. VUE CALENDRIER (MOIS / SEMAINE / JOUR)  */}
       {/* ========================================== */}
-      {viewMode === 'calendar' && (
+      {effectiveViewMode === 'calendar' && (
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
-          {/* Colonne latérale : File des essais à planifier (glisser-déposer vers le calendrier) */}
-          <div className="xl:col-span-3 bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden flex flex-col">
-            <div className="p-3.5 border-b border-slate-200 bg-slate-50">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                  À planifier ({unscheduledAnalyses.length})
-                </h3>
+          {/* Colonne latérale : File des essais à planifier (masquée en mode lecture seule analyste) */}
+          {!isReadOnlyAnalyst && (
+            <div className="xl:col-span-3 bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden flex flex-col">
+              <div className="p-3.5 border-b border-slate-200 bg-slate-50">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                    À planifier ({unscheduledAnalyses.length})
+                  </h3>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Glissez un essai sur une journée du calendrier pour fixer sa date.
+                </p>
               </div>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                Glissez un essai sur une journée du calendrier pour fixer sa date.
-              </p>
-            </div>
-            <div className="p-2.5 space-y-2 max-h-[520px] overflow-y-auto">
-              {unscheduledAnalyses.map(a => {
-                const tpl = getTemplate(a.templateId);
-                const hrs = tpl?.estimatedHours ?? 2;
-                return (
-                  <div
-                    key={a.id}
-                    draggable
-                    onDragStart={() => setDraggedAnalysisId(a.id)}
-                    onDragEnd={() => {
-                      setDraggedAnalysisId(null);
-                      setDragOverDate(null);
-                    }}
-                    onClick={() => setSelectedAnalysisId(a.id)}
-                    className="p-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:border-blue-400 hover:bg-blue-50/40 cursor-grab active:cursor-grabbing transition-colors"
-                  >
-                    <div className="flex items-center justify-between text-[11px]">
-                      <span className="font-mono font-bold text-blue-700">{a.id}</span>
-                      <span className="inline-flex items-center text-slate-500 font-medium">
-                        <Clock className="w-3 h-3 mr-0.5" />{hrs}h
+              <div className="p-2.5 space-y-2 max-h-[540px] overflow-y-auto">
+                {unscheduledAnalyses.map(a => {
+                  const tpl = getTemplate(a.templateId);
+                  const singleW = calculateAnalysesWorkload([a], samples, analysisTemplates, schedulingConfig);
+                  const detail = singleW.byAnalysisId[a.id];
+                  return (
+                    <div
+                      key={a.id}
+                      draggable
+                      onDragStart={() => setDraggedAnalysisId(a.id)}
+                      onDragEnd={() => {
+                        setDraggedAnalysisId(null);
+                        setDragOverDate(null);
+                      }}
+                      onClick={() => setSelectedAnalysisId(a.id)}
+                      className="p-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:border-blue-400 hover:bg-blue-50/40 cursor-grab active:cursor-grabbing transition-colors"
+                    >
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-mono font-bold text-blue-700">{a.id}</span>
+                        <span
+                          className="inline-flex items-center text-slate-600 font-medium"
+                          title={detail && detail.prepHours > 0 ? `Essai ${detail.testHours}h + Prépa ${detail.prepHours}h` : undefined}
+                        >
+                          <Clock className="w-3 h-3 mr-0.5" />
+                          {detail ? detail.totalHours : (tpl?.estimatedHours ?? 2)}h
+                          {detail && detail.prepHours > 0 && (
+                            <span className="ml-1 text-[9px] text-indigo-600 font-semibold">(+{detail.prepHours}h prépa)</span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="text-xs font-semibold text-slate-900 mt-0.5 truncate">{tpl?.name || a.templateId}</div>
+                      <div className="text-[11px] text-slate-500 mt-0.5 truncate">
+                        {a.sampleId} • {a.technician || 'Non assigné'}
+                      </div>
+                    </div>
+                  );
+                })}
+                {unscheduledAnalyses.length === 0 && (
+                  <div className="py-6 text-center text-xs text-slate-400 italic">
+                    Tous les essais actifs ont une date planifiée.
+                  </div>
+                )}
+              </div>
+
+              {/* Rappel des demandes avec estimation préliminaire */}
+              {pendingEstimatedRequests.length > 0 && (
+                <div className="border-t border-slate-200 p-3 bg-indigo-50/40 space-y-1.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-800">
+                    Estimations demandes actives
+                  </p>
+                  {pendingEstimatedRequests.slice(0, 4).map(r => (
+                    <div key={r.id} className="text-[11px] flex items-center justify-between text-slate-700 bg-white px-2 py-1 rounded border border-indigo-100">
+                      <span className="font-mono font-semibold truncate mr-2">{r.id}</span>
+                      <span className="shrink-0 font-bold text-indigo-700">
+                        {r.sampleCount ? `${r.sampleCount} éch.` : ''} {r.estimatedHours ? `~${r.estimatedHours}h` : ''}
                       </span>
                     </div>
-                    <div className="text-xs font-semibold text-slate-900 mt-0.5 truncate">{tpl?.name || a.templateId}</div>
-                    <div className="text-[11px] text-slate-500 mt-0.5 truncate">
-                      {a.sampleId} • {a.technician || 'Non assigné'}
-                    </div>
-                  </div>
-                );
-              })}
-              {unscheduledAnalyses.length === 0 && (
-                <div className="py-6 text-center text-xs text-slate-400 italic">
-                  Tous les essais actifs ont une date planifiée.
+                  ))}
                 </div>
               )}
             </div>
+          )}
 
-            {/* Rappel des demandes avec estimation préliminaire */}
-            {pendingEstimatedRequests.length > 0 && (
-              <div className="border-t border-slate-200 p-3 bg-indigo-50/40 space-y-1.5">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-800">
-                  Estimations demandes actives
-                </p>
-                {pendingEstimatedRequests.slice(0, 4).map(r => (
-                  <div key={r.id} className="text-[11px] flex items-center justify-between text-slate-700 bg-white px-2 py-1 rounded border border-indigo-100">
-                    <span className="font-mono font-semibold truncate mr-2">{r.id}</span>
-                    <span className="shrink-0 font-bold text-indigo-700">
-                      {r.sampleCount ? `${r.sampleCount} éch.` : ''} {r.estimatedHours ? `~${r.estimatedHours}h` : ''}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Grille Calendrier Mensuelle */}
-          <div className="xl:col-span-9 bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+          {/* Zone principale Calendrier (Mois / Semaine / Jour) */}
+          <div className={`${isReadOnlyAnalyst ? 'xl:col-span-12' : 'xl:col-span-9'} bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden`}>
             {/* Barre d'outils calendrier */}
             <div className="p-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-slate-50/70">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))}
+                  onClick={() => navigateCalendar(-1)}
                   className="p-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700"
-                  title="Mois précédent"
+                  title="Période précédente"
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    const now = new Date();
-                    setCurrentMonth(new Date(now.getFullYear(), now.getMonth(), 1));
-                  }}
+                  onClick={() => setFocusDate(new Date())}
                   className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700"
                 >
                   Aujourd'hui
                 </button>
                 <button
                   type="button"
-                  onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))}
+                  onClick={() => navigateCalendar(1)}
                   className="p-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700"
-                  title="Mois suivant"
+                  title="Période suivante"
                 >
                   <ChevronRight className="w-4 h-4" />
                 </button>
-                <h3 className="ml-2 text-base font-bold text-slate-900 capitalize">{monthLabel}</h3>
+                <h3 className="ml-2 text-base font-bold text-slate-900 capitalize">{periodLabel}</h3>
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
-                <select
-                  value={staffFilter}
-                  onChange={e => setStaffFilter(e.target.value)}
-                  className="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white text-slate-700"
-                >
-                  <option value="all">Tous les opérateurs</option>
-                  {labStaff.map(m => (
-                    <option key={m.id} value={m.name}>{m.name}</option>
+                {/* Sélecteur Mois / Semaine / Jour */}
+                <div className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5 text-xs font-semibold">
+                  {(['month', 'week', 'day'] as const).map(gran => (
+                    <button
+                      key={gran}
+                      type="button"
+                      onClick={() => setCalendarGranularity(gran)}
+                      className={`px-2.5 py-1 rounded-md transition-colors ${
+                        calendarGranularity === gran
+                          ? 'bg-blue-600 text-white'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      {gran === 'month' ? 'Mois' : gran === 'week' ? 'Semaine' : 'Jour'}
+                    </button>
                   ))}
-                </select>
+                </div>
+
+                {!isReadOnlyAnalyst && (
+                  <select
+                    value={staffFilter}
+                    onChange={e => setStaffFilter(e.target.value)}
+                    className="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white text-slate-700"
+                  >
+                    <option value="all">Tous les opérateurs</option>
+                    {labStaff.map(m => (
+                      <option key={m.id} value={m.name}>{m.name}</option>
+                    ))}
+                  </select>
+                )}
+
                 <div className="hidden sm:flex items-center gap-2 text-[10px] text-slate-500">
                   <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-blue-200 border border-blue-400" /> Essai</span>
                   <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-purple-200 border border-purple-400" /> Échéance</span>
-                  <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-amber-200 border border-amber-400" /> Étalonnage</span>
+                  {!isReadOnlyAnalyst && (
+                    <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-amber-200 border border-amber-400" /> Étalonnage</span>
+                  )}
                 </div>
               </div>
             </div>
 
-            {/* En-tête jours de la semaine */}
-            <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50 text-center text-[11px] font-bold uppercase text-slate-500">
-              {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map(day => (
-                <div key={day} className="py-2 border-r last:border-r-0 border-slate-200">{day}</div>
-              ))}
-            </div>
+            {/* ===== SOUS-VUE A : MOIS ===== */}
+            {calendarGranularity === 'month' && (
+              <>
+                <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50 text-center text-[11px] font-bold uppercase text-slate-500">
+                  {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map(day => (
+                    <div key={day} className="py-2 border-r last:border-r-0 border-slate-200">{day}</div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-7">
+                  {calendarDays.map(cell => {
+                    const dayAnalyses = calendarAnalyses.filter(a => a.plannedDate === cell.iso);
+                    const dayDeadlines = visibleRequests.filter(
+                      r => !['terminee', 'rejetee'].includes(r.status) && (r.committedDueDate === cell.iso || (!r.committedDueDate && r.requestedDueDate === cell.iso))
+                    );
+                    const dayCalibrations = isReadOnlyAnalyst ? [] : equipments.filter(eq => eq.nextCalibrationDate === cell.iso);
+                    const dayWorkload = calculateAnalysesWorkload(dayAnalyses, samples, analysisTemplates, schedulingConfig);
+                    const dayHours = dayWorkload.totalHours;
+                    const isDropTarget = !isReadOnlyAnalyst && dragOverDate === cell.iso;
 
-            {/* Cases du calendrier */}
-            <div className="grid grid-cols-7">
-              {calendarDays.map(cell => {
-                const dayAnalyses = calendarAnalyses.filter(a => a.plannedDate === cell.iso);
-                const dayDeadlines = requests.filter(
-                  r => !['terminee', 'rejetee'].includes(r.status) && (r.committedDueDate === cell.iso || (!r.committedDueDate && r.requestedDueDate === cell.iso))
-                );
-                const dayCalibrations = equipments.filter(eq => eq.nextCalibrationDate === cell.iso);
-                const dayHours = dayAnalyses.reduce((sum, a) => sum + (getTemplate(a.templateId)?.estimatedHours ?? 2), 0);
-                const isDropTarget = dragOverDate === cell.iso;
-
-                return (
-                  <div
-                    key={cell.iso}
-                    onDragOver={e => {
-                      e.preventDefault();
-                      if (dragOverDate !== cell.iso) setDragOverDate(cell.iso);
-                    }}
-                    onDragLeave={() => {
-                      if (dragOverDate === cell.iso) setDragOverDate(null);
-                    }}
-                    onDrop={e => {
-                      e.preventDefault();
-                      handleDropOnDay(cell.iso);
-                    }}
-                    className={`min-h-[116px] p-1.5 border-r border-b border-slate-200 flex flex-col gap-1 transition-colors ${
-                      !cell.isCurrentMonth ? 'bg-slate-50/70 text-slate-400' : 'bg-white'
-                    } ${isDropTarget ? 'bg-blue-50 ring-2 ring-inset ring-blue-400' : ''}`}
-                  >
-                    <div className="flex items-center justify-between px-0.5">
-                      <span
-                        className={`text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full ${
-                          cell.isToday ? 'bg-blue-600 text-white' : cell.isCurrentMonth ? 'text-slate-700' : 'text-slate-400'
-                        }`}
+                    return (
+                      <div
+                        key={cell.iso}
+                        onDragOver={e => {
+                          if (isReadOnlyAnalyst) return;
+                          e.preventDefault();
+                          if (dragOverDate !== cell.iso) setDragOverDate(cell.iso);
+                        }}
+                        onDragLeave={() => {
+                          if (!isReadOnlyAnalyst && dragOverDate === cell.iso) setDragOverDate(null);
+                        }}
+                        onDrop={e => {
+                          if (isReadOnlyAnalyst) return;
+                          e.preventDefault();
+                          handleDropOnDay(cell.iso);
+                        }}
+                        className={`min-h-[120px] p-1.5 border-r border-b border-slate-200 flex flex-col gap-1 transition-colors ${
+                          !cell.isCurrentMonth ? 'bg-slate-50/70 text-slate-400' : 'bg-white'
+                        } ${isDropTarget ? 'bg-blue-50 ring-2 ring-inset ring-blue-400' : ''}`}
                       >
-                        {cell.date.getDate()}
-                      </span>
-                      {dayHours > 0 && (
-                        <span
-                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                            dayHours > 8
-                              ? 'bg-red-100 text-red-700'
-                              : dayHours >= 6
-                                ? 'bg-amber-100 text-amber-800'
-                                : 'bg-emerald-100 text-emerald-700'
-                          }`}
-                          title={`Charge planifiée : ${dayHours}h`}
-                        >
-                          {dayHours}h
-                        </span>
-                      )}
+                        <div className="flex items-center justify-between px-0.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFocusDate(cell.date);
+                              setCalendarGranularity('day');
+                            }}
+                            title="Ouvrir la vue Jour pour cette date"
+                            className={`text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full hover:ring-2 hover:ring-blue-300 transition-all ${
+                              cell.isToday ? 'bg-blue-600 text-white' : cell.isCurrentMonth ? 'text-slate-700' : 'text-slate-400'
+                            }`}
+                          >
+                            {cell.date.getDate()}
+                          </button>
+                          {dayHours > 0 && (
+                            <span
+                              className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                                dayHours > dailyCap
+                                  ? 'bg-red-100 text-red-700'
+                                  : dayHours >= dailyCap * 0.8
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : 'bg-emerald-100 text-emerald-700'
+                              }`}
+                              title={`Charge totale : ${dayHours}h (Essais : ${dayWorkload.testHours}h + Prépa : ${dayWorkload.prepHours}h${dayWorkload.savedHours > 0 ? `, -${dayWorkload.savedHours}h par lots` : ''}) / Capacité ${dailyCap}h`}
+                            >
+                              {dayHours}h
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Échéances de demandes */}
+                        {dayDeadlines.map(req => (
+                          <div
+                            key={`dl-${req.id}`}
+                            className="px-1.5 py-0.5 rounded bg-purple-100 border border-purple-300 text-purple-900 text-[10px] font-semibold truncate flex items-center gap-1"
+                            title={`Échéance demande ${req.id} : ${req.title}`}
+                          >
+                            <Flag className="w-2.5 h-2.5 shrink-0" />
+                            <span className="truncate">{req.id}</span>
+                          </div>
+                        ))}
+
+                        {/* Échéances d'étalonnage (masquées pour l'analyste) */}
+                        {dayCalibrations.map(eq => (
+                          <div
+                            key={`cal-${eq.id}`}
+                            className="px-1.5 py-0.5 rounded bg-amber-100 border border-amber-300 text-amber-900 text-[10px] font-semibold truncate flex items-center gap-1"
+                            title={`Étalonnage prévu : ${eq.name}`}
+                          >
+                            <Wrench className="w-2.5 h-2.5 shrink-0" />
+                            <span className="truncate">Étal. {eq.code}</span>
+                          </div>
+                        ))}
+
+                        {/* Essais planifiés */}
+                        {dayAnalyses.map(a => {
+                          const tpl = getTemplate(a.templateId);
+                          const d = dayWorkload.byAnalysisId[a.id];
+                          return (
+                            <div
+                              key={a.id}
+                              draggable={!isReadOnlyAnalyst}
+                              onDragStart={() => !isReadOnlyAnalyst && setDraggedAnalysisId(a.id)}
+                              onDragEnd={() => {
+                                setDraggedAnalysisId(null);
+                                setDragOverDate(null);
+                              }}
+                              onClick={() => setSelectedAnalysisId(a.id)}
+                              className={`px-1.5 py-1 rounded border text-[10px] ${
+                                isReadOnlyAnalyst ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
+                              } hover:shadow-xs transition-shadow ${getAnalysisChipStyle(a.status)}`}
+                              title={`${a.id} — ${tpl?.name || a.templateId} (${a.technician || 'Non assigné'})${d ? ` • Total ${d.totalHours}h (Essai ${d.testHours}h + Prépa ${d.prepHours}h)` : ''}`}
+                            >
+                              <div className="font-bold truncate flex items-center justify-between gap-1">
+                                <span className="truncate">{tpl?.name || a.id}</span>
+                                {a.isScheduleLocked && <Lock className="w-2.5 h-2.5 shrink-0 opacity-75" />}
+                              </div>
+                              <div className="text-[9px] opacity-80 truncate flex items-center justify-between gap-1">
+                                <span>
+                                  {a.sampleId} • {d ? `${d.totalHours}h` : `${tpl?.estimatedHours ?? 2}h`}
+                                </span>
+                                {a.scheduledBatchId && (
+                                  <span className="px-1 rounded bg-white/70 font-mono font-bold">{a.scheduledBatchId}</span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {/* ===== SOUS-VUE B : SEMAINE ===== */}
+            {calendarGranularity === 'week' && (
+              <div className="grid grid-cols-1 md:grid-cols-7 divide-y md:divide-y-0 md:divide-x divide-slate-200">
+                {weekDays.map(cell => {
+                  const dayAnalyses = calendarAnalyses.filter(a => a.plannedDate === cell.iso);
+                  const dayDeadlines = visibleRequests.filter(
+                    r => !['terminee', 'rejetee'].includes(r.status) && (r.committedDueDate === cell.iso || (!r.committedDueDate && r.requestedDueDate === cell.iso))
+                  );
+                  const dayCalibrations = isReadOnlyAnalyst ? [] : equipments.filter(eq => eq.nextCalibrationDate === cell.iso);
+                  const dayWorkload = calculateAnalysesWorkload(dayAnalyses, samples, analysisTemplates, schedulingConfig);
+                  const loadPct = Math.min(100, Math.round((dayWorkload.totalHours / dailyCap) * 100));
+                  const isDropTarget = !isReadOnlyAnalyst && dragOverDate === cell.iso;
+                  const weekdayName = new Intl.DateTimeFormat('fr-FR', { weekday: 'short' }).format(cell.date);
+
+                  return (
+                    <div
+                      key={cell.iso}
+                      onDragOver={e => {
+                        if (isReadOnlyAnalyst) return;
+                        e.preventDefault();
+                        if (dragOverDate !== cell.iso) setDragOverDate(cell.iso);
+                      }}
+                      onDragLeave={() => {
+                        if (!isReadOnlyAnalyst && dragOverDate === cell.iso) setDragOverDate(null);
+                      }}
+                      onDrop={e => {
+                        if (isReadOnlyAnalyst) return;
+                        e.preventDefault();
+                        handleDropOnDay(cell.iso);
+                      }}
+                      className={`min-h-[420px] flex flex-col transition-colors ${
+                        isDropTarget ? 'bg-blue-50 ring-2 ring-inset ring-blue-400' : 'bg-white'
+                      }`}
+                    >
+                      {/* En-tête de la colonne jour */}
+                      <div className={`p-2.5 border-b border-slate-200 ${cell.isToday ? 'bg-blue-50/70' : 'bg-slate-50/80'}`}>
+                        <div className="flex items-center justify-between">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFocusDate(cell.date);
+                              setCalendarGranularity('day');
+                            }}
+                            className="flex items-center gap-1.5 text-left group"
+                          >
+                            <span className="text-[11px] font-bold uppercase text-slate-500">{weekdayName}</span>
+                            <span
+                              className={`text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center ${
+                                cell.isToday ? 'bg-blue-600 text-white' : 'text-slate-800 group-hover:bg-slate-200'
+                              }`}
+                            >
+                              {cell.date.getDate()}
+                            </span>
+                          </button>
+                          <span
+                            className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                              dayWorkload.totalHours > dailyCap
+                                ? 'bg-red-100 text-red-700'
+                                : dayWorkload.totalHours >= dailyCap * 0.8
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : dayWorkload.totalHours > 0
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : 'bg-slate-100 text-slate-400'
+                            }`}
+                          >
+                            {dayWorkload.totalHours}h / {dailyCap}h
+                          </span>
+                        </div>
+                        <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden mt-2">
+                          <div
+                            className={`h-full rounded-full ${
+                              dayWorkload.totalHours > dailyCap
+                                ? 'bg-red-500'
+                                : dayWorkload.totalHours >= dailyCap * 0.8
+                                  ? 'bg-amber-500'
+                                  : 'bg-emerald-500'
+                            }`}
+                            style={{ width: `${loadPct}%` }}
+                          />
+                        </div>
+                        {dayWorkload.totalHours > 0 && (
+                          <div className="text-[10px] text-slate-500 mt-1 flex items-center justify-between">
+                            <span>Ess. {dayWorkload.testHours}h • Prép. {dayWorkload.prepHours}h</span>
+                            {dayWorkload.savedHours > 0 && (
+                              <span className="text-emerald-700 font-semibold">-{dayWorkload.savedHours}h</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Contenu de la journée */}
+                      <div className="p-2 space-y-2 flex-1">
+                        {dayDeadlines.map(req => (
+                          <div
+                            key={`w-dl-${req.id}`}
+                            className="px-2 py-1 rounded bg-purple-100 border border-purple-300 text-purple-900 text-[10px] font-semibold flex items-center gap-1"
+                            title={req.title}
+                          >
+                            <Flag className="w-3 h-3 shrink-0" />
+                            <span className="truncate">{req.id}</span>
+                          </div>
+                        ))}
+                        {dayCalibrations.map(eq => (
+                          <div
+                            key={`w-cal-${eq.id}`}
+                            className="px-2 py-1 rounded bg-amber-100 border border-amber-300 text-amber-900 text-[10px] font-semibold flex items-center gap-1"
+                            title={eq.name}
+                          >
+                            <Wrench className="w-3 h-3 shrink-0" />
+                            <span className="truncate">Étal. {eq.code}</span>
+                          </div>
+                        ))}
+                        {dayAnalyses.map(a => {
+                          const tpl = getTemplate(a.templateId);
+                          const d = dayWorkload.byAnalysisId[a.id];
+                          const eq = a.equipmentId ? equipments.find(e => e.id === a.equipmentId) : null;
+                          return (
+                            <div
+                              key={a.id}
+                              draggable={!isReadOnlyAnalyst}
+                              onDragStart={() => !isReadOnlyAnalyst && setDraggedAnalysisId(a.id)}
+                              onDragEnd={() => {
+                                setDraggedAnalysisId(null);
+                                setDragOverDate(null);
+                              }}
+                              onClick={() => setSelectedAnalysisId(a.id)}
+                              className={`p-2 rounded-lg border text-[11px] space-y-1 ${
+                                isReadOnlyAnalyst ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
+                              } hover:shadow-sm transition-shadow ${getAnalysisChipStyle(a.status)}`}
+                            >
+                              <div className="flex items-center justify-between gap-1 font-bold">
+                                <span className="font-mono text-[10px]">{a.id}</span>
+                                <span className="inline-flex items-center gap-0.5 text-[10px]">
+                                  {a.isScheduleLocked && <Lock className="w-2.5 h-2.5" />}
+                                  {d ? `${d.totalHours}h` : `${tpl?.estimatedHours ?? 2}h`}
+                                </span>
+                              </div>
+                              <div className="font-semibold leading-tight">{tpl?.name || a.templateId}</div>
+                              <div className="text-[10px] opacity-85 truncate">
+                                Éch. <span className="font-mono">{a.sampleId}</span>
+                              </div>
+                              {!isReadOnlyAnalyst && (
+                                <div className="text-[10px] opacity-80 truncate">{a.technician || 'Non assigné'}</div>
+                              )}
+                              {d && d.prepHours > 0 && (
+                                <div className="text-[9px] font-medium bg-white/60 rounded px-1.5 py-0.5">
+                                  Essai {d.testHours}h + Prépa {d.prepHours}h
+                                </div>
+                              )}
+                              <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                                {a.scheduledBatchId && (
+                                  <span className="px-1.5 py-0.5 rounded bg-white/80 font-mono text-[9px] font-bold">
+                                    {a.scheduledBatchId}
+                                  </span>
+                                )}
+                                {!isReadOnlyAnalyst && eq && (
+                                  <span className="px-1.5 py-0.5 rounded bg-white/80 font-mono text-[9px]">
+                                    {eq.code}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {dayAnalyses.length === 0 && dayDeadlines.length === 0 && dayCalibrations.length === 0 && (
+                          <div className="py-8 text-center text-[11px] text-slate-300 italic">Libre</div>
+                        )}
+                      </div>
                     </div>
+                  );
+                })}
+              </div>
+            )}
 
-                    {/* Échéances de demandes */}
-                    {dayDeadlines.map(req => (
-                      <div
-                        key={`dl-${req.id}`}
-                        className="px-1.5 py-0.5 rounded bg-purple-100 border border-purple-300 text-purple-900 text-[10px] font-semibold truncate flex items-center gap-1"
-                        title={`Échéance demande ${req.id} : ${req.title}`}
-                      >
-                        <Flag className="w-2.5 h-2.5 shrink-0" />
-                        <span className="truncate">{req.id}</span>
+            {/* ===== SOUS-VUE C : JOUR ===== */}
+            {calendarGranularity === 'day' && (() => {
+              const dayDeadlines = visibleRequests.filter(
+                r => !['terminee', 'rejetee'].includes(r.status) && (r.committedDueDate === focusedDayCell.iso || (!r.committedDueDate && r.requestedDueDate === focusedDayCell.iso))
+              );
+              const dayCalibrations = isReadOnlyAnalyst ? [] : equipments.filter(eq => eq.nextCalibrationDate === focusedDayCell.iso);
+              const loadPct = Math.min(100, Math.round((focusedDayWorkload.totalHours / dailyCap) * 100));
+              const isDropTarget = !isReadOnlyAnalyst && dragOverDate === focusedDayCell.iso;
+
+              return (
+                <div
+                  onDragOver={e => {
+                    if (isReadOnlyAnalyst) return;
+                    e.preventDefault();
+                    if (dragOverDate !== focusedDayCell.iso) setDragOverDate(focusedDayCell.iso);
+                  }}
+                  onDragLeave={() => {
+                    if (!isReadOnlyAnalyst && dragOverDate === focusedDayCell.iso) setDragOverDate(null);
+                  }}
+                  onDrop={e => {
+                    if (isReadOnlyAnalyst) return;
+                    e.preventDefault();
+                    handleDropOnDay(focusedDayCell.iso);
+                  }}
+                  className={`p-5 space-y-5 min-h-[420px] transition-colors ${
+                    isDropTarget ? 'bg-blue-50 ring-2 ring-inset ring-blue-400' : 'bg-white'
+                  }`}
+                >
+                  {/* Synthèse de charge journalière (Essais + Préparation + Lots) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                    <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50">
+                      <p className="text-[11px] font-semibold uppercase text-slate-500">Charge Totale</p>
+                      <div className="flex items-baseline justify-between mt-1">
+                        <span className={`text-xl font-bold ${focusedDayWorkload.totalHours > dailyCap ? 'text-red-600' : 'text-slate-900'}`}>
+                          {focusedDayWorkload.totalHours}h
+                        </span>
+                        <span className="text-xs text-slate-500">/ {dailyCap}h</span>
                       </div>
-                    ))}
-
-                    {/* Échéances d'étalonnage */}
-                    {dayCalibrations.map(eq => (
-                      <div
-                        key={`cal-${eq.id}`}
-                        className="px-1.5 py-0.5 rounded bg-amber-100 border border-amber-300 text-amber-900 text-[10px] font-semibold truncate flex items-center gap-1"
-                        title={`Étalonnage prévu : ${eq.name}`}
-                      >
-                        <Wrench className="w-2.5 h-2.5 shrink-0" />
-                        <span className="truncate">Étal. {eq.code}</span>
+                      <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden mt-2">
+                        <div
+                          className={`h-full rounded-full ${
+                            focusedDayWorkload.totalHours > dailyCap
+                              ? 'bg-red-500'
+                              : focusedDayWorkload.totalHours >= dailyCap * 0.8
+                                ? 'bg-amber-500'
+                                : 'bg-emerald-500'
+                          }`}
+                          style={{ width: `${loadPct}%` }}
+                        />
                       </div>
-                    ))}
+                    </div>
+                    <div className="p-3.5 rounded-xl border border-blue-200 bg-blue-50/50">
+                      <p className="text-[11px] font-semibold uppercase text-blue-700">Temps d'Essais</p>
+                      <p className="text-xl font-bold text-blue-900 mt-1">{focusedDayWorkload.testHours}h</p>
+                      <p className="text-[11px] text-blue-700/80 mt-0.5">{focusedDayAnalyses.length} essai(s) planifié(s)</p>
+                    </div>
+                    <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/50">
+                      <p className="text-[11px] font-semibold uppercase text-indigo-700">Préparation (Lots)</p>
+                      <p className="text-xl font-bold text-indigo-900 mt-1">{focusedDayWorkload.prepHours}h</p>
+                      <p className="text-[11px] text-indigo-700/80 mt-0.5">
+                        {focusedDayWorkload.savedHours > 0 ? `Gain : -${focusedDayWorkload.savedHours}h par lots` : 'Séquentiel / Sans lot'}
+                      </p>
+                    </div>
+                    <div className="p-3.5 rounded-xl border border-purple-200 bg-purple-50/50">
+                      <p className="text-[11px] font-semibold uppercase text-purple-700">Jalons du Jour</p>
+                      <p className="text-xl font-bold text-purple-900 mt-1">{dayDeadlines.length + dayCalibrations.length}</p>
+                      <p className="text-[11px] text-purple-700/80 mt-0.5">
+                        {dayDeadlines.length} échéance(s){!isReadOnlyAnalyst ? ` • ${dayCalibrations.length} étal.` : ''}
+                      </p>
+                    </div>
+                  </div>
 
-                    {/* Essais planifiés (déplaçables par drag & drop) */}
-                    {dayAnalyses.map(a => {
+                  {/* Jalons : Échéances & Étalonnages */}
+                  {(dayDeadlines.length > 0 || dayCalibrations.length > 0) && (
+                    <div className="flex flex-wrap gap-2">
+                      {dayDeadlines.map(req => (
+                        <div key={`d-dl-${req.id}`} className="px-3 py-1.5 rounded-lg bg-purple-100 border border-purple-300 text-purple-900 text-xs font-semibold flex items-center gap-1.5">
+                          <Flag className="w-3.5 h-3.5" />
+                          <span>Échéance {req.id} : {req.title}</span>
+                        </div>
+                      ))}
+                      {dayCalibrations.map(eq => (
+                        <div key={`d-cal-${eq.id}`} className="px-3 py-1.5 rounded-lg bg-amber-100 border border-amber-300 text-amber-900 text-xs font-semibold flex items-center gap-1.5">
+                          <Wrench className="w-3.5 h-3.5" />
+                          <span>Étalonnage {eq.code} — {eq.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Liste détaillée des essais du jour */}
+                  <div className="space-y-3">
+                    {focusedDayAnalyses.map(a => {
                       const tpl = getTemplate(a.templateId);
+                      const sample = samples.find(s => s.id === a.sampleId);
+                      const req = sample?.requestId ? requests.find(r => r.id === sample.requestId) : null;
+                      const eq = a.equipmentId ? equipments.find(e => e.id === a.equipmentId) : null;
+                      const d = focusedDayWorkload.byAnalysisId[a.id];
+
                       return (
                         <div
                           key={a.id}
-                          draggable
-                          onDragStart={() => setDraggedAnalysisId(a.id)}
-                          onDragEnd={() => {
-                            setDraggedAnalysisId(null);
-                            setDragOverDate(null);
-                          }}
                           onClick={() => setSelectedAnalysisId(a.id)}
-                          className={`px-1.5 py-1 rounded border text-[10px] cursor-grab active:cursor-grabbing hover:shadow-xs transition-shadow ${getAnalysisChipStyle(a.status)}`}
-                          title={`${a.id} — ${tpl?.name || a.templateId} (${a.technician || 'Non assigné'})`}
+                          className={`p-4 rounded-xl border cursor-pointer hover:shadow-sm transition-all flex flex-col md:flex-row md:items-center justify-between gap-3 ${getAnalysisChipStyle(a.status)}`}
                         >
-                          <div className="font-bold truncate flex items-center justify-between gap-1">
-                            <span className="truncate">{tpl?.name || a.id}</span>
-                            {a.isScheduleLocked && <Lock className="w-2.5 h-2.5 shrink-0 opacity-75" />}
-                          </div>
-                          <div className="text-[9px] opacity-80 truncate flex items-center justify-between gap-1">
-                            <span>{a.sampleId} • {tpl?.estimatedHours ?? 2}h</span>
-                            {a.scheduledBatchId && (
-                              <span className="px-1 rounded bg-white/70 font-mono font-bold">{a.scheduledBatchId}</span>
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-mono text-xs font-bold">{a.id}</span>
+                              <span className="text-sm font-bold">{tpl?.name || a.templateId}</span>
+                              <span className="px-2 py-0.5 rounded-full bg-white/80 text-[10px] font-bold uppercase">
+                                {a.status}
+                              </span>
+                              {a.scheduledBatchId && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-600 text-white font-mono text-[10px] font-bold">
+                                  <Layers className="w-3 h-3" /> {a.scheduledBatchId}
+                                </span>
+                              )}
+                              {a.isScheduleLocked && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/80 text-[10px] font-semibold">
+                                  <Lock className="w-3 h-3" /> Épinglé
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs opacity-90">
+                              Échantillon <strong className="font-mono">{a.sampleId}</strong>
+                              {req ? ` • Demande ${req.id} (${req.title})` : ''}
+                              {!isReadOnlyAnalyst ? ` • Opérateur : ${a.technician || 'Non assigné'}` : ''}
+                              {!isReadOnlyAnalyst && eq ? ` • Équipement : ${eq.code} (${eq.name})` : ''}
+                            </div>
+                            {d && d.prepStepNames.length > 0 && (
+                              <div className="text-[11px] opacity-85">
+                                Étapes de préparation : <strong>{d.prepStepNames.join(' → ')}</strong>
+                              </div>
                             )}
+                          </div>
+                          <div className="text-left md:text-right shrink-0 bg-white/75 rounded-lg px-3 py-2 border border-white/80">
+                            <div className="text-sm font-bold text-slate-900">
+                              {d ? `${d.totalHours}h` : `${tpl?.estimatedHours ?? 2}h`}
+                            </div>
+                            <div className="text-[11px] text-slate-600">
+                              Essai {d ? d.testHours : (tpl?.estimatedHours ?? 2)}h
+                              {d && d.prepHours > 0 ? ` + Prépa ${d.prepHours}h` : ''}
+                            </div>
                           </div>
                         </div>
                       );
                     })}
+
+                    {focusedDayAnalyses.length === 0 && (
+                      <div className="py-12 text-center border-2 border-dashed border-slate-200 rounded-xl text-sm text-slate-400">
+                        {isReadOnlyAnalyst
+                          ? 'Aucun essai planifié pour vous sur cette journée.'
+                          : 'Aucun essai planifié sur cette journée. Glissez un essai depuis la file "À planifier" pour l\'affecter ici.'}
+                      </div>
+                    )}
                   </div>
-                );
-              })}
-            </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -477,7 +994,7 @@ export function Planning() {
       {/* ========================================== */}
       {/* 2. VUE KANBAN PAR STATUT                   */}
       {/* ========================================== */}
-      {viewMode === 'kanban' && (
+      {effectiveViewMode === 'kanban' && (
         <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-4 items-start">
           {columns.map(col => {
             const colItems = analyses.filter(a => a.status === col.status);
@@ -553,29 +1070,38 @@ export function Planning() {
       {/* ========================================== */}
       {/* 3. VUE CHARGE ANALYSTES & ÉQUIPEMENTS      */}
       {/* ========================================== */}
-      {viewMode === 'workload' && (
+      {effectiveViewMode === 'workload' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-            <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center gap-2">
-              <Users className="w-4 h-4 text-blue-600" />
-              <h3 className="text-sm font-bold text-slate-800">Charge par Opérateur / Analyste</h3>
+            <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-blue-600" />
+                <h3 className="text-sm font-bold text-slate-800">Charge par Opérateur / Analyste</h3>
+              </div>
+              <span className="text-[11px] text-slate-500 font-medium">Essais + Préparation (cap. {weeklyCap}h/sem.)</span>
             </div>
             <div className="divide-y divide-slate-100">
               {labStaff.map(member => {
                 const activeReqs = requests.filter(r => r.assignedTo === member.id && !['terminee', 'rejetee'].includes(r.status));
                 const activeAnalyses = analyses.filter(a => a.technician === member.name && ['planifie', 'En Cours', 'rejete'].includes(a.status));
-                const totalHours = activeAnalyses.reduce((acc, a) => acc + (getTemplate(a.templateId)?.estimatedHours || 2), 0);
-                const loadPct = Math.min(100, Math.round((totalHours / 35) * 100));
+                const workload = calculateAnalysesWorkload(activeAnalyses, samples, analysisTemplates, schedulingConfig);
+                const loadPct = Math.min(100, Math.round((workload.totalHours / weeklyCap) * 100));
                 return (
                   <div key={member.id} className="p-4 space-y-2">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-2">
                       <div>
                         <p className="text-sm font-semibold text-slate-900">{member.name}</p>
                         <p className="text-xs text-slate-500 capitalize">{member.role} • {(member.qualifiedTemplateIds || []).length} habilitation(s)</p>
                       </div>
                       <div className="text-right text-xs">
-                        <div className="font-bold text-slate-800">{activeAnalyses.length} essai(s) • ~{totalHours}h</div>
-                        <div className="text-slate-500">{activeReqs.length} demande(s) active(s)</div>
+                        <div className="font-bold text-slate-800">{activeAnalyses.length} essai(s) • ~{workload.totalHours}h</div>
+                        <div className="text-[11px] text-slate-500">
+                          Essais {workload.testHours}h + Prépa {workload.prepHours}h
+                          {workload.savedHours > 0 && (
+                            <span className="text-emerald-700 font-semibold ml-1">(-{workload.savedHours}h lots)</span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-400">{activeReqs.length} demande(s) active(s)</div>
                       </div>
                     </div>
                     <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
@@ -635,51 +1161,96 @@ export function Planning() {
               <div className="text-xs text-slate-600">
                 Échantillon : <strong className="font-mono text-slate-900">{selectedAnalysis.sampleId}</strong> • Opérateur : <strong>{selectedAnalysis.technician || 'Non assigné'}</strong>
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Date planifiée</label>
-                <div className="flex gap-2">
-                  <input
-                    type="date"
-                    value={selectedAnalysis.plannedDate || ''}
-                    onChange={e => updateAnalysisMeta(selectedAnalysis.id, { plannedDate: e.target.value || undefined })}
-                    className="flex-1 px-3 py-1.5 border border-slate-300 rounded-lg text-sm"
-                  />
-                  {selectedAnalysis.plannedDate && (
-                    <button
-                      type="button"
-                      onClick={() => updateAnalysisMeta(selectedAnalysis.id, { plannedDate: undefined })}
-                      className="px-2.5 py-1.5 text-xs text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50"
-                    >
-                      Déplanifier
-                    </button>
+              {selectedAnalysisDetail && (
+                <div className="p-2.5 rounded-lg bg-indigo-50/70 border border-indigo-200 text-xs text-indigo-950 space-y-1">
+                  <div className="flex items-center justify-between font-semibold">
+                    <span>Durée estimée totale</span>
+                    <span>{selectedAnalysisDetail.totalHours}h (Essai {selectedAnalysisDetail.testHours}h + Prépa {selectedAnalysisDetail.prepHours}h)</span>
+                  </div>
+                  {selectedAnalysisDetail.prepStepNames.length > 0 && (
+                    <div className="text-[11px] text-indigo-800">
+                      Préparation : {selectedAnalysisDetail.prepStepNames.join(' → ')}
+                      {selectedAnalysis.scheduledBatchId ? ` • Lot ${selectedAnalysis.scheduledBatchId}` : ''}
+                    </div>
                   )}
                 </div>
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Équipement affecté</label>
-                <select
-                  value={selectedAnalysis.equipmentId || ''}
-                  onChange={e => updateAnalysisMeta(selectedAnalysis.id, { equipmentId: e.target.value || undefined })}
-                  className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm bg-white"
-                >
-                  <option value="">-- Non affecté --</option>
-                  {equipments.map(eq => (
-                    <option key={eq.id} value={eq.id}>{eq.code} — {eq.name}</option>
-                  ))}
-                </select>
-              </div>
-              <label className="flex items-center gap-2 text-xs text-slate-700 pt-1">
-                <input
-                  type="checkbox"
-                  checked={Boolean(selectedAnalysis.isScheduleLocked)}
-                  onChange={e => updateAnalysisMeta(selectedAnalysis.id, { isScheduleLocked: e.target.checked })}
-                  className="rounded border-slate-300 text-indigo-600"
-                />
-                {selectedAnalysis.isScheduleLocked ? <Lock className="w-3.5 h-3.5 text-indigo-600" /> : <Unlock className="w-3.5 h-3.5 text-slate-400" />}
-                Épingler cette date (ne pas décaler lors de la planification auto)
-              </label>
+              )}
+
+              {isReadOnlyAnalyst ? (
+                /* Vue strictement lecture seule pour l'analyste */
+                <div className="space-y-2 text-xs bg-slate-50 rounded-lg p-3 border border-slate-200">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Date planifiée</span>
+                    <strong className="text-slate-900">
+                      {selectedAnalysis.plannedDate
+                        ? new Date(selectedAnalysis.plannedDate).toLocaleDateString('fr-FR')
+                        : 'Non planifiée'}
+                    </strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Statut</span>
+                    <strong className="text-slate-900 capitalize">{selectedAnalysis.status}</strong>
+                  </div>
+                  {selectedAnalysis.scheduledBatchId && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Lot de préparation</span>
+                      <strong className="font-mono text-indigo-700">{selectedAnalysis.scheduledBatchId}</strong>
+                    </div>
+                  )}
+                  <p className="text-[11px] text-slate-400 italic pt-1 border-t border-slate-200">
+                    Mode consultation uniquement — la modification du planning est réservée au responsable laboratoire.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Date planifiée</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="date"
+                        value={selectedAnalysis.plannedDate || ''}
+                        onChange={e => updateAnalysisMeta(selectedAnalysis.id, { plannedDate: e.target.value || undefined })}
+                        className="flex-1 px-3 py-1.5 border border-slate-300 rounded-lg text-sm"
+                      />
+                      {selectedAnalysis.plannedDate && (
+                        <button
+                          type="button"
+                          onClick={() => updateAnalysisMeta(selectedAnalysis.id, { plannedDate: undefined })}
+                          className="px-2.5 py-1.5 text-xs text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50"
+                        >
+                          Déplanifier
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Équipement affecté</label>
+                    <select
+                      value={selectedAnalysis.equipmentId || ''}
+                      onChange={e => updateAnalysisMeta(selectedAnalysis.id, { equipmentId: e.target.value || undefined })}
+                      className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm bg-white"
+                    >
+                      <option value="">-- Non affecté --</option>
+                      {equipments.map(eq => (
+                        <option key={eq.id} value={eq.id}>{eq.code} — {eq.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <label className="flex items-center gap-2 text-xs text-slate-700 pt-1">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedAnalysis.isScheduleLocked)}
+                      onChange={e => updateAnalysisMeta(selectedAnalysis.id, { isScheduleLocked: e.target.checked })}
+                      className="rounded border-slate-300 text-indigo-600"
+                    />
+                    {selectedAnalysis.isScheduleLocked ? <Lock className="w-3.5 h-3.5 text-indigo-600" /> : <Unlock className="w-3.5 h-3.5 text-slate-400" />}
+                    Épingler cette date (ne pas décaler lors de la planification auto)
+                  </label>
+                </>
+              )}
+
               <div className="pt-3 border-t border-slate-200 flex justify-between items-center">
-                {selectedAnalysis.status === 'planifie' ? (
+                {!isReadOnlyAnalyst && selectedAnalysis.status === 'planifie' ? (
                   <button
                     type="button"
                     onClick={() => {

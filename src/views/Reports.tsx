@@ -85,6 +85,13 @@ export function Reports() {
   /** Indique si la génération/conversion PDF du certificat est en cours */
   const [isGeneratingCert, setIsGeneratingCert] = useState(false);
 
+  /** Rapport sélectionné pour la création d'une révision tracée (modale ISO 17025 §7.8.8) */
+  const [revisionTargetReport, setRevisionTargetReport] = useState<Report | null>(null);
+  /** Motif d'amendement saisi dans la modale de révision */
+  const [revisionReason, setRevisionReason] = useState("");
+  /** Message d'erreur de validation de la modale de révision */
+  const [revisionError, setRevisionError] = useState("");
+
   /**
    * Envoie et stocke physiquement un rapport Word/PDF dans le dossier sécurisé du serveur (storage/reports/)
    * @param reportId Identifiant du rapport généré
@@ -981,17 +988,13 @@ export function Reports() {
                   <div className="flex items-center justify-end space-x-3">
                     {report.status === 'genere' && (
                       <button
+                        type="button"
                         onClick={() => {
-                          const reason = prompt(`Motif obligatoire de l'amendement / révision pour ${report.id} (ISO 17025 §7.8.8) :`);
-                          if (reason && reason.trim()) {
-                            const rev = createReportRevision(report.id, reason);
-                            if (rev) {
-                              setAutoDownloadPdf(false);
-                              setPreviewReport(rev);
-                            }
-                          }
+                          setRevisionTargetReport(report);
+                          setRevisionReason("");
+                          setRevisionError("");
                         }}
-                        className="text-xs font-semibold text-amber-700 hover:text-amber-900 bg-amber-50 border border-amber-200 px-2 py-1 rounded"
+                        className="text-xs font-semibold text-amber-700 hover:text-amber-900 bg-amber-50 border border-amber-200 px-2 py-1 rounded cursor-pointer"
                         title="Créer une nouvelle révision tracée (amendement ISO 17025)"
                       >
                         Réviser
@@ -1036,6 +1039,122 @@ export function Reports() {
           </tbody>
         </table>
       </div>
+
+      {/* Fenêtre modale personnalisée de Révision / Amendement de Rapport (ISO/IEC 17025 §7.8.8) */}
+      {revisionTargetReport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200">
+            <div className="p-5 border-b border-amber-200 bg-amber-50 flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-white border border-amber-300 text-amber-900">
+                    {revisionTargetReport.id}
+                  </span>
+                  <span className="text-xs font-bold text-amber-800">
+                    v{revisionTargetReport.version || 1} → v{(revisionTargetReport.version || 1) + 1}
+                  </span>
+                </div>
+                <h3 className="text-base font-bold text-slate-900 mt-1">
+                  Créer une révision / amendement de rapport
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRevisionTargetReport(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!revisionReason.trim()) {
+                  setRevisionError("Veuillez renseigner un motif d'amendement (obligatoire selon ISO/IEC 17025 §7.8.8).");
+                  return;
+                }
+                const rev = createReportRevision(revisionTargetReport.id, revisionReason.trim());
+                setRevisionTargetReport(null);
+                setRevisionReason("");
+                setRevisionError("");
+                if (rev) {
+                  setAutoDownloadPdf(false);
+                  setPreviewReport(rev);
+                }
+              }}
+              className="p-5 space-y-4"
+            >
+              <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600 leading-relaxed">
+                Le rapport original <strong className="font-mono text-slate-800">{revisionTargetReport.id}</strong> restera archivé et verrouillé de manière immuable. Une nouvelle version tracée sera créée avec le motif ci-dessous.
+              </div>
+
+              {/* Raccourcis de motifs courants */}
+              <div>
+                <span className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">
+                  Motifs fréquents (clic rapide)
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    "Correction d'une erreur typographique",
+                    "Ajout de résultats complémentaires",
+                    "Ré-essai suite à non-conformité",
+                    "Mise à jour de la conclusion technique"
+                  ].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => {
+                        setRevisionReason(preset);
+                        setRevisionError("");
+                      }}
+                      className="px-2.5 py-1 text-xs rounded-full bg-slate-100 hover:bg-amber-100 text-slate-700 hover:text-amber-900 border border-slate-200 transition-colors"
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1">
+                  Motif détaillé de l'amendement *
+                </label>
+                <textarea
+                  rows={3}
+                  required
+                  value={revisionReason}
+                  onChange={(e) => {
+                    setRevisionReason(e.target.value);
+                    if (revisionError) setRevisionError("");
+                  }}
+                  placeholder="Précisez la nature exacte de la modification apportée par rapport à la version précédente..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                />
+                {revisionError && (
+                  <p className="text-xs text-red-600 font-medium mt-1">{revisionError}</p>
+                )}
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRevisionTargetReport(null)}
+                  className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-sm font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg shadow-xs"
+                >
+                  Créer la révision v{(revisionTargetReport.version || 1) + 1}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Fenêtre modale de génération de Certificat de Conformité */}
       {isCertModalOpen && (

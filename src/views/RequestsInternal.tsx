@@ -51,6 +51,18 @@ export function RequestsInternal() {
 
   // États locaux de sélection et d'édition du dossier actif
   const [selectedRequest, setSelectedRequest] = useState<AnalysisRequest | null>(null);
+
+  // Maintient le panneau de détail synchronisé avec le store global (statut, assignation, auditTrail)
+  useEffect(() => {
+    if (selectedRequest) {
+      const fresh = requests.find(r => r.id === selectedRequest.id);
+      if (fresh && fresh !== selectedRequest) {
+        setSelectedRequest(fresh);
+      } else if (!fresh) {
+        setSelectedRequest(null);
+      }
+    }
+  }, [requests]);
   // Commentaire ou justification saisi lors d'un changement de statut (obligatoire en cas de rejet)
   const [statusComment, setStatusComment] = useState('');
   // Active le mode édition inline des champs personnalisés `customData` de la demande (réservé manager/admin)
@@ -65,6 +77,13 @@ export function RequestsInternal() {
   // Ne propose que les modèles de matériaux actifs dans le sélecteur
   const activeMaterialTemplates = materialTemplates.filter(t => t.isActive !== false);
   const [sampleMaterialTemplateId, setSampleMaterialTemplateId] = useState(activeMaterialTemplates[0]?.id || '');
+
+  // Initialise le modèle de matériau par défaut dès que la liste est chargée si aucun modèle n'est sélectionné
+  useEffect(() => {
+    if (!sampleMaterialTemplateId && activeMaterialTemplates.length > 0) {
+      setSampleMaterialTemplateId(activeMaterialTemplates[0].id);
+    }
+  }, [activeMaterialTemplates, sampleMaterialTemplateId]);
   const [sampleMaterialState, setSampleMaterialState] = useState<MaterialState>('Massif');
   const [samplePriority, setSamplePriority] = useState<'basse' | 'normale' | 'haute'>('normale');
   // Propriétés physico-chimiques / géométriques du matériau pré-remplies depuis la demande et ajustables à réception
@@ -307,8 +326,11 @@ export function RequestsInternal() {
 
     const samplePrefix = labSettings?.idPrefixes?.sample || 'ECH';
 
+    // Bornage de sécurité (entre 1 et 50) pour empêcher la génération de 0 ou d'un nombre excessif d'échantillons
+    const safeQuantity = Math.min(50, Math.max(1, Math.floor(Number(sampleQuantity) || 1)));
+
     // Création de N échantillons avec leurs essais associés
-    for (let i = 0; i < sampleQuantity; i++) {
+    for (let i = 0; i < safeQuantity; i++) {
       const sampleId = generateUniqueLimsId(samplePrefix, usedSampleIds);
       usedSampleIds.add(sampleId);
 

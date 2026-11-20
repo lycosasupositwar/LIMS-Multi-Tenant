@@ -25,8 +25,11 @@ import { EditRequestModal } from '../components/EditRequestModal';
  * @param props.onOpenSettings Callback optionnel permettant d'ouvrir le panneau de profil/paramètres utilisateur
  */
 export function RequesterPortal({ onOpenSettings }: { onOpenSettings?: () => void }) {
-  // Extraction des données globales depuis le store LIMS
-  const { currentUser, requests, reports, samples, allRequestTemplates, laboratories } = useLims();
+  // Extraction des collections globales multi-laboratoires depuis le store LIMS
+  const { currentUser, allRequests, allReports, allSamples, allRequestTemplates, laboratories } = useLims();
+  const requests = allRequests;
+  const reports = allReports;
+  const samples = allSamples;
   // Contrôle l'ouverture de la modale de création d'une nouvelle demande
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   // Demande sélectionnée pour consultation ou édition dans `EditRequestModal`

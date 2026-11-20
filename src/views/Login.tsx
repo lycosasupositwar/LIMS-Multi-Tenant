@@ -247,7 +247,7 @@ export function Login() {
                   <label className="block text-sm font-medium text-slate-700">Mot de passe</label>
                   <button 
                     type="button" 
-                    onClick={() => { setMode('forgot'); setError(''); setSuccessMsg(''); }} 
+                    onClick={() => { setMode('forgot'); setPassword(''); setError(''); setSuccessMsg(''); }} 
                     className="text-xs text-blue-600 hover:text-blue-800 cursor-pointer"
                   >
                     Mot de passe oublié ?

@@ -13,7 +13,7 @@
  *    - Suivi des essais rattachés à l'échantillon
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLims } from '../store';
 import { Search, Filter, FlaskConical, Link as LinkIcon, Image as ImageIcon, X, Plus } from 'lucide-react';
 import { Sample, SampleStatus } from '../types';
@@ -49,6 +49,18 @@ export function Samples() {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   /** Échantillon actuellement sélectionné pour affichage dans le volet latéral d'inspection */
   const [selectedSample, setSelectedSample] = useState<Sample | null>(null);
+
+  // Maintient le volet latéral synchronisé avec le store global en cas de modification externe
+  useEffect(() => {
+    if (selectedSample) {
+      const fresh = samples.find(s => s.id === selectedSample.id);
+      if (fresh && fresh !== selectedSample) {
+        setSelectedSample(fresh);
+      } else if (!fresh) {
+        setSelectedSample(null);
+      }
+    }
+  }, [samples]);
 
   // États d'édition métallographique et découpe
   /** Indique si le formulaire d'édition des paramètres d'enrobage est actif */
@@ -256,7 +268,11 @@ export function Samples() {
                 {filteredSamples.map((sample) => (
                   <tr
                     key={sample.id}
-                    onClick={() => setSelectedSample(sample)}
+                    onClick={() => {
+                      setSelectedSample(sample);
+                      setIsEditingMounting(false);
+                      setIsCreatingEnrobage(false);
+                    }}
                     className={`cursor-pointer transition-colors ${selectedSample?.id === sample.id ? 'bg-blue-50/50' : 'hover:bg-slate-50'}`}
                   >
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -607,8 +623,9 @@ export function Samples() {
                     <div>
                       <label className="block text-xs font-medium text-slate-700 mb-1">Méthode</label>
                       <select value={mountingData.method} onChange={e => setMountingData({ ...mountingData, method: e.target.value as any })} className="w-full text-sm border-slate-300 rounded px-2 py-1">
-                        <option value="A chaud">A chaud</option>
-                        <option value="A froid">A froid</option>
+                        <option value="Enrobage à chaud">Enrobage à chaud</option>
+                        <option value="Enrobage à froid">Enrobage à froid</option>
+                        <option value="Aucun">Aucun</option>
                       </select>
                     </div>
                     <div>
@@ -618,6 +635,16 @@ export function Samples() {
                     <div>
                       <label className="block text-xs font-medium text-slate-700 mb-1">Diamètre (mm)</label>
                       <input type="number" value={mountingData.diameter} onChange={e => setMountingData({ ...mountingData, diameter: Number(e.target.value) })} className="w-full text-sm border-slate-300 rounded px-2 py-1" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 mb-1">Étapes de polissage (séparées par des virgules)</label>
+                      <input
+                        type="text"
+                        value={(mountingData.polishingSteps || []).join(', ')}
+                        onChange={e => setMountingData({ ...mountingData, polishingSteps: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+                        className="w-full text-sm border-slate-300 rounded px-2 py-1"
+                        placeholder="Ex: SiC 320, SiC 800, Diamant 3µm"
+                      />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-700 mb-1">Attaque chimique</label>
@@ -683,14 +710,19 @@ export function Samples() {
                         if (num > 0) {
                           // Préfixe configurable dans labSettings (par défaut 'ENR') pour les sous-échantillons
                           const prefix = labSettings?.idPrefixes?.subSample || 'ENR';
-                          const parentIdBase = selectedSample.id.split('-').slice(1).join('-');
+                          const parentIdBase = selectedSample.id.includes('-')
+                            ? selectedSample.id.split('-').slice(1).join('-')
+                            : selectedSample.id;
+                          // Offset calculé depuis les sous-échantillons existants pour éviter toute collision d'ID / code-barres
+                          const existingOffset = samples.filter(s => s.parentSampleId === selectedSample.id).length;
                           for (let i = 1; i <= num; i++) {
-                            const newId = `${prefix}-${parentIdBase}-${i}`;
+                            const seq = existingOffset + i;
+                            const newId = `${prefix}-${parentIdBase}-${seq}`;
                             // Création du sous-échantillon avec filiation (parentSampleId) et code-barres Zebra dérivé
                             const subSample = {
                               ...selectedSample,
                               id: newId,
-                              barcode: `${selectedSample.barcode}-${i}`,
+                              barcode: `${selectedSample.barcode}-${seq}`,
                               parentSampleId: selectedSample.id,
                               images: [],
                               mountingInfo: undefined,
@@ -764,11 +796,13 @@ export function Samples() {
                           <div>
                             <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${analysis.status === 'valide' || analysis.status === 'termine' ? 'bg-emerald-100 text-emerald-800' :
                                 analysis.status === 'En Cours' ? 'bg-blue-100 text-blue-800' :
-                                  analysis.status === 'a_valider' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-800'
+                                  analysis.status === 'a_valider' ? 'bg-amber-100 text-amber-800' :
+                                    analysis.status === 'rejete' ? 'bg-red-100 text-red-800' : 'bg-slate-100 text-slate-800'
                               }`}>
                               {analysis.status === 'valide' || analysis.status === 'termine' ? 'Terminé' :
                                 analysis.status === 'En Cours' ? 'En cours' :
-                                  analysis.status === 'a_valider' ? 'À valider' : 'Planifié'}
+                                  analysis.status === 'a_valider' ? 'À valider' :
+                                    analysis.status === 'rejete' ? 'Refusé' : 'Planifié'}
                             </span>
                           </div>
                         </div>

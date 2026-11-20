@@ -34,8 +34,8 @@ interface Props {
  * @returns {JSX.Element | null} Le rendu de la modale ou `null` si elle est fermée.
  */
 export function EditRequestModal({ request, isOpen, onClose }: Props) {
-  // Extraction des modèles CMS et de l'action de resoumission depuis le store global LIMS
-  const { requestTemplates, resubmitRequest, analysisTemplates, materialTemplates } = useLims();
+  // Extraction des modèles CMS multi-laboratoires et de l'action de resoumission depuis le store global LIMS
+  const { allRequestTemplates, resubmitRequest, allAnalysisTemplates, allMaterialTemplates } = useLims();
 
   // État local contenant la copie modifiable des valeurs des champs dynamiques de la demande
   const [customData, setCustomData] = useState<Record<string, any>>({});
@@ -55,18 +55,28 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
   // Court-circuit de rendu si la modale est fermée
   if (!isOpen) return null;
 
-  // Récupération du gabarit de formulaire associé à cette demande
-  const activeTemplate = requestTemplates.find(t => t.id === request.templateId);
+  // Récupération du gabarit de formulaire associé à cette demande (multi-laboratoires)
+  const activeTemplate = allRequestTemplates.find(t => t.id === request.templateId);
 
   /**
    * Validation des corrections et transmission au gestionnaire d'état.
-   * Réactive la demande (passage au statut 'soumise') avec les nouvelles données personnalisées.
+   * Vérifie les champs obligatoires (y compris les sélecteurs boutons 'analyses', 'materials', 'multiselect')
+   * puis réactive la demande (passage au statut 'soumise') avec les nouvelles données personnalisées.
    *
    * @param {React.FormEvent} e - Événement de soumission du formulaire HTML.
    */
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeTemplate) return;
+
+    const missingButtonFields = activeTemplate.fields
+      .filter(f => f.required && (f.type === 'analyses' || f.type === 'materials' || f.type === 'multiselect'))
+      .filter(f => !Array.isArray(customData[f.id]) || customData[f.id].length === 0)
+      .map(f => f.name);
+    if (missingButtonFields.length > 0) {
+      alert(`Veuillez sélectionner au moins une option pour :\n- ${missingButtonFields.join('\n- ')}`);
+      return;
+    }
 
     resubmitRequest(request.id, customData);
     onClose();
@@ -162,7 +172,7 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                       ) : field.type === 'analyses' ? (
                         /* Cas 2 : Sélecteur multi-analyses sous forme de badges cliquables ('analyses') */
                         <div className="flex flex-wrap gap-2 mt-2">
-                          {analysisTemplates.filter(t => t.isActive !== false).map(tpl => {
+                          {allAnalysisTemplates.filter(t => t.labId === request.labId && t.isActive !== false).map(tpl => {
                             const currentValues = customData[field.id] || [];
                             const isSelected = currentValues.includes(tpl.id);
                             return (
@@ -192,7 +202,7 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                         /* Cas 3 : Sélecteur de modèles de matériaux avec sous-formulaire de propriétés imbriquées ('materials') */
                         <div className="flex flex-wrap gap-2 mt-2">
                           {/* Boutons de sélection des matériaux actifs rattachés au laboratoire de la demande */}
-                          {materialTemplates.filter(t => t.labId === request.labId && t.isActive !== false).map(tpl => {
+                          {allMaterialTemplates.filter(t => t.labId === request.labId && t.isActive !== false).map(tpl => {
                             const currentValues = customData[field.id] || [];
                             const isSelected = currentValues.includes(tpl.id);
                             return (
@@ -204,7 +214,17 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                                   const newValues = isSelected
                                     ? currentValues.filter((v: string) => v !== tpl.id)
                                     : [...currentValues, tpl.id];
-                                  handleCustomDataChange(field.id, newValues);
+                                  // Nettoie aussi les sous-propriétés si le matériau est désélectionné
+                                  if (isSelected) {
+                                    const propertiesKey = `${field.id}__material_properties`;
+                                    setCustomData(prev => {
+                                      const nextProps = { ...(prev[propertiesKey] || {}) };
+                                      delete nextProps[tpl.id];
+                                      return { ...prev, [field.id]: newValues, [propertiesKey]: nextProps };
+                                    });
+                                  } else {
+                                    handleCustomDataChange(field.id, newValues);
+                                  }
                                 }}
                                 className={`px-3 py-1.5 text-sm font-medium rounded-full border transition-colors ${isSelected ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-white text-slate-600 border-slate-200'} ${isReadOnly ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`}
                               >
@@ -213,7 +233,7 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                             );
                           })}
                           {/* Rendu dynamique des fiches de propriétés techniques pour chaque matériau sélectionné */}
-                          {materialTemplates.filter(t => t.labId === request.labId && t.isActive !== false && (customData[field.id] || []).includes(t.id)).map(tpl => {
+                          {allMaterialTemplates.filter(t => t.labId === request.labId && t.isActive !== false && (customData[field.id] || []).includes(t.id)).map(tpl => {
                             // Clé conventionnelle stockant les sous-propriétés matériaux dans customData
                             const propertiesKey = `${field.id}__material_properties`;
                             const allProperties = customData[propertiesKey] || {};
@@ -289,8 +309,8 @@ export function EditRequestModal({ request, isOpen, onClose }: Props) {
                         <input 
                           type={field.type === 'number' ? 'number' : 'text'} 
                           required={field.required}
-                          value={customData[field.id] || ''} 
-                          onChange={e => handleCustomDataChange(field.id, field.type === 'number' ? Number(e.target.value) : e.target.value)}
+                          value={customData[field.id] ?? ''} 
+                          onChange={e => handleCustomDataChange(field.id, field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)}
                           disabled={isReadOnly}
                           className={`w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500 ${isReadOnly ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''}`}
                         />

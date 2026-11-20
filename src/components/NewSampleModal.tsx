@@ -8,10 +8,10 @@
  * 4. De générer automatiquement un code-barres unique et un identifiant d'échantillon
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { useLims } from '../store';
-import { Sample, Priority, MaterialState, SampleStatus } from '../types';
+import { Sample, Priority, MaterialState } from '../types';
 import { generateUniqueLimsId, generateUniqueBarcode } from '../utils/idGenerator';
 
 /**
@@ -52,6 +52,20 @@ export function NewSampleModal({ isOpen, onClose }: Props) {
   const [customData, setCustomData] = useState<Record<string, any>>({});
   /** Observations libres de l'opérateur à la réception (état de surface, emballage, etc.) */
   const [notes, setNotes] = useState('');
+
+  // Réinitialise le formulaire à chaque ouverture et synchronise le gabarit sur le laboratoire actif
+  useEffect(() => {
+    if (isOpen) {
+      const currentActive = materialTemplates.filter(t => t.isActive !== false);
+      setSelectedTemplateId(currentActive[0]?.id || '');
+      setClient('');
+      setProject('');
+      setPriority('normale');
+      setMaterialState('Massif');
+      setCustomData({});
+      setNotes('');
+    }
+  }, [isOpen, activeLabId, materialTemplates]);
 
   // Court-circuit de rendu si la modale n'est pas ouverte
   if (!isOpen) return null;
@@ -263,14 +277,34 @@ export function NewSampleModal({ isOpen, onClose }: Props) {
                             );
                           })}
                         </div>
+                      ) : field.type === 'boolean' ? (
+                        /* Propriété booléenne ('boolean') */
+                        <label className="flex items-center gap-2 text-sm text-slate-700 py-1.5">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(customData[field.id])}
+                            onChange={e => handleCustomDataChange(field.id, e.target.checked)}
+                            className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                          />
+                          Oui
+                        </label>
+                      ) : field.type === 'date' ? (
+                        /* Propriété date ('date') */
+                        <input
+                          type="date"
+                          required={field.required}
+                          value={customData[field.id] || ''}
+                          onChange={e => handleCustomDataChange(field.id, e.target.value)}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500"
+                        />
                       ) : (
                         /* Propriété numérique ou textuelle avec affichage optionnel de l'unité physique à droite */
                         <div className="relative">
                           <input 
                             type={field.type === 'number' ? 'number' : 'text'} 
                             required={field.required}
-                            value={customData[field.id] || ''} 
-                            onChange={e => handleCustomDataChange(field.id, field.type === 'number' ? Number(e.target.value) : e.target.value)}
+                            value={customData[field.id] ?? ''} 
+                            onChange={e => handleCustomDataChange(field.id, field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value)}
                             className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500"
                           />
                           {field.unit && (

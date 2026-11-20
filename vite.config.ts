@@ -17,10 +17,9 @@ export default defineConfig(() => {
       // Autorise explicitement votre nom de domaine (requis sur Vite 6+)
       allowedHosts: ['lims.atomlab.fr'],
       
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modify—file watching is disabled to prevent flickering during agent edits.
+      // Le rechargement à chaud (HMR) peut être désactivé via la variable d'environnement DISABLE_HMR.
       hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
+      // Désactive la surveillance des fichiers lorsque DISABLE_HMR vaut 'true' pour économiser le CPU.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
   };

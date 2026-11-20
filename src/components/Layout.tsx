@@ -202,20 +202,23 @@ export function Layout({ children, activeTab, setActiveTab }: LayoutProps) {
   };
 
   // Définition des entrées principales du menu de navigation latéral
+  const isManagerOrAdmin = currentUser?.role === 'manager' || currentUser?.role === 'admin';
   let navItems = [
     { id: 'dashboard', label: 'Tableau de bord', icon: LayoutDashboard },
     { id: 'requests', label: 'Demandes & Workflow', icon: FileText },
     { id: 'samples', label: 'Échantillons & Préparations', icon: Box },
     { id: 'analyses', label: 'Essais & Analyses', icon: Activity },
-    { id: 'planning', label: 'Planning & Charge', icon: CalendarDays },
+    // Planning & Charge réservé aux managers et administrateurs
+    ...(isManagerOrAdmin ? [{ id: 'planning', label: 'Planning & Charge', icon: CalendarDays }] : []),
     { id: 'reports', label: 'Rapports', icon: FileText },
-    { id: 'equipments', label: 'Équipements & Métrologie', icon: Wrench },
+    // Parc Équipements & Métrologie réservé aux managers et administrateurs
+    ...(isManagerOrAdmin ? [{ id: 'equipments', label: 'Équipements & Métrologie', icon: Wrench }] : []),
     { id: 'nonconformities', label: 'Non-Conformités (CAPA)', icon: AlertOctagon },
     { id: 'inventory', label: 'Consommables', icon: Archive },
   ];
 
   // L'accès au configurateur de gabarits (CMS Builder) est réservé aux managers et administrateurs
-  if (currentUser?.role === 'manager' || currentUser?.role === 'admin') {
+  if (isManagerOrAdmin) {
     navItems.push({ id: 'builder', label: 'Config. CMS', icon: Blocks });
   }
 

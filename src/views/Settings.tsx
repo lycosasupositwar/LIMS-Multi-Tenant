@@ -881,11 +881,19 @@ export function Settings({ onBack }: { onBack?: () => void }) {
                               <button
                                 key={tpl.id}
                                 type="button"
-                                onClick={() => {
+                                onClick={async () => {
                                   const next = active
                                     ? userQuals.filter(id => id !== tpl.id)
                                     : [...userQuals, tpl.id];
-                                  void updateUserQualifications(u.id, next);
+                                  const ok = await updateUserQualifications(u.id, next);
+                                  if (!ok) {
+                                    setUserMsg({
+                                      type: 'error',
+                                      text: "Impossible d'enregistrer l'habilitation. Redémarrez le serveur backend (npm run dev / npm run start) pour activer les nouvelles routes API."
+                                    });
+                                  } else {
+                                    setUserMsg({ type: 'success', text: `Habilitations mises à jour pour ${u.name}.` });
+                                  }
                                 }}
                                 className={`px-2 py-0.5 rounded-full text-[11px] font-medium border transition-colors ${
                                   active

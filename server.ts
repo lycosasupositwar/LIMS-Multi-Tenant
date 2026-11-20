@@ -1015,8 +1015,9 @@ async function startServer() {
 
   /**
    * Mise à jour des habilitations opérateurs (`qualifiedTemplateIds`) réservée aux managers et admins.
+   * Supporte PATCH et POST pour compatibilité maximale avec tous les proxies HTTP.
    */
-  app.patch('/api/users/:id/qualifications', authenticate, async (req: AuthRequest, res) => {
+  const handleUpdateQualifications = async (req: AuthRequest, res: Response) => {
     try {
       if (req.user!.role !== 'manager' && req.user!.role !== 'admin') {
         return res.status(403).json({ error: 'Accès refusé.' });
@@ -1032,7 +1033,9 @@ async function startServer() {
       console.error('Erreur mise à jour habilitations :', error);
       res.status(500).json({ error: 'Erreur serveur lors de la mise à jour des habilitations' });
     }
-  });
+  };
+  app.patch('/api/users/:id/qualifications', authenticate, handleUpdateQualifications);
+  app.post('/api/users/:id/qualifications', authenticate, handleUpdateQualifications);
 
   // ==========================================
   // 2. Authentification & Gestion des Sessions

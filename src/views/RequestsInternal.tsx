@@ -438,6 +438,7 @@ export function RequestsInternal() {
                       setIsEditing(false);
                       setEditedData(req.customData);
                       setSamplePriority((req as any).priority || 'normale');
+                      setSampleQuantity(req.sampleCount || 1);
                       setConclusionText(req.conclusion || '');
                       setShowAudit(false);
 
@@ -1105,12 +1106,27 @@ export function RequestsInternal() {
                         </div>
                         {(() => {
                           const reqAnas = analyses.filter(a => samples.some(s => s.requestId === selectedRequest.id && s.id === a.sampleId));
-                          const totalCost = reqAnas.reduce((sum, a) => sum + (analysisTemplates.find(t => t.id === a.templateId)?.unitPrice || 0), 0);
-                          return totalCost > 0 ? (
-                            <span className="px-2.5 py-1 rounded-full bg-white border border-indigo-200 text-xs font-bold text-indigo-800">
-                              Valorisation estimée : {totalCost} € HT
-                            </span>
-                          ) : null;
+                          const totalCost = reqAnas.reduce((sum, a) => sum + (analysisTemplates.find(t => t.id === a.templateId)?.unitPrice || 0), 0) || selectedRequest.estimatedCost || 0;
+                          const estHours = selectedRequest.estimatedHours || reqAnas.reduce((sum, a) => sum + (analysisTemplates.find(t => t.id === a.templateId)?.estimatedHours || 2), 0);
+                          return (
+                            <div className="flex flex-wrap items-center gap-2">
+                              {selectedRequest.sampleCount && (
+                                <span className="px-2.5 py-1 rounded-full bg-white border border-indigo-200 text-xs font-semibold text-indigo-800">
+                                  {selectedRequest.sampleCount} échantillon(s) déclaré(s)
+                                </span>
+                              )}
+                              {estHours > 0 && (
+                                <span className="px-2.5 py-1 rounded-full bg-white border border-blue-200 text-xs font-bold text-blue-800">
+                                  Temps estimé : ~{estHours}h
+                                </span>
+                              )}
+                              {totalCost > 0 && (
+                                <span className="px-2.5 py-1 rounded-full bg-white border border-emerald-200 text-xs font-bold text-emerald-800">
+                                  Valorisation : {totalCost} € HT
+                                </span>
+                              )}
+                            </div>
+                          );
                         })()}
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">

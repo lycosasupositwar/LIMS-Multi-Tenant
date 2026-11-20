@@ -208,7 +208,8 @@ interface LimsContextType {
   addRequestComment: (requestId: string, message: string, isInternal?: boolean) => void;
   saveContractReview: (requestId: string, review: Omit<ContractReview, 'reviewedBy' | 'reviewedAt'>, committedDueDate?: string) => void;
   updateSampleCustody: (id: string, updates: Partial<Pick<Sample, 'storageLocation' | 'retentionUntil' | 'disposalDate' | 'disposalMethod' | 'disposalBy' | 'disposalNotes' | 'consumableLotsUsed' | 'status'>>) => void;
-  updateAnalysisMeta: (id: string, updates: Partial<Pick<Analysis, 'equipmentId' | 'consumableLotsUsed' | 'conformityStatus' | 'plannedDate' | 'notes'>>) => void;
+  updateAnalysisMeta: (id: string, updates: Partial<Pick<Analysis, 'equipmentId' | 'consumableLotsUsed' | 'conformityStatus' | 'plannedDate' | 'notes' | 'isScheduleLocked' | 'scheduledBatchId'>>) => void;
+  applyScheduleProposal: (updates: { id: string; plannedDate: string; scheduledBatchId?: string }[]) => void;
   createReportRevision: (parentReportId: string, amendmentReason: string) => Report | null;
   updateUserQualifications: (userId: string, qualifiedTemplateIds: string[]) => Promise<boolean>;
 
@@ -1281,7 +1282,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
 
   const updateAnalysisMeta = (
     id: string,
-    updates: Partial<Pick<Analysis, 'equipmentId' | 'consumableLotsUsed' | 'conformityStatus' | 'plannedDate' | 'notes'>>
+    updates: Partial<Pick<Analysis, 'equipmentId' | 'consumableLotsUsed' | 'conformityStatus' | 'plannedDate' | 'notes' | 'isScheduleLocked' | 'scheduledBatchId'>>
   ) => {
     setAnalyses(prev =>
       prev.map(a => {
@@ -1293,6 +1294,31 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
         return {
           ...a,
           ...updates,
+          updatedAt: new Date().toISOString(),
+          auditTrail: [audit, ...(a.auditTrail || [])]
+        };
+      })
+    );
+  };
+
+  /**
+   * Applique en une seule mise à jour atomique la proposition validée par le manager
+   * issue du moteur de planification intelligente (`smartScheduler.ts`).
+   */
+  const applyScheduleProposal = (updates: { id: string; plannedDate: string; scheduledBatchId?: string }[]) => {
+    const map = new Map(updates.map(u => [u.id, u]));
+    setAnalyses(prev =>
+      prev.map(a => {
+        const upd = map.get(a.id);
+        if (!upd) return a;
+        const audit = createAuditLog(
+          'Planification intelligente',
+          `Date planifiée : ${a.plannedDate || 'Aucune'} -> ${upd.plannedDate}${upd.scheduledBatchId ? ` (Lot ${upd.scheduledBatchId})` : ''}`
+        );
+        return {
+          ...a,
+          plannedDate: upd.plannedDate,
+          scheduledBatchId: upd.scheduledBatchId,
           updatedAt: new Date().toISOString(),
           auditTrail: [audit, ...(a.auditTrail || [])]
         };
@@ -1466,7 +1492,7 @@ export const LimsProvider = ({ children }: { children: ReactNode }) => {
       addEquipment, updateEquipment, deleteEquipment,
       addNonConformity, updateNonConformity, deleteNonConformity,
       addAnalysisPack, updateAnalysisPack, deleteAnalysisPack,
-      addRequestComment, saveContractReview, updateSampleCustody, updateAnalysisMeta, createReportRevision, updateUserQualifications,
+      addRequestComment, saveContractReview, updateSampleCustody, updateAnalysisMeta, applyScheduleProposal, createReportRevision, updateUserQualifications,
       updateLabSettings, purgeData, applyPatch
     }}>
       {children}
